@@ -35,11 +35,7 @@ fn write_worker_log(log_path: &Path, level: &str, event: &str, message: &str) {
         "source": "recording-worker"
     });
 
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
         let _ = writeln!(file, "{payload}");
     }
 }
@@ -52,9 +48,7 @@ pub fn capture_system_audio_loopback(
     log_path: PathBuf,
     started_at_ms: u64,
 ) -> Result<RecordingCaptureResult, String> {
-    use wasapi::{
-        initialize_mta, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat,
-    };
+    use wasapi::{initialize_mta, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
@@ -122,9 +116,8 @@ pub fn capture_system_audio_loopback(
                 .unwrap_or(0);
 
             if new_frames > 0 {
-                let additional = (new_frames as usize * 4).saturating_sub(
-                    sample_queue.capacity().saturating_sub(sample_queue.len()),
-                );
+                let additional = (new_frames as usize * 4)
+                    .saturating_sub(sample_queue.capacity().saturating_sub(sample_queue.len()));
                 sample_queue.reserve(additional);
                 capture_client
                     .read_from_device_to_deque(&mut sample_queue)
@@ -209,7 +202,9 @@ fn drain_float32_queue_to_wav(
         ];
         let sample = f32::from_le_bytes(bytes).clamp(-1.0, 1.0);
         let pcm = (sample * i16::MAX as f32).round() as i16;
-        writer.write_sample(pcm).map_err(|error| error.to_string())?;
+        writer
+            .write_sample(pcm)
+            .map_err(|error| error.to_string())?;
     }
 
     Ok(())

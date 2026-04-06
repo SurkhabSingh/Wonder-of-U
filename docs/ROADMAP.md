@@ -21,6 +21,8 @@ Status: complete
 
 ## Phase 3: Offline Transcription
 
+Status: in progress
+
 - integrate local Whisper runtime
 - support managed asset downloads
 - verify model/runtime health before first use

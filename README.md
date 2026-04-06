@@ -12,18 +12,19 @@ Build a background tray app that can:
 - optionally create Anki cards
 - remain lightweight while idle
 
-## Phase 1
+## Current Status
 
-The repository currently focuses on the foundation layer:
+Phases 1 and 2 are complete, and Phase 3 has started with:
 
 - Tauri desktop shell
 - tray-first runtime behavior
 - global hotkey wiring
 - strict recorder state shell
-- settings model we can evolve in later phases
+- real Windows system-audio recording
+- Whisper install detection and manual path overrides
+- automatic transcript generation beside saved recordings when Whisper is ready
 
-Audio capture, transcription, translation, and Anki land in later phases once
-the shell is stable and tested.
+Managed asset downloads, offline translation, and Anki land in later phases.
 
 ## Repository Notes
 
