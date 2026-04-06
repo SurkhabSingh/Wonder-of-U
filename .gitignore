@@ -1,0 +1,45 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.*
+
+# Editors
+.idea/
+.vscode/
+.bootstrap/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+out/
+coverage/
+
+# Rust / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Python helpers
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime assets and downloaded models
+runtime/
+models/
+downloads/
+temp/
+tmp/
+
+# Test artifacts
+test-output/
+playwright-report/
