@@ -711,6 +711,43 @@ fn push_whisper_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
+fn add_cli_candidates_from_directory(
+    candidates: &mut Vec<PathBuf>,
+    directory: &Path,
+    remaining_depth: usize,
+) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+
+        if file_type.is_dir() {
+            if remaining_depth > 0 {
+                add_cli_candidates_from_directory(candidates, &path, remaining_depth - 1);
+            }
+            continue;
+        }
+
+        let is_cli = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| {
+                value.eq_ignore_ascii_case("whisper-cli.exe")
+                    || value.eq_ignore_ascii_case("whisper-cli")
+            })
+            .unwrap_or(false);
+
+        if is_cli {
+            push_whisper_candidate(candidates, path);
+        }
+    }
+}
+
 fn add_model_candidates_from_directory(candidates: &mut Vec<PathBuf>, directory: &Path) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
@@ -743,27 +780,29 @@ fn app_managed_runtime_directory(asset_directory: &Path) -> PathBuf {
 fn collect_managed_whisper_cli_candidates(asset_directory: &Path) -> Vec<PathBuf> {
     let executable_names = ["whisper-cli.exe", "whisper-cli"];
     let mut candidates = Vec::new();
+    let runtime_directory = app_managed_runtime_directory(asset_directory);
 
     for executable_name in executable_names {
         push_whisper_candidate(
             &mut candidates,
-            app_managed_runtime_directory(asset_directory).join(executable_name),
+            runtime_directory.join(executable_name),
         );
         push_whisper_candidate(
             &mut candidates,
-            app_managed_runtime_directory(asset_directory)
-                .join("bin")
-                .join(executable_name),
+            runtime_directory.join("bin").join(executable_name),
         );
         push_whisper_candidate(
             &mut candidates,
-            app_managed_runtime_directory(asset_directory)
-                .join("bin")
-                .join("Release")
-                .join(executable_name),
+            runtime_directory.join("Release").join(executable_name),
+        );
+        push_whisper_candidate(
+            &mut candidates,
+            runtime_directory.join("bin").join("Release").join(executable_name),
         );
         push_whisper_candidate(&mut candidates, asset_directory.join(executable_name));
     }
+
+    add_cli_candidates_from_directory(&mut candidates, &runtime_directory, 4);
 
     candidates
 }
@@ -1267,6 +1306,29 @@ fn insert_recent_recording<R: Runtime>(
     write_persisted_data(app, &persisted_snapshot)
 }
 
+fn clear_managed_whisper_override<R: Runtime>(
+    app: &AppHandle<R>,
+    asset_kind: &str,
+) -> Result<(), String> {
+    let persisted_snapshot = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let mut persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not update the managed Whisper settings.".to_string())?;
+
+        match asset_kind {
+            "runtime" => persisted.settings.whisper.cli_path.clear(),
+            "model" => persisted.settings.whisper.model_path.clear(),
+            _ => {}
+        }
+
+        persisted.clone()
+    };
+
+    write_persisted_data(app, &persisted_snapshot)
+}
+
 fn unique_path_with_suffix(directory: &Path, file_stem: &str, suffix: &str) -> PathBuf {
     let sanitized_stem = if file_stem.is_empty() {
         "recording".to_string()
@@ -1700,6 +1762,7 @@ fn download_recommended_whisper_model_inner<R: Runtime>(app: &AppHandle<R>) -> R
                     )?;
                 }
                 verify_whisper_model(&target_path)?;
+                clear_managed_whisper_override(&app_handle, "model")?;
                 let detection = refresh_whisper_detection_state(&app_handle)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
                     snapshot.kind = Some("model".into());
@@ -1856,6 +1919,7 @@ fn download_recommended_whisper_runtime_inner<R: Runtime>(
                     })?
                 };
                 verify_whisper_cli(&cli_path)?;
+                clear_managed_whisper_override(&app_handle, "runtime")?;
 
                 let detection = refresh_whisper_detection_state(&app_handle)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {

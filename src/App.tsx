@@ -503,6 +503,16 @@ function App() {
     MODEL_OPTIONS[2];
   const runtimeInstalled = bootstrap.whisperDetection.cliReady;
   const modelInstalled = bootstrap.whisperDetection.modelReady;
+  const resolvedCliPath =
+    settingsDraft.whisper.cliPath ||
+    (bootstrap.whisperDetection.cliManaged
+      ? bootstrap.whisperDetection.executablePath ?? ""
+      : "");
+  const resolvedModelPath =
+    settingsDraft.whisper.modelPath ||
+    (bootstrap.whisperDetection.modelManaged
+      ? bootstrap.whisperDetection.modelPath ?? ""
+      : "");
 
   function updateSettings(
     update: Partial<Omit<AppSettings, "features" | "whisper">> & {
@@ -756,11 +766,13 @@ function App() {
   async function browseForFile(field: "cliPath" | "modelPath") {
     try {
       setBusyAction("browse");
+      const defaultPath =
+        field === "cliPath" ? resolvedCliPath : resolvedModelPath;
       const selection = normalizeSelection(
         await open({
           directory: false,
           multiple: false,
-          defaultPath: settingsDraft.whisper[field] || undefined,
+          defaultPath: defaultPath || undefined,
         }),
       );
 
@@ -1290,7 +1302,7 @@ function App() {
                     <div className="input-with-action">
                       <input
                         type="text"
-                        value={settingsDraft.whisper.cliPath}
+                        value={resolvedCliPath}
                         onChange={(event) =>
                           updateSettings({
                             whisper: {
@@ -1390,7 +1402,7 @@ function App() {
                     <div className="input-with-action">
                       <input
                         type="text"
-                        value={settingsDraft.whisper.modelPath}
+                        value={resolvedModelPath}
                         onChange={(event) =>
                           updateSettings({
                             whisper: {
