@@ -1,5 +1,6 @@
 mod recording;
 mod transcription;
+mod translation;
 
 use std::{
     fs::{self, OpenOptions},
@@ -28,6 +29,14 @@ use transcription::{
     run_whisper_transcription, verify_whisper_cli, verify_whisper_model,
     WhisperTranscriptionRequest,
 };
+use translation::{
+    default_translation_model_choice, default_translation_model_id,
+    default_translation_target_choice, default_translation_target_id, probe_python_executable,
+    probe_python_runtime, run_translation, translation_language_from_whisper_code,
+    translation_language_spec, translation_model_spec, translation_output_path,
+    verify_translation_model_dir, ManagedTranslationFileSpec, PythonRuntimeProbe,
+    TranslationRequest, TRANSLATION_MODEL_SPECS,
+};
 use zip::ZipArchive;
 
 const START_SHORTCUT: &str = "Ctrl+Alt+R";
@@ -38,11 +47,16 @@ const START_SHORTCUT_CANDIDATES: [&str; 3] = [START_SHORTCUT, "Ctrl+Alt+Shift+R"
 const STOP_SHORTCUT_CANDIDATES: [&str; 3] = [STOP_SHORTCUT, "Ctrl+Alt+Shift+S", "Ctrl+Alt+F9"];
 const SHOW_SHORTCUT_CANDIDATES: [&str; 3] = [SHOW_SHORTCUT, "Ctrl+Alt+Shift+W", "Ctrl+Alt+F10"];
 const RECENT_RECORDINGS_LIMIT: usize = 10;
-const WHISPER_RELEASES_API_URL: &str = "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
+const WHISPER_RELEASES_API_URL: &str =
+    "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
 const RECOMMENDED_WHISPER_RUNTIME_VERSION: &str = "v1.8.4";
 const RECOMMENDED_WHISPER_RUNTIME_FILE: &str = "whisper-bin-x64.zip";
 const RECOMMENDED_WHISPER_RUNTIME_URL: &str =
     "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-bin-x64.zip";
+const TRANSLATION_BRIDGE_SCRIPT: &str = include_str!("../scripts/translation_bridge.py");
+const TRANSLATION_REQUIREMENTS_FILE_NAME: &str = "translation_runtime_requirements.txt";
+const TRANSLATION_RUNTIME_REQUIREMENTS: &str =
+    include_str!("../scripts/translation_requirements.txt");
 
 #[derive(Copy, Clone)]
 struct WhisperModelSpec {
@@ -148,11 +162,37 @@ impl Default for WhisperSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TranslationSettings {
+    #[serde(default)]
+    runtime_path: String,
+    #[serde(default)]
+    model_path: String,
+    #[serde(default = "default_translation_model_choice")]
+    model_choice: String,
+    #[serde(default = "default_translation_target_choice")]
+    target_language: String,
+}
+
+impl Default for TranslationSettings {
+    fn default() -> Self {
+        Self {
+            runtime_path: String::new(),
+            model_path: String::new(),
+            model_choice: default_translation_model_id().into(),
+            target_language: default_translation_target_id().into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AppSettings {
     output_directory: String,
     asset_directory: String,
     #[serde(default)]
     whisper: WhisperSettings,
+    #[serde(default)]
+    translation: TranslationSettings,
     #[serde(default)]
     features: FeatureSettings,
     #[serde(default)]
@@ -168,6 +208,8 @@ struct RecentRecording {
     file_path: String,
     #[serde(default)]
     transcript_path: Option<String>,
+    #[serde(default)]
+    translation_path: Option<String>,
     duration_ms: u64,
     bytes_written: u64,
     created_at_ms: u64,
@@ -211,6 +253,7 @@ struct ShellSnapshot {
     current_recording_name: Option<String>,
     last_output_path: Option<String>,
     last_transcript_path: Option<String>,
+    last_translation_path: Option<String>,
 }
 
 impl Default for ShellSnapshot {
@@ -226,6 +269,7 @@ impl Default for ShellSnapshot {
             current_recording_name: None,
             last_output_path: None,
             last_transcript_path: None,
+            last_translation_path: None,
         }
     }
 }
@@ -237,6 +281,7 @@ struct AppBootstrap {
     settings: AppSettings,
     recent_recordings: Vec<RecentRecording>,
     whisper_detection: WhisperDetection,
+    translation_detection: TranslationDetection,
     model_download: ModelDownloadSnapshot,
     log_path: String,
 }
@@ -270,6 +315,44 @@ impl Default for WhisperDetection {
             model_managed: false,
             message:
                 "Add or download whisper-cli and a Whisper model to enable offline transcription."
+                    .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranslationDetection {
+    status: String,
+    runtime_path: Option<String>,
+    runtime_source: Option<String>,
+    runtime_ready: bool,
+    model_path: Option<String>,
+    model_source: Option<String>,
+    model_ready: bool,
+    model_managed: bool,
+    source_language: Option<String>,
+    target_language: Option<String>,
+    ready: bool,
+    message: String,
+}
+
+impl Default for TranslationDetection {
+    fn default() -> Self {
+        Self {
+            status: "notConfigured".into(),
+            runtime_path: None,
+            runtime_source: None,
+            runtime_ready: false,
+            model_path: None,
+            model_source: None,
+            model_ready: false,
+            model_managed: false,
+            source_language: None,
+            target_language: Some(default_translation_target_id().into()),
+            ready: false,
+            message:
+                "Choose a local Python runtime, install the required translation packages, and download the selected model."
                     .into(),
         }
     }
@@ -322,6 +405,7 @@ struct AppPathsState {
 struct SharedShellState(Mutex<ShellSnapshot>);
 struct SharedPersistedState(Mutex<PersistedData>);
 struct WhisperDetectionState(Mutex<WhisperDetection>);
+struct TranslationDetectionState(Mutex<TranslationDetection>);
 struct ModelDownloadState(Mutex<ModelDownloadSnapshot>);
 struct ModelDownloadControlState {
     control: Mutex<ModelDownloadControl>,
@@ -349,6 +433,18 @@ fn get_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
 #[tauri::command]
 fn download_recommended_whisper_model(app: AppHandle) -> Result<AppBootstrap, String> {
     download_recommended_whisper_model_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+#[tauri::command]
+fn download_recommended_translation_model(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_translation_model_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+#[tauri::command]
+fn download_recommended_translation_runtime(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_translation_runtime_inner(&app)?;
     build_app_bootstrap(&app)
 }
 
@@ -454,6 +550,7 @@ fn default_settings<R: Runtime>(
         output_directory: default_output_directory(app)?.display().to_string(),
         asset_directory: default_asset_directory(paths).display().to_string(),
         whisper: WhisperSettings::default(),
+        translation: TranslationSettings::default(),
         features: FeatureSettings::default(),
         launch_at_login: false,
         start_minimized: false,
@@ -503,12 +600,24 @@ fn normalize_settings<R: Runtime>(
     let managed_model_candidates = all_managed_model_paths(&asset_directory);
     let cli_path = settings.whisper.cli_path.trim();
     let model_path = settings.whisper.model_path.trim();
+    let translation_runtime_path = settings.translation.runtime_path.trim();
+    let translation_model_path = settings.translation.model_path.trim();
+    let translation_model_choice =
+        translation_model_spec(settings.translation.model_choice.trim()).id;
+    let managed_translation_model_candidates =
+        all_managed_translation_model_paths(&asset_directory);
+    let target_language = translation_language_spec(settings.translation.target_language.trim())
+        .map(|spec| spec.id)
+        .unwrap_or(default_translation_target_id());
 
     let normalized_cli_path = if cli_path.is_empty() {
         String::new()
     } else {
         let candidate = PathBuf::from(cli_path);
-        if managed_cli_candidates.iter().any(|managed| managed == &candidate) {
+        if managed_cli_candidates
+            .iter()
+            .any(|managed| managed == &candidate)
+        {
             String::new()
         } else {
             cli_path.to_string()
@@ -527,6 +636,24 @@ fn normalize_settings<R: Runtime>(
             model_path.to_string()
         }
     };
+    let normalized_translation_model_path = if translation_model_path.is_empty() {
+        String::new()
+    } else {
+        let candidate = PathBuf::from(translation_model_path);
+        if managed_translation_model_candidates
+            .iter()
+            .any(|managed| managed == &candidate)
+        {
+            String::new()
+        } else {
+            translation_model_path.to_string()
+        }
+    };
+    let normalized_translation_runtime_path = if translation_runtime_path.is_empty() {
+        String::new()
+    } else {
+        translation_runtime_path.to_string()
+    };
 
     let transcription_enabled =
         settings.features.transcription || settings.features.translation || settings.features.anki;
@@ -543,6 +670,12 @@ fn normalize_settings<R: Runtime>(
             } else {
                 language.to_string()
             },
+        },
+        translation: TranslationSettings {
+            runtime_path: normalized_translation_runtime_path,
+            model_path: normalized_translation_model_path,
+            model_choice: translation_model_choice.to_string(),
+            target_language: target_language.to_string(),
         },
         features: FeatureSettings {
             transcription: transcription_enabled,
@@ -655,12 +788,7 @@ fn log_event<R: Runtime>(app: &AppHandle<R>, level: &str, event: &str, details: 
 }
 
 fn show_native_notification<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str) {
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 fn http_client() -> Result<reqwest::blocking::Client, String> {
@@ -783,10 +911,7 @@ fn collect_managed_whisper_cli_candidates(asset_directory: &Path) -> Vec<PathBuf
     let runtime_directory = app_managed_runtime_directory(asset_directory);
 
     for executable_name in executable_names {
-        push_whisper_candidate(
-            &mut candidates,
-            runtime_directory.join(executable_name),
-        );
+        push_whisper_candidate(&mut candidates, runtime_directory.join(executable_name));
         push_whisper_candidate(
             &mut candidates,
             runtime_directory.join("bin").join(executable_name),
@@ -797,7 +922,10 @@ fn collect_managed_whisper_cli_candidates(asset_directory: &Path) -> Vec<PathBuf
         );
         push_whisper_candidate(
             &mut candidates,
-            runtime_directory.join("bin").join("Release").join(executable_name),
+            runtime_directory
+                .join("bin")
+                .join("Release")
+                .join(executable_name),
         );
         push_whisper_candidate(&mut candidates, asset_directory.join(executable_name));
     }
@@ -866,6 +994,36 @@ fn all_managed_model_paths(asset_directory: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn app_managed_translation_models_directory(asset_directory: &Path) -> PathBuf {
+    asset_directory.join("translation-models")
+}
+
+fn app_managed_translation_requirements_path(asset_directory: &Path) -> PathBuf {
+    asset_directory
+        .join("translation-runtime")
+        .join(TRANSLATION_REQUIREMENTS_FILE_NAME)
+}
+
+fn app_managed_translation_model_directory(asset_directory: &Path, model_choice: &str) -> PathBuf {
+    app_managed_translation_models_directory(asset_directory)
+        .join(translation_model_spec(model_choice).id)
+}
+
+fn find_existing_managed_translation_model_path(
+    asset_directory: &Path,
+    model_choice: &str,
+) -> Option<PathBuf> {
+    let candidate = app_managed_translation_model_directory(asset_directory, model_choice);
+    candidate.exists().then_some(candidate)
+}
+
+fn all_managed_translation_model_paths(asset_directory: &Path) -> Vec<PathBuf> {
+    TRANSLATION_MODEL_SPECS
+        .iter()
+        .map(|spec| app_managed_translation_model_directory(asset_directory, spec.id))
+        .collect()
+}
+
 fn validate_manual_path(manual_path: &str) -> Option<PathBuf> {
     let trimmed = manual_path.trim();
     if trimmed.is_empty() {
@@ -874,6 +1032,118 @@ fn validate_manual_path(manual_path: &str) -> Option<PathBuf> {
 
     let candidate = PathBuf::from(trimmed);
     candidate.exists().then_some(candidate)
+}
+
+fn choose_translation_runtime() -> Result<PythonRuntimeProbe, String> {
+    let candidates: [(&str, &[&str]); 3] = [("python", &[]), ("py", &["-3"]), ("py", &[])];
+    let mut last_error = None;
+    let mut incomplete_probe = None;
+
+    for (command, extra_args) in candidates {
+        match probe_python_runtime(command, extra_args) {
+            Ok(probe) if probe.missing_modules.is_empty() => return Ok(probe),
+            Ok(probe) => {
+                if incomplete_probe.is_none() {
+                    incomplete_probe = Some(probe);
+                }
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    incomplete_probe.ok_or_else(|| {
+        last_error.unwrap_or_else(|| {
+            "Python 3 was not available for the offline translation helper.".to_string()
+        })
+    })
+}
+
+fn ensure_translation_runtime_requirements(asset_directory: &Path) -> Result<PathBuf, String> {
+    let requirements_path = app_managed_translation_requirements_path(asset_directory);
+    if let Some(parent) = requirements_path.parent() {
+        ensure_directory_exists(parent)?;
+    }
+
+    let should_write = match fs::read_to_string(&requirements_path) {
+        Ok(existing) => existing != TRANSLATION_RUNTIME_REQUIREMENTS,
+        Err(_) => true,
+    };
+
+    if should_write {
+        fs::write(&requirements_path, TRANSLATION_RUNTIME_REQUIREMENTS)
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(requirements_path)
+}
+
+fn ensure_translation_bridge_script<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let bridge_path = app
+        .state::<AppPathsState>()
+        .inner()
+        .data_dir
+        .join("translation_bridge.py");
+
+    let should_write = match fs::read_to_string(&bridge_path) {
+        Ok(existing) => existing != TRANSLATION_BRIDGE_SCRIPT,
+        Err(_) => true,
+    };
+
+    if should_write {
+        fs::write(&bridge_path, TRANSLATION_BRIDGE_SCRIPT).map_err(|error| error.to_string())?;
+    }
+
+    Ok(bridge_path)
+}
+
+fn run_command_for_output(command: &mut std::process::Command, label: &str) -> Result<String, String> {
+    let output = command.output().map_err(|error| format!("{label}: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let details = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(if details.is_empty() {
+            format!("{label} failed.")
+        } else {
+            format!("{label}: {details}")
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn install_translation_runtime_dependencies(
+    python_path: &Path,
+    requirements_path: &Path,
+) -> Result<(), String> {
+    let _ = run_command_for_output(
+        std::process::Command::new(python_path)
+            .arg("-m")
+            .arg("ensurepip")
+            .arg("--upgrade"),
+        "Preparing pip for the translation runtime",
+    );
+
+    run_command_for_output(
+        std::process::Command::new(python_path)
+            .arg("-m")
+            .arg("pip")
+            .arg("install")
+            .arg("--disable-pip-version-check")
+            .arg("-r")
+            .arg(requirements_path),
+        "Installing the required translation packages",
+    )?;
+
+    Ok(())
+}
+
+fn translation_runtime_source_label(source: Option<&str>) -> &'static str {
+    match source {
+        Some("manual") => "The manual translation runtime",
+        Some("system") => "The local Python translation runtime",
+        _ => "Python 3 for offline translation",
+    }
 }
 
 fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetection, String> {
@@ -987,6 +1257,233 @@ fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetecti
     })
 }
 
+fn detect_local_translation<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<TranslationDetection, String> {
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the current settings.".to_string())?;
+        persisted.settings.clone()
+    };
+
+    let manual_runtime_override_present = !settings.translation.runtime_path.trim().is_empty();
+    let configured_runtime_path = settings.translation.runtime_path.trim();
+    let manual_runtime_path = validate_manual_path(&settings.translation.runtime_path);
+    let asset_directory = PathBuf::from(&settings.asset_directory);
+    let model_choice = translation_model_spec(&settings.translation.model_choice).id;
+    let manual_model_override_present = !settings.translation.model_path.trim().is_empty();
+    let configured_model_path = settings.translation.model_path.trim();
+    let manual_model_path = validate_manual_path(&settings.translation.model_path);
+    let target_language = translation_language_spec(&settings.translation.target_language)
+        .or_else(|| translation_language_spec(default_translation_target_id()))
+        .expect("default translation language should always exist");
+    let (runtime_probe, runtime_source, runtime_error, runtime_path) =
+        if let Some(path) = manual_runtime_path {
+            let display_path = path.display().to_string();
+            match probe_python_executable(&path) {
+                Ok(probe) => (
+                    Some(probe),
+                    Some("manual".to_string()),
+                    None,
+                    Some(display_path),
+                ),
+                Err(error) => (
+                    None,
+                    Some("manual".to_string()),
+                    Some(error),
+                    Some(display_path),
+                ),
+            }
+        } else {
+            match choose_translation_runtime() {
+                Ok(probe) => (
+                    Some(probe.clone()),
+                    Some("system".to_string()),
+                    None,
+                    Some(probe.executable_path.display().to_string()),
+                ),
+                Err(error) => (
+                    None,
+                    None,
+                    Some(error),
+                    (!configured_runtime_path.is_empty())
+                        .then_some(configured_runtime_path.to_string()),
+                ),
+            }
+        };
+    let (model_path, model_source) = if let Some(path) = manual_model_path {
+        (Some(path), Some("manual".to_string()))
+    } else {
+        (
+            find_existing_managed_translation_model_path(&asset_directory, model_choice),
+            Some("managed".to_string()),
+        )
+    };
+    let model_path = model_path.filter(|path| path.exists());
+    let model_source = model_path.as_ref().map(|_| model_source).unwrap_or(None);
+    let model_error = model_path
+        .as_deref()
+        .and_then(|path| verify_translation_model_dir(path).err());
+    let model_ready = model_path.is_some() && model_error.is_none();
+    let model_managed = matches!(model_source.as_deref(), Some("managed")) && model_ready;
+    let runtime_ready =
+        runtime_error.is_none() && matches!(runtime_probe.as_ref(), Some(probe) if probe.missing_modules.is_empty());
+
+    let source_language_input = settings.whisper.language.trim();
+    let source_language =
+        if source_language_input.is_empty() || source_language_input.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            translation_language_from_whisper_code(source_language_input)
+        };
+
+    let base_detection = TranslationDetection {
+        status: "notConfigured".into(),
+        runtime_path,
+        runtime_source: runtime_source.clone(),
+        runtime_ready,
+        model_path: model_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .or_else(|| {
+                (!configured_model_path.is_empty()).then_some(configured_model_path.to_string())
+            }),
+        model_source: model_source.clone(),
+        model_ready,
+        model_managed,
+        source_language: source_language
+            .map(|language| language.id.to_string())
+            .or_else(|| {
+                (!source_language_input.is_empty()
+                    && !source_language_input.eq_ignore_ascii_case("auto"))
+                .then_some(source_language_input.to_string())
+            }),
+        target_language: Some(target_language.id.into()),
+        ready: false,
+        message: String::new(),
+    };
+
+    if let Some(error) = model_error {
+        return Ok(TranslationDetection {
+            status: "invalidModel".into(),
+            message: format!("The translation model directory failed validation: {error}"),
+            ..base_detection.clone()
+        });
+    }
+
+    if !model_ready {
+        let message = if manual_model_override_present {
+            "The manual translation model path was not found. Fix the path or download the selected model."
+                .to_string()
+        } else {
+            format!(
+                "The selected {} translation model is not installed yet. Download it or choose a manual path.",
+                translation_model_spec(model_choice).label
+            )
+        };
+
+        return Ok(TranslationDetection {
+            status: "modelMissing".into(),
+            message,
+            ..base_detection.clone()
+        });
+    }
+
+    if let Some(error) = runtime_error {
+        let status = if runtime_source.is_some() {
+            "runtimeInvalid"
+        } else {
+            "runtimeMissing"
+        };
+        let message = if let Some(source) = runtime_source.as_deref() {
+            format!(
+                "{} could not be used cleanly. {}",
+                translation_runtime_source_label(Some(source)),
+                error
+            )
+        } else if manual_runtime_override_present {
+            "The manual translation runtime path was not found. Fix the path or remove it to use the detected system Python."
+                .to_string()
+        } else {
+            format!("Python 3 was not available for offline translation. {}", error)
+        };
+
+        return Ok(TranslationDetection {
+            status: status.into(),
+            message,
+            ..base_detection.clone()
+        });
+    }
+
+    if let Some(runtime_probe) = runtime_probe.as_ref() {
+        if !runtime_probe.missing_modules.is_empty() {
+            let missing_packages = runtime_probe.missing_modules.join(", ");
+            let message = match runtime_source.as_deref() {
+                Some("manual") => format!(
+                    "The manual translation runtime is missing required packages: {}. Install them or use Install Translation Dependencies.",
+                    missing_packages
+                ),
+                _ => format!(
+                    "The detected local Python runtime is missing required packages: {}. Run Install Translation Dependencies.",
+                    missing_packages
+                ),
+            };
+
+            return Ok(TranslationDetection {
+                status: "dependenciesMissing".into(),
+                message,
+                ..base_detection.clone()
+            });
+        }
+    }
+
+    if source_language_input.is_empty() || source_language_input.eq_ignore_ascii_case("auto") {
+        return Ok(TranslationDetection {
+            status: "sourceLanguageRequired".into(),
+            message:
+                "Set Whisper language to an explicit source language before enabling translation. Auto-detect is not supported for translation yet."
+                    .into(),
+            ..base_detection.clone()
+        });
+    }
+
+    let Some(source_language) = source_language else {
+        return Ok(TranslationDetection {
+            status: "unsupportedSourceLanguage".into(),
+            message: format!(
+                "Whisper language '{}' is not supported by the current translation layer yet.",
+                source_language_input
+            ),
+            ..base_detection.clone()
+        });
+    };
+
+    if source_language.id == target_language.id {
+        return Ok(TranslationDetection {
+            status: "sameLanguage".into(),
+            message: format!(
+                "Choose a target language other than {} for translation output.",
+                target_language.label
+            ),
+            ..base_detection.clone()
+        });
+    }
+
+    Ok(TranslationDetection {
+        status: "ready".into(),
+        source_language: Some(source_language.id.into()),
+        ready: true,
+        message: format!(
+            "Offline translation is ready from {} to {}.",
+            source_language.label, target_language.label
+        ),
+        ..base_detection
+    })
+}
+
 fn refresh_whisper_detection_state<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<WhisperDetection, String> {
@@ -1008,6 +1505,40 @@ fn refresh_whisper_detection_state<R: Runtime>(
             "source": detection.source,
             "executablePath": detection.executable_path,
             "modelPath": detection.model_path
+        }),
+    );
+
+    emit_app_snapshot(app);
+    Ok(detection)
+}
+
+fn refresh_translation_detection_state<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<TranslationDetection, String> {
+    let detection = detect_local_translation(app)?;
+    let detection_state = app.state::<TranslationDetectionState>();
+    let mut stored_detection = detection_state
+        .0
+        .lock()
+        .map_err(|_| "Could not update the translation readiness state.".to_string())?;
+    *stored_detection = detection.clone();
+    drop(stored_detection);
+
+    log_event(
+        app,
+        "INFO",
+        "translation.ready_state",
+        serde_json::json!({
+            "status": detection.status,
+            "runtimePath": detection.runtime_path,
+            "runtimeSource": detection.runtime_source,
+            "runtimeReady": detection.runtime_ready,
+            "modelPath": detection.model_path,
+            "modelSource": detection.model_source,
+            "modelReady": detection.model_ready,
+            "modelManaged": detection.model_managed,
+            "sourceLanguage": detection.source_language,
+            "targetLanguage": detection.target_language
         }),
     );
 
@@ -1049,7 +1580,12 @@ fn check_whisper_runtime_update_inner<R: Runtime>(
     let payload = response.text().map_err(|error| error.to_string())?;
     let latest_tag = serde_json::from_str::<serde_json::Value>(&payload)
         .ok()
-        .and_then(|value| value.get("tag_name").and_then(|tag| tag.as_str()).map(str::to_string))
+        .and_then(|value| {
+            value
+                .get("tag_name")
+                .and_then(|tag| tag.as_str())
+                .map(str::to_string)
+        })
         .ok_or_else(|| "Could not read the latest whisper.cpp release tag.".to_string())?;
 
     let update_available = latest_tag != RECOMMENDED_WHISPER_RUNTIME_VERSION;
@@ -1061,10 +1597,7 @@ fn check_whisper_runtime_update_inner<R: Runtime>(
             "current".into()
         },
         message: if update_available {
-            format!(
-                "A newer whisper.cpp runtime is available: {}.",
-                latest_tag
-            )
+            format!("A newer whisper.cpp runtime is available: {}.", latest_tag)
         } else {
             "Your app-managed Whisper runtime is up to date.".into()
         },
@@ -1202,6 +1735,12 @@ fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppBootstrap, S
         .lock()
         .map_err(|_| "Could not read the Whisper readiness state.".to_string())?
         .clone();
+    let translation_detection = app
+        .state::<TranslationDetectionState>()
+        .0
+        .lock()
+        .map_err(|_| "Could not read the translation readiness state.".to_string())?
+        .clone();
     let model_download = app
         .state::<ModelDownloadState>()
         .0
@@ -1220,6 +1759,7 @@ fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppBootstrap, S
         settings: persisted.settings,
         recent_recordings: persisted.recent_recordings,
         whisper_detection,
+        translation_detection,
         model_download,
         log_path,
     })
@@ -1269,6 +1809,7 @@ fn save_settings_inner<R: Runtime>(
 
     write_persisted_data(app, &snapshot)?;
     let _ = refresh_whisper_detection_state(app)?;
+    let _ = refresh_translation_detection_state(app)?;
     log_event(
         app,
         "INFO",
@@ -1279,7 +1820,11 @@ fn save_settings_inner<R: Runtime>(
             "whisperCliPath": normalized.whisper.cli_path,
             "whisperModelPath": normalized.whisper.model_path,
             "whisperModelChoice": normalized.whisper.model_choice,
-            "whisperLanguage": normalized.whisper.language
+            "whisperLanguage": normalized.whisper.language,
+            "translationRuntimePath": normalized.translation.runtime_path,
+            "translationModelPath": normalized.translation.model_path,
+            "translationModelChoice": normalized.translation.model_choice,
+            "translationTargetLanguage": normalized.translation.target_language
         }),
     );
     Ok(())
@@ -1323,6 +1868,20 @@ fn clear_managed_whisper_override<R: Runtime>(
             _ => {}
         }
 
+        persisted.clone()
+    };
+
+    write_persisted_data(app, &persisted_snapshot)
+}
+
+fn clear_managed_translation_model_override<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let persisted_snapshot = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let mut persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not update the managed translation settings.".to_string())?;
+        persisted.settings.translation.model_path.clear();
         persisted.clone()
     };
 
@@ -1381,6 +1940,20 @@ fn rename_recording_outputs_from_transcript(
     Ok((new_audio_path, new_transcript_path))
 }
 
+fn translation_summary(
+    file_name: &str,
+    translation_path: Option<&str>,
+    translation_note: Option<&str>,
+) -> String {
+    if translation_path.is_some() {
+        format!("Saved {file_name}, transcript, and translation.")
+    } else if let Some(note) = translation_note {
+        format!("Saved {file_name} and transcript. {note}")
+    } else {
+        format!("Saved {file_name} and transcript.")
+    }
+}
+
 fn recommended_runtime_archive_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let persisted_state = app.state::<SharedPersistedState>();
     let persisted = persisted_state
@@ -1430,6 +2003,63 @@ fn recommended_model_target_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathB
 
     ensure_directory_exists(&models_directory)?;
     Ok(models_directory.join(model_choice.file_name))
+}
+
+fn recommended_translation_model_target_path<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<PathBuf, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+    let asset_directory = PathBuf::from(&persisted.settings.asset_directory);
+    let model_choice = translation_model_spec(&persisted.settings.translation.model_choice).id;
+    drop(persisted);
+
+    let models_directory = app_managed_translation_models_directory(&asset_directory);
+    ensure_directory_exists(&models_directory)?;
+    Ok(app_managed_translation_model_directory(
+        &asset_directory,
+        model_choice,
+    ))
+}
+
+fn current_asset_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+    Ok(PathBuf::from(&persisted.settings.asset_directory))
+}
+
+fn selected_translation_runtime_probe<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<PythonRuntimeProbe, String> {
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+        persisted.settings.clone()
+    };
+
+    let manual_runtime_path = settings.translation.runtime_path.trim();
+    if manual_runtime_path.is_empty() {
+        return choose_translation_runtime();
+    }
+
+    let candidate = PathBuf::from(manual_runtime_path);
+    if !candidate.exists() {
+        return Err(
+            "The manual translation runtime path was not found. Fix the path or remove it to use the detected system Python."
+                .to_string(),
+        );
+    }
+
+    probe_python_executable(&candidate)
 }
 
 fn remove_directory_contents(path: &Path) -> Result<(), String> {
@@ -1585,6 +2215,170 @@ fn download_file_to_path_with_progress<R: Runtime>(
     Ok(())
 }
 
+fn remote_content_length(client: &reqwest::blocking::Client, url: &str) -> Option<u64> {
+    client
+        .head(url)
+        .send()
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .headers()
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn download_file_to_path_with_aggregate_progress<R: Runtime>(
+    app: &AppHandle<R>,
+    client: &reqwest::blocking::Client,
+    url: &str,
+    target_path: &Path,
+    kind: &str,
+    label: &str,
+    file_label: &str,
+    completed_before: u64,
+    aggregate_total_bytes: Option<u64>,
+) -> Result<u64, String> {
+    let mut response = client.get(url).send().map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status {}", response.status()));
+    }
+
+    let current_file_total = response.content_length();
+    let temp_path = target_path.with_extension("part");
+    if let Some(parent) = target_path.parent() {
+        ensure_directory_exists(parent)?;
+    }
+    let mut file = std::fs::File::create(&temp_path).map_err(|error| error.to_string())?;
+    let mut buffer = [0u8; 64 * 1024];
+    let mut downloaded_bytes = 0u64;
+
+    loop {
+        {
+            let control_state = app.state::<ModelDownloadControlState>();
+            let mut control = control_state
+                .control
+                .lock()
+                .map_err(|_| "Could not inspect the model download state.".to_string())?;
+
+            while control.active && control.paused && !control.cancel_requested {
+                drop(control);
+                update_model_download_snapshot(app, |snapshot| {
+                    snapshot.kind = Some(kind.to_string());
+                    snapshot.status = "paused".into();
+                    snapshot.message = format!("{label} download paused.");
+                    snapshot.target_path = Some(target_path.display().to_string());
+                })?;
+                control =
+                    control_state
+                        .condvar
+                        .wait(control_state.control.lock().map_err(|_| {
+                            "Could not resume the model download state.".to_string()
+                        })?)
+                        .map_err(|_| "Could not resume the model download state.".to_string())?;
+            }
+
+            if control.cancel_requested {
+                drop(control);
+                let _ = fs::remove_file(&temp_path);
+                return Err(format!("{label} download cancelled."));
+            }
+        }
+
+        let read_bytes = response
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if read_bytes == 0 {
+            break;
+        }
+
+        file.write_all(&buffer[..read_bytes])
+            .map_err(|error| error.to_string())?;
+        downloaded_bytes = downloaded_bytes.saturating_add(read_bytes as u64);
+        let aggregate_downloaded = completed_before.saturating_add(downloaded_bytes);
+
+        update_model_download_snapshot(app, |snapshot| {
+            snapshot.kind = Some(kind.to_string());
+            snapshot.status = "downloading".into();
+            snapshot.message = format!("Downloading {label} ({file_label})...");
+            if let Some(total) = aggregate_total_bytes {
+                snapshot.downloaded_bytes = aggregate_downloaded;
+                snapshot.total_bytes = Some(total);
+                snapshot.progress_percent = Some(if total == 0 {
+                    0.0
+                } else {
+                    (aggregate_downloaded as f64 / total as f64) * 100.0
+                });
+            } else {
+                snapshot.downloaded_bytes = downloaded_bytes;
+                snapshot.total_bytes = current_file_total;
+                snapshot.progress_percent = current_file_total.map(|total| {
+                    if total == 0 {
+                        0.0
+                    } else {
+                        (downloaded_bytes as f64 / total as f64) * 100.0
+                    }
+                });
+            }
+            snapshot.target_path = Some(target_path.display().to_string());
+        })?;
+    }
+
+    fs::rename(&temp_path, target_path).map_err(|error| error.to_string())?;
+    Ok(completed_before.saturating_add(downloaded_bytes))
+}
+
+fn download_files_to_directory_with_progress<R: Runtime>(
+    app: &AppHandle<R>,
+    files: &[ManagedTranslationFileSpec],
+    target_directory: &Path,
+    kind: &str,
+    label: &str,
+) -> Result<(), String> {
+    let client = http_client()?;
+    let aggregate_total_bytes = files.iter().try_fold(0u64, |accumulator, file| {
+        remote_content_length(&client, file.download_url)
+            .map(|size| accumulator.saturating_add(size))
+    });
+    let temp_directory = target_directory.with_extension("partial");
+
+    if temp_directory.exists() {
+        fs::remove_dir_all(&temp_directory).map_err(|error| error.to_string())?;
+    }
+    ensure_directory_exists(&temp_directory)?;
+    remove_directory_contents(&temp_directory)?;
+
+    let download_result = (|| -> Result<(), String> {
+        let mut completed_bytes = 0u64;
+
+        for file in files {
+            completed_bytes = download_file_to_path_with_aggregate_progress(
+                app,
+                &client,
+                file.download_url,
+                &temp_directory.join(file.relative_path),
+                kind,
+                label,
+                file.relative_path,
+                completed_bytes,
+                aggregate_total_bytes,
+            )?;
+        }
+
+        if target_directory.exists() {
+            fs::remove_dir_all(target_directory).map_err(|error| error.to_string())?;
+        }
+        fs::rename(&temp_directory, target_directory).map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+
+    if download_result.is_err() && temp_directory.exists() {
+        let _ = fs::remove_dir_all(&temp_directory);
+    }
+
+    download_result
+}
+
 fn start_recording_inner<R: Runtime>(
     app: &AppHandle<R>,
     requested_name: Option<String>,
@@ -1680,6 +2474,7 @@ fn start_recording_inner<R: Runtime>(
         shell.current_recording_name = Some(display_name.clone());
         shell.last_output_path = None;
         shell.last_transcript_path = None;
+        shell.last_translation_path = None;
         shell.transition_count += 1;
     })?;
     show_native_notification(
@@ -1767,7 +2562,8 @@ fn download_recommended_whisper_model_inner<R: Runtime>(app: &AppHandle<R>) -> R
                 update_model_download_snapshot(&app_handle, |snapshot| {
                     snapshot.kind = Some("model".into());
                     snapshot.status = "completed".into();
-                    snapshot.message = format!("{} model downloaded successfully.", model_spec.label);
+                    snapshot.message =
+                        format!("{} model downloaded successfully.", model_spec.label);
                     snapshot.downloaded_bytes =
                         snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
                     snapshot.progress_percent = Some(100.0);
@@ -1778,7 +2574,11 @@ fn download_recommended_whisper_model_inner<R: Runtime>(app: &AppHandle<R>) -> R
                 update_shell_snapshot(&app_handle, |shell| {
                     shell.phase = "idle".into();
                     shell.status_text = if detection.status == "ready" {
-                        format!("{} model is ready at {}", model_spec.label, target_path.display())
+                        format!(
+                            "{} model is ready at {}",
+                            model_spec.label,
+                            target_path.display()
+                        )
                     } else {
                         format!(
                             "Model downloaded, but Whisper still needs setup: {}",
@@ -1826,6 +2626,331 @@ fn download_recommended_whisper_model_inner<R: Runtime>(app: &AppHandle<R>) -> R
                     &app_handle,
                     "ERROR",
                     "whisper.model_download_failed",
+                    serde_json::json!({ "message": error }),
+                );
+            }
+        })
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+fn download_recommended_translation_model_inner<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    {
+        let shell_state = app.state::<SharedShellState>();
+        let shell = shell_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the shell state.".to_string())?;
+        if shell.phase != "idle" && shell.phase != "error" {
+            return Err("Finish the current task before downloading the translation model.".into());
+        }
+    }
+
+    {
+        let control_state = app.state::<ModelDownloadControlState>();
+        let mut control = control_state
+            .control
+            .lock()
+            .map_err(|_| "Could not initialize the model download control state.".to_string())?;
+        if control.active {
+            return Err("A model download is already in progress.".into());
+        }
+        control.active = true;
+        control.paused = false;
+        control.cancel_requested = false;
+    }
+
+    let target_path = recommended_translation_model_target_path(app)?;
+    let model_spec = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+        *translation_model_spec(&persisted.settings.translation.model_choice)
+    };
+    let app_handle = app.clone();
+    let download_label = format!("the {} translation model", model_spec.label);
+
+    update_shell_snapshot(app, |shell| {
+        shell.phase = "downloading-model".into();
+        shell.status_text = format!(
+            "Downloading the {} translation model to {}...",
+            model_spec.label,
+            target_path.display()
+        );
+        shell.started_at_ms = None;
+        shell.current_recording_name = None;
+    })?;
+    update_model_download_snapshot(app, |snapshot| {
+        snapshot.kind = Some("translation-model".into());
+        snapshot.status = "starting".into();
+        snapshot.message = format!(
+            "Preparing the {} translation model download...",
+            model_spec.label
+        );
+        snapshot.downloaded_bytes = 0;
+        snapshot.total_bytes = None;
+        snapshot.progress_percent = None;
+        snapshot.target_path = Some(target_path.display().to_string());
+    })?;
+
+    std::thread::Builder::new()
+        .name("translation-model-download".into())
+        .spawn(move || {
+            let download_result = (|| -> Result<(), String> {
+                if target_path.exists() {
+                    if verify_translation_model_dir(&target_path).is_err() {
+                        fs::remove_dir_all(&target_path).map_err(|error| error.to_string())?;
+                    }
+                }
+
+                if !target_path.exists() {
+                    download_files_to_directory_with_progress(
+                        &app_handle,
+                        model_spec.files,
+                        &target_path,
+                        "translation-model",
+                        &download_label,
+                    )?;
+                }
+
+                verify_translation_model_dir(&target_path)?;
+                clear_managed_translation_model_override(&app_handle)?;
+                let detection = refresh_translation_detection_state(&app_handle)?;
+                update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("translation-model".into());
+                    snapshot.status = "completed".into();
+                    snapshot.message = format!(
+                        "{} translation model downloaded successfully.",
+                        model_spec.label
+                    );
+                    snapshot.downloaded_bytes =
+                        snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
+                    snapshot.progress_percent = Some(100.0);
+                    snapshot.target_path = Some(target_path.display().to_string());
+                })?;
+                reset_model_download_control(&app_handle)?;
+
+                update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = if detection.ready {
+                        format!(
+                            "{} translation model is ready at {}",
+                            model_spec.label,
+                            target_path.display()
+                        )
+                    } else {
+                        format!(
+                            "Translation model downloaded, but translation still needs setup: {}",
+                            detection.message
+                        )
+                    };
+                    shell.started_at_ms = None;
+                })?;
+
+                log_event(
+                    &app_handle,
+                    "INFO",
+                    "translation.model_downloaded",
+                    serde_json::json!({
+                        "targetPath": target_path.display().to_string(),
+                        "modelChoice": model_spec.id
+                    }),
+                );
+                Ok(())
+            })();
+
+            if let Err(error) = download_result {
+                let cancelled = error.ends_with("download cancelled.");
+                let _ = update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("translation-model".into());
+                    if cancelled {
+                        snapshot.status = "cancelled".into();
+                        snapshot.message = "Translation model download cancelled.".into();
+                    } else {
+                        snapshot.status = "failed".into();
+                        snapshot.message = format!("Translation model download failed: {error}");
+                    }
+                });
+                let _ = reset_model_download_control(&app_handle);
+                let _ = update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = if cancelled {
+                        "Translation model download cancelled.".into()
+                    } else {
+                        format!("Translation model download failed: {error}")
+                    };
+                    shell.started_at_ms = None;
+                });
+                log_event(
+                    &app_handle,
+                    "ERROR",
+                    "translation.model_download_failed",
+                    serde_json::json!({ "message": error }),
+                );
+            }
+        })
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+fn download_recommended_translation_runtime_inner<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    {
+        let shell_state = app.state::<SharedShellState>();
+        let shell = shell_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the shell state.".to_string())?;
+        if shell.phase != "idle" && shell.phase != "error" {
+            return Err("Finish the current task before preparing the translation runtime.".into());
+        }
+    }
+
+    {
+        let control_state = app.state::<ModelDownloadControlState>();
+        let mut control = control_state
+            .control
+            .lock()
+            .map_err(|_| "Could not initialize the download control state.".to_string())?;
+        if control.active {
+            return Err("Another download is already in progress.".into());
+        }
+        control.active = true;
+        control.paused = false;
+        control.cancel_requested = false;
+    }
+
+    let app_handle = app.clone();
+    let requirements_target = current_asset_directory(app)?
+        .join("translation-runtime")
+        .join(TRANSLATION_REQUIREMENTS_FILE_NAME);
+
+    update_shell_snapshot(app, |shell| {
+        shell.phase = "downloading-model".into();
+        shell.status_text = format!(
+            "Installing translation dependencies into the selected Python runtime..."
+        );
+        shell.started_at_ms = None;
+        shell.current_recording_name = None;
+    })?;
+    update_model_download_snapshot(app, |snapshot| {
+        snapshot.kind = Some("translation-runtime".into());
+        snapshot.status = "starting".into();
+        snapshot.message = "Preparing the translation dependency installation...".into();
+        snapshot.downloaded_bytes = 0;
+        snapshot.total_bytes = None;
+        snapshot.progress_percent = None;
+        snapshot.target_path = Some(requirements_target.display().to_string());
+    })?;
+
+    std::thread::Builder::new()
+        .name("translation-runtime-download".into())
+        .spawn(move || {
+            let download_result = (|| -> Result<(), String> {
+                let asset_directory = current_asset_directory(&app_handle)?;
+                let requirements_path = ensure_translation_runtime_requirements(&asset_directory)?;
+                let runtime_probe = selected_translation_runtime_probe(&app_handle)?;
+                let runtime_path = runtime_probe.executable_path.clone();
+                update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("translation-runtime".into());
+                    snapshot.status = "installing".into();
+                    snapshot.message =
+                        "Installing required translation packages into the selected Python runtime..."
+                            .into();
+                    snapshot.downloaded_bytes = 0;
+                    snapshot.total_bytes = None;
+                    snapshot.progress_percent = None;
+                    snapshot.target_path = Some(runtime_path.display().to_string());
+                })?;
+
+                install_translation_runtime_dependencies(&runtime_path, &requirements_path)?;
+
+                let runtime_probe = probe_python_executable(&runtime_path)?;
+                if !runtime_probe.missing_modules.is_empty() {
+                    return Err(format!(
+                        "The selected Python runtime is still missing required packages: {}.",
+                        runtime_probe.missing_modules.join(", ")
+                    ));
+                }
+
+                let detection = refresh_translation_detection_state(&app_handle)?;
+                update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("translation-runtime".into());
+                    snapshot.status = "completed".into();
+                    snapshot.message =
+                        "Translation dependencies installed successfully.".into();
+                    snapshot.downloaded_bytes =
+                        snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
+                    snapshot.progress_percent = Some(100.0);
+                    snapshot.target_path = Some(runtime_path.display().to_string());
+                })?;
+                reset_model_download_control(&app_handle)?;
+
+                update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = if detection.runtime_ready {
+                        if detection.ready {
+                            format!("Translation runtime is ready at {}", runtime_path.display())
+                        } else {
+                            format!(
+                                "Translation runtime is ready, but translation still needs setup: {}",
+                                detection.message
+                            )
+                        }
+                    } else {
+                        format!(
+                            "Translation runtime finished installing, but verification still failed: {}",
+                            detection.message
+                        )
+                    };
+                    shell.started_at_ms = None;
+                })?;
+
+                log_event(
+                    &app_handle,
+                    "INFO",
+                    "translation.runtime_prepared",
+                    serde_json::json!({
+                        "runtimePath": runtime_path.display().to_string(),
+                        "requirementsPath": requirements_path.display().to_string()
+                    }),
+                );
+                Ok(())
+            })();
+
+            if let Err(error) = download_result {
+                let cancelled = error.ends_with("download cancelled.");
+                let _ = update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("translation-runtime".into());
+                    if cancelled {
+                        snapshot.status = "cancelled".into();
+                        snapshot.message = "Translation runtime setup cancelled.".into();
+                    } else {
+                        snapshot.status = "failed".into();
+                        snapshot.message = format!("Translation runtime setup failed: {error}");
+                    }
+                });
+                let _ = reset_model_download_control(&app_handle);
+                let _ = update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = if cancelled {
+                        "Translation runtime setup cancelled.".into()
+                    } else {
+                        format!("Translation runtime setup failed: {error}")
+                    };
+                    shell.started_at_ms = None;
+                });
+                log_event(
+                    &app_handle,
+                    "ERROR",
+                    "translation.runtime_prepare_failed",
                     serde_json::json!({ "message": error }),
                 );
             }
@@ -2021,6 +3146,8 @@ fn toggle_whisper_model_download_pause_inner<R: Runtime>(app: &AppHandle<R>) -> 
             .clone();
         match snapshot.kind.as_deref() {
             Some("runtime") => "Runtime",
+            Some("translation-runtime") => "Translation Runtime",
+            Some("translation-model") => "Translation Model",
             _ => "Model",
         }
     };
@@ -2068,6 +3195,8 @@ fn cancel_whisper_model_download_inner<R: Runtime>(app: &AppHandle<R>) -> Result
             .clone();
         match snapshot.kind.as_deref() {
             Some("runtime") => "runtime",
+            Some("translation-runtime") => "translation runtime",
+            Some("translation-model") => "translation model",
             _ => "model",
         }
     };
@@ -2101,6 +3230,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                     .to_string(),
                 file_path: capture.output_path.display().to_string(),
                 transcript_path: None,
+                translation_path: None,
                 duration_ms: capture.duration_ms,
                 bytes_written: capture.bytes_written,
                 created_at_ms: capture.created_at_ms,
@@ -2140,6 +3270,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                         shell.started_at_ms = None;
                         shell.current_recording_name = None;
                         shell.last_output_path = Some(recent_recording.file_path.clone());
+                        shell.last_translation_path = None;
                     })?;
 
                     match run_whisper_transcription(&WhisperTranscriptionRequest {
@@ -2158,6 +3289,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                         Ok(result) => {
                             let mut transcript_path = result.transcript_path;
                             let mut audio_path = PathBuf::from(&recent_recording.file_path);
+                            let mut translation_note = None;
 
                             match rename_recording_outputs_from_transcript(
                                 &audio_path,
@@ -2192,6 +3324,114 @@ fn finalize_recording_pipeline<R: Runtime>(
                                 .map(|metadata| metadata.len())
                                 .unwrap_or(recent_recording.bytes_written);
 
+                            if settings.features.translation {
+                                let translation_detection =
+                                    refresh_translation_detection_state(&app)?;
+
+                                if translation_detection.ready {
+                                    let bridge_script_path =
+                                        ensure_translation_bridge_script(&app)?;
+                                    let source_language = translation_language_from_whisper_code(
+                                        settings.whisper.language.trim(),
+                                    )
+                                    .ok_or_else(|| {
+                                        "The configured Whisper language is not supported for translation."
+                                            .to_string()
+                                    })?;
+                                    let target_language = translation_language_spec(
+                                        &settings.translation.target_language,
+                                    )
+                                    .or_else(|| {
+                                        translation_language_spec(default_translation_target_id())
+                                    })
+                                    .expect("default translation language should always exist");
+                                    let output_path = translation_output_path(
+                                        &transcript_path,
+                                        target_language.id,
+                                    );
+
+                                    update_shell_snapshot(&app, |shell| {
+                                        shell.phase = "translating".into();
+                                        shell.status_text = format!(
+                                            "Saved {} and transcript. Running offline translation...",
+                                            recent_recording.file_name
+                                        );
+                                        shell.started_at_ms = None;
+                                        shell.current_recording_name = None;
+                                        shell.last_output_path =
+                                            Some(recent_recording.file_path.clone());
+                                        shell.last_transcript_path =
+                                            recent_recording.transcript_path.clone();
+                                        shell.last_translation_path = None;
+                                    })?;
+
+                                    match run_translation(&TranslationRequest {
+                                        python_path: PathBuf::from(
+                                            translation_detection
+                                                .runtime_path
+                                                .clone()
+                                                .unwrap_or_default(),
+                                        ),
+                                        bridge_script_path,
+                                        model_dir: PathBuf::from(
+                                            translation_detection
+                                                .model_path
+                                                .clone()
+                                                .unwrap_or_default(),
+                                        ),
+                                        transcript_path: transcript_path.clone(),
+                                        output_path,
+                                        source_language: source_language.nllb_code.to_string(),
+                                        target_language: target_language.nllb_code.to_string(),
+                                    }) {
+                                        Ok(result) => {
+                                            recent_recording.translation_path =
+                                                Some(result.translation_path.display().to_string());
+                                            log_event(
+                                                &app,
+                                                "INFO",
+                                                "translation.saved",
+                                                serde_json::json!({
+                                                    "transcriptPath": recent_recording.transcript_path,
+                                                    "translationPath": recent_recording.translation_path,
+                                                    "sourceLanguage": source_language.id,
+                                                    "targetLanguage": target_language.id
+                                                }),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            translation_note =
+                                                Some(format!("Translation failed: {}", error));
+                                            log_event(
+                                                &app,
+                                                "ERROR",
+                                                "translation.failed",
+                                                serde_json::json!({
+                                                    "transcriptPath": recent_recording.transcript_path,
+                                                    "message": error,
+                                                    "targetLanguage": target_language.id
+                                                }),
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    translation_note = Some(format!(
+                                        "Translation is not ready: {}",
+                                        translation_detection.message
+                                    ));
+                                    log_event(
+                                        &app,
+                                        "INFO",
+                                        "translation.skipped_not_ready",
+                                        serde_json::json!({
+                                            "transcriptPath": recent_recording.transcript_path,
+                                            "status": translation_detection.status,
+                                            "message": translation_detection.message
+                                        }),
+                                    );
+                                }
+                            }
+
                             insert_recent_recording(&app, recent_recording.clone())?;
 
                             log_event(
@@ -2200,27 +3440,34 @@ fn finalize_recording_pipeline<R: Runtime>(
                                 "transcription.saved",
                                 serde_json::json!({
                                     "audioPath": recent_recording.file_path,
-                                    "transcriptPath": recent_recording.transcript_path
+                                    "transcriptPath": recent_recording.transcript_path,
+                                    "translationPath": recent_recording.translation_path
                                 }),
                             );
 
                             update_shell_snapshot(&app, |shell| {
                                 shell.phase = "idle".into();
-                                shell.status_text =
-                                    format!("Saved {} and transcript.", recent_recording.file_name);
+                                shell.status_text = translation_summary(
+                                    &recent_recording.file_name,
+                                    recent_recording.translation_path.as_deref(),
+                                    translation_note.as_deref(),
+                                );
                                 shell.started_at_ms = None;
                                 shell.current_recording_name = None;
                                 shell.last_output_path = Some(recent_recording.file_path.clone());
                                 shell.last_transcript_path =
                                     recent_recording.transcript_path.clone();
+                                shell.last_translation_path =
+                                    recent_recording.translation_path.clone();
                                 shell.transition_count += 1;
                             })?;
                             show_native_notification(
                                 &app,
                                 "Recording finished",
-                                &format!(
-                                    "Saved {} and its transcript.",
-                                    recent_recording.file_name
+                                &translation_summary(
+                                    &recent_recording.file_name,
+                                    recent_recording.translation_path.as_deref(),
+                                    None,
                                 ),
                             );
                             return Ok(());
@@ -2246,6 +3493,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                                 shell.current_recording_name = None;
                                 shell.last_output_path = Some(recent_recording.file_path.clone());
                                 shell.last_transcript_path = None;
+                                shell.last_translation_path = None;
                                 shell.transition_count += 1;
                             })?;
                             show_native_notification(
@@ -2269,6 +3517,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                     shell.current_recording_name = None;
                     shell.last_output_path = Some(recent_recording.file_path.clone());
                     shell.last_transcript_path = None;
+                    shell.last_translation_path = None;
                     shell.transition_count += 1;
                 })?;
                 show_native_notification(
@@ -2287,6 +3536,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                 shell.current_recording_name = None;
                 shell.last_output_path = Some(recent_recording.file_path.clone());
                 shell.last_transcript_path = None;
+                shell.last_translation_path = None;
                 shell.transition_count += 1;
             })?;
             show_native_notification(
@@ -2308,6 +3558,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                 shell.started_at_ms = None;
                 shell.current_recording_name = None;
                 shell.last_transcript_path = None;
+                shell.last_translation_path = None;
             })?;
             return Err(error);
         }
@@ -2474,6 +3725,9 @@ pub fn run() {
             app.manage(WhisperDetectionState(Mutex::new(
                 WhisperDetection::default(),
             )));
+            app.manage(TranslationDetectionState(Mutex::new(
+                TranslationDetection::default(),
+            )));
             app.manage(ModelDownloadState(Mutex::new(
                 ModelDownloadSnapshot::default(),
             )));
@@ -2523,6 +3777,11 @@ pub fn run() {
             if let Err(error) = refresh_whisper_detection_state(&app_handle) {
                 startup_warnings.push(format!(
                     "Whisper readiness could not be initialized cleanly. {error}"
+                ));
+            }
+            if let Err(error) = refresh_translation_detection_state(&app_handle) {
+                startup_warnings.push(format!(
+                    "Translation readiness could not be initialized cleanly. {error}"
                 ));
             }
 
@@ -2636,6 +3895,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_bootstrap,
             download_recommended_whisper_model,
+            download_recommended_translation_model,
+            download_recommended_translation_runtime,
             download_recommended_whisper_runtime,
             check_whisper_runtime_update,
             check_whisper_model_update,
@@ -2683,6 +3944,11 @@ mod tests {
                     "cliPath": "",
                     "modelPath": "",
                     "language": "auto"
+                },
+                "translation": {
+                    "modelPath": "",
+                    "modelChoice": "distilled-600m-int8",
+                    "targetLanguage": "en"
                 },
                 "features": {
                     "transcription": true,
