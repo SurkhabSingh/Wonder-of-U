@@ -8,7 +8,6 @@ type RecorderPhase =
   | "recording"
   | "saving"
   | "transcribing"
-  | "translating"
   | "error"
   | string;
 
@@ -28,13 +27,10 @@ type ShellSnapshot = {
   currentRecordingName: string | null;
   lastOutputPath: string | null;
   lastTranscriptPath: string | null;
-  lastTranslationPath: string | null;
 };
 
 type FeatureSettings = {
   transcription: boolean;
-  translation: boolean;
-  anki: boolean;
 };
 
 type WhisperSettings = {
@@ -44,18 +40,10 @@ type WhisperSettings = {
   language: string;
 };
 
-type TranslationSettings = {
-  runtimePath: string;
-  modelPath: string;
-  modelChoice: string;
-  targetLanguage: string;
-};
-
 type AppSettings = {
   outputDirectory: string;
   assetDirectory: string;
   whisper: WhisperSettings;
-  translation: TranslationSettings;
   features: FeatureSettings;
   launchAtLogin: boolean;
   startMinimized: boolean;
@@ -65,7 +53,6 @@ type RecentRecording = {
   fileName: string;
   filePath: string;
   transcriptPath: string | null;
-  translationPath: string | null;
   durationMs: number;
   bytesWritten: number;
   createdAtMs: number;
@@ -81,21 +68,6 @@ type WhisperDetection = {
   modelReady: boolean;
   cliManaged: boolean;
   modelManaged: boolean;
-  message: string;
-};
-
-type TranslationDetection = {
-  status: string;
-  runtimePath: string | null;
-  runtimeSource: string | null;
-  runtimeReady: boolean;
-  modelPath: string | null;
-  modelSource: string | null;
-  modelReady: boolean;
-  modelManaged: boolean;
-  sourceLanguage: string | null;
-  targetLanguage: string | null;
-  ready: boolean;
   message: string;
 };
 
@@ -122,7 +94,6 @@ type AppBootstrap = {
   settings: AppSettings;
   recentRecordings: RecentRecording[];
   whisperDetection: WhisperDetection;
-  translationDetection: TranslationDetection;
   modelDownload: ModelDownloadSnapshot;
   logPath: string;
 };
@@ -133,15 +104,13 @@ type BusyAction =
   | "hide"
   | "browse"
   | "downloadModel"
-  | "downloadTranslationModel"
-  | "downloadTranslationRuntime"
   | "downloadRuntime"
   | "checkRuntimeUpdate"
   | "checkModelUpdate"
   | null;
 
 type AutosaveState = "idle" | "saving" | "error";
-type AppTab = "recorder" | "settings" | "whisper" | "translation";
+type AppTab = "recorder" | "settings" | "whisper";
 
 const MODEL_OPTIONS = [
   {
@@ -181,46 +150,6 @@ const MODEL_OPTIONS = [
   },
 ] as const;
 
-const TRANSLATION_LANGUAGE_OPTIONS = [
-  { id: "en", label: "English" },
-  { id: "ja", label: "Japanese" },
-  { id: "hi", label: "Hindi" },
-  { id: "es", label: "Spanish" },
-  { id: "fr", label: "French" },
-  { id: "de", label: "German" },
-  { id: "ko", label: "Korean" },
-  { id: "zh", label: "Chinese (Simplified)" },
-  { id: "pt", label: "Portuguese" },
-  { id: "ru", label: "Russian" },
-] as const;
-
-const TRANSLATION_MODEL_OPTIONS = [
-  {
-    id: "distilled-600m-int8",
-    label: "Distilled 600M",
-    description:
-      "Lightest multilingual option for quick offline translation with the smallest download.",
-    diskSize: "651 MiB",
-    memoryUsage: "~1.3 GB",
-  },
-  {
-    id: "distilled-1.3b-int8",
-    label: "Distilled 1.3B",
-    description:
-      "Balanced default when you want better quality without jumping to the heaviest model tier.",
-    diskSize: "1.4 GiB",
-    memoryUsage: "~2.8 GB",
-  },
-  {
-    id: "3.3b-int8",
-    label: "3.3B",
-    description:
-      "Highest-accuracy option in the current managed set, with the largest download and RAM cost.",
-    diskSize: "3.4 GiB",
-    memoryUsage: "~6.5 GB",
-  },
-] as const;
-
 const APP_SNAPSHOT_EVENT = "app://snapshot-changed";
 const DEFAULT_BOOTSTRAP: AppBootstrap = {
   shell: {
@@ -238,7 +167,6 @@ const DEFAULT_BOOTSTRAP: AppBootstrap = {
     currentRecordingName: null,
     lastOutputPath: null,
     lastTranscriptPath: null,
-    lastTranslationPath: null,
   },
   settings: {
     outputDirectory: "",
@@ -249,16 +177,8 @@ const DEFAULT_BOOTSTRAP: AppBootstrap = {
       modelChoice: "small",
       language: "auto",
     },
-    translation: {
-      runtimePath: "",
-      modelPath: "",
-      modelChoice: "distilled-600m-int8",
-      targetLanguage: "en",
-    },
     features: {
       transcription: true,
-      translation: false,
-      anki: false,
     },
     launchAtLogin: false,
     startMinimized: false,
@@ -276,21 +196,6 @@ const DEFAULT_BOOTSTRAP: AppBootstrap = {
     modelManaged: false,
     message:
       "Add or download whisper-cli and a Whisper model to enable offline transcription.",
-  },
-  translationDetection: {
-    status: "notConfigured",
-    runtimePath: null,
-    runtimeSource: null,
-    runtimeReady: false,
-    modelPath: null,
-    modelSource: null,
-    modelReady: false,
-    modelManaged: false,
-    sourceLanguage: null,
-    targetLanguage: "en",
-    ready: false,
-    message:
-      "Choose a local Python runtime, install the required translation packages, and download the selected model.",
   },
   modelDownload: {
     kind: null,
@@ -374,43 +279,6 @@ function whisperStatusLabel(status: string): string {
     default:
       return "Needs Setup";
   }
-}
-
-function translationStatusLabel(status: string): string {
-  switch (status) {
-    case "ready":
-      return "Ready";
-    case "runtimeMissing":
-      return "Python Missing";
-    case "runtimeInvalid":
-      return "Runtime Invalid";
-    case "dependenciesMissing":
-      return "Deps Missing";
-    case "modelMissing":
-    case "notConfigured":
-      return "Model Missing";
-    case "invalidModel":
-      return "Invalid Model";
-    case "sourceLanguageRequired":
-      return "Source Needed";
-    case "unsupportedSourceLanguage":
-      return "Source Unsupported";
-    case "sameLanguage":
-      return "Pick Another";
-    default:
-      return "Needs Setup";
-  }
-}
-
-function translationLanguageLabel(languageId: string | null): string {
-  if (!languageId) {
-    return "Not set";
-  }
-
-  return (
-    TRANSLATION_LANGUAGE_OPTIONS.find((option) => option.id === languageId)
-      ?.label ?? languageId
-  );
 }
 
 function TooltipBadge({
@@ -596,7 +464,6 @@ function App() {
         return "recording";
       case "saving":
       case "transcribing":
-      case "translating":
       case "downloading-model":
         return "saving";
       case "error":
@@ -609,26 +476,21 @@ function App() {
   const isRecording = bootstrap.shell.phase === "recording";
   const isSaving = bootstrap.shell.phase === "saving";
   const isTranscribing = bootstrap.shell.phase === "transcribing";
-  const isTranslating = bootstrap.shell.phase === "translating";
   const recorderBusy =
     isRecording ||
     isSaving ||
     isTranscribing ||
-    isTranslating ||
     busyAction === "start" ||
     busyAction === "stop";
-  const showBusyOverlay = isSaving || isTranscribing || isTranslating;
-  const busyOverlayLabel = isTranslating
-    ? "Translating the saved transcript offline..."
-    : isTranscribing
-      ? "Transcribing the saved recording..."
-      : isSaving
-        ? "Finalizing the recording..."
-        : "";
+  const showBusyOverlay = isSaving || isTranscribing;
+  const busyOverlayLabel = isTranscribing
+    ? "Transcribing the saved recording..."
+    : isSaving
+      ? "Finalizing the recording..."
+      : "";
   const downloadIsActive =
     bootstrap.modelDownload.status === "starting" ||
     bootstrap.modelDownload.status === "downloading" ||
-    bootstrap.modelDownload.status === "installing" ||
     bootstrap.modelDownload.status === "paused" ||
     bootstrap.modelDownload.status === "cancelling";
   const hotkeyTooltip = `Start recording: ${bootstrap.shell.hotkeys.start}\nStop recording: ${bootstrap.shell.hotkeys.stop}\nShow window: ${bootstrap.shell.hotkeys.showWindow}`;
@@ -647,32 +509,11 @@ function App() {
     (bootstrap.whisperDetection.modelManaged
       ? bootstrap.whisperDetection.modelPath ?? ""
       : "");
-  const resolvedTranslationRuntimePath =
-    settingsDraft.translation.runtimePath ||
-    bootstrap.translationDetection.runtimePath ||
-    "";
-  const resolvedTranslationModelPath =
-    settingsDraft.translation.modelPath ||
-    (bootstrap.translationDetection.modelManaged
-      ? bootstrap.translationDetection.modelPath ?? ""
-      : "") ||
-    "";
-  const selectedTranslationModel =
-    TRANSLATION_MODEL_OPTIONS.find(
-      (option) => option.id === settingsDraft.translation.modelChoice,
-    ) ?? TRANSLATION_MODEL_OPTIONS[0];
-  const translationRuntimeInstalled = bootstrap.translationDetection.runtimeReady;
-  const translationModelInstalled = bootstrap.translationDetection.modelReady;
-  const selectedTargetLanguage =
-    TRANSLATION_LANGUAGE_OPTIONS.find(
-      (option) => option.id === settingsDraft.translation.targetLanguage,
-    ) ?? TRANSLATION_LANGUAGE_OPTIONS[0];
 
   function updateSettings(
-    update: Partial<Omit<AppSettings, "features" | "whisper" | "translation">> & {
+    update: Partial<Omit<AppSettings, "features" | "whisper">> & {
       features?: Partial<FeatureSettings>;
       whisper?: Partial<WhisperSettings>;
-      translation?: Partial<TranslationSettings>;
     },
   ) {
     setSettingsDraft((current) => {
@@ -684,24 +525,11 @@ function App() {
         ...current.whisper,
         ...(update.whisper ?? {}),
       };
-      const nextTranslation: TranslationSettings = {
-        ...current.translation,
-        ...(update.translation ?? {}),
-      };
-
-      if (!nextFeatures.transcription) {
-        nextFeatures.translation = false;
-        nextFeatures.anki = false;
-      }
-      if (nextFeatures.translation || nextFeatures.anki) {
-        nextFeatures.transcription = true;
-      }
 
       return {
         ...current,
         ...update,
         whisper: nextWhisper,
-        translation: nextTranslation,
         features: nextFeatures,
       };
     });
@@ -828,46 +656,6 @@ function App() {
     }
   }
 
-  async function downloadRecommendedTranslationModel() {
-    try {
-      setBusyAction("downloadTranslationModel");
-      await persistSettingsIfNeeded();
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "download_recommended_translation_model",
-      );
-      applyBootstrap(nextBootstrap);
-      setActiveTab("translation");
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The selected translation model could not be prepared.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function downloadRecommendedTranslationRuntime() {
-    try {
-      setBusyAction("downloadTranslationRuntime");
-      await persistSettingsIfNeeded();
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "download_recommended_translation_runtime",
-      );
-      applyBootstrap(nextBootstrap);
-      setActiveTab("translation");
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The translation dependencies could not be installed.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   async function checkRuntimeUpdate() {
     try {
       setBusyAction("checkRuntimeUpdate");
@@ -963,60 +751,6 @@ function App() {
     }
   }
 
-  async function browseForTranslationRuntimeFile() {
-    try {
-      setBusyAction("browse");
-      const selection = normalizeSelection(
-        await open({
-          directory: false,
-          multiple: false,
-          defaultPath: resolvedTranslationRuntimePath || undefined,
-        }),
-      );
-
-      if (!selection) {
-        return;
-      }
-
-      updateSettings({ translation: { runtimePath: selection } });
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The translation runtime file chooser could not be opened.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function browseForTranslationModelDirectory() {
-    try {
-      setBusyAction("browse");
-      const selection = normalizeSelection(
-        await open({
-          directory: true,
-          multiple: false,
-          defaultPath: resolvedTranslationModelPath || undefined,
-        }),
-      );
-
-      if (!selection) {
-        return;
-      }
-
-      updateSettings({ translation: { modelPath: selection } });
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The translation model folder chooser could not be opened.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   async function browseForFile(field: "cliPath" | "modelPath") {
     try {
       setBusyAction("browse");
@@ -1046,10 +780,7 @@ function App() {
     }
   }
 
-  function renderDownloadBlock(
-    kind: "runtime" | "model" | "translation-runtime" | "translation-model",
-    label: string,
-  ) {
+  function renderDownloadBlock(kind: "runtime" | "model", label: string) {
     if (bootstrap.modelDownload.kind !== kind) {
       return null;
     }
@@ -1087,9 +818,7 @@ function App() {
         {bootstrap.modelDownload.targetPath ? (
           <p className="path-copy">{bootstrap.modelDownload.targetPath}</p>
         ) : null}
-        {downloadIsActive &&
-        kind !== "translation-runtime" &&
-        bootstrap.modelDownload.status !== "installing" ? (
+        {downloadIsActive ? (
           <div className="action-row compact-actions">
             <button
               type="button"
@@ -1142,14 +871,13 @@ function App() {
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">Phase 4 In Progress</p>
+          <p className="eyebrow">Local Capture And Transcription</p>
           <h1>Wonder of U Desktop</h1>
           <p className="lede">
-            The recorder now carries recordings through offline Whisper
-            transcription and into the first manual CTranslate2 translation
-            layer. Use the translation setup tab to point the app at a local
-            model directory, choose a target language, and keep everything on
-            your machine.
+            The recorder now handles real system-audio capture plus offline
+            Whisper transcription, while the setup flow stays tighter: use a
+            manual override when you already have `whisper-cli`, or let the app
+            manage the runtime and model for you.
           </p>
         </div>
 
@@ -1202,13 +930,6 @@ function App() {
             onClick={() => setActiveTab("whisper")}
           >
             Whisper Setup
-          </button>
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "translation" ? "active" : ""}`}
-            onClick={() => setActiveTab("translation")}
-          >
-            Translation
           </button>
 
           <div className="sidebar-note">
@@ -1316,13 +1037,6 @@ function App() {
                         "No transcript saved yet"}
                     </strong>
                   </div>
-                  <div>
-                    <span className="hint-label">Last Translation</span>
-                    <strong>
-                      {bootstrap.shell.lastTranslationPath ||
-                        "No translation saved yet"}
-                    </strong>
-                  </div>
                 </div>
               </article>
 
@@ -1355,11 +1069,6 @@ function App() {
                         {recording.transcriptPath ? (
                           <p className="path-copy">
                             Transcript: {recording.transcriptPath}
-                          </p>
-                        ) : null}
-                        {recording.translationPath ? (
-                          <p className="path-copy">
-                            Translation: {recording.translationPath}
                           </p>
                         ) : null}
                       </article>
@@ -1419,7 +1128,7 @@ function App() {
                           assetDirectory: event.currentTarget.value,
                         })
                       }
-                      placeholder="Choose where Whisper and future translation assets live"
+                      placeholder="Choose where Whisper runtime and model assets live"
                     />
                     <button
                       type="button"
@@ -1446,36 +1155,6 @@ function App() {
                       }
                     />
                     <span>Enable transcription</span>
-                  </label>
-
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.features.translation}
-                      onChange={(event) =>
-                        updateSettings({
-                          features: {
-                            translation: event.currentTarget.checked,
-                          },
-                        })
-                      }
-                    />
-                    <span>Enable translation after transcription</span>
-                  </label>
-
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.features.anki}
-                      onChange={(event) =>
-                        updateSettings({
-                          features: {
-                            anki: event.currentTarget.checked,
-                          },
-                        })
-                      }
-                    />
-                    <span>Offer Anki card creation</span>
                   </label>
 
                   <label className="toggle">
@@ -1515,9 +1194,6 @@ function App() {
                   </span>
                   <span className="pill">
                     Log file: {bootstrap.logPath || "Will appear after startup"}
-                  </span>
-                  <span className="pill">
-                    Translation target: {selectedTargetLanguage.label}
                   </span>
                 </div>
               </div>
@@ -1766,277 +1442,6 @@ function App() {
                     </div>
                   )}
                   {renderDownloadBlock("model", "Model")}
-                </div>
-              </article>
-            </>
-          ) : null}
-
-          {activeTab === "translation" ? (
-            <>
-              <article className="panel">
-                <header className="panel-header">
-                  <div>
-                    <p className="panel-kicker">Translation Setup</p>
-                    <h2>Offline Translation</h2>
-                  </div>
-                  <TooltipBadge
-                    label={translationStatusLabel(
-                      bootstrap.translationDetection.status,
-                    )}
-                    description={bootstrap.translationDetection.message}
-                  />
-                </header>
-
-                <div className="meta-list compact-meta-list">
-                  <div title={bootstrap.translationDetection.message}>
-                    <span className="hint-label">Readiness</span>
-                    <strong>{bootstrap.translationDetection.message}</strong>
-                  </div>
-                  <div
-                    title={`Model source: ${
-                      bootstrap.translationDetection.modelSource || "none"
-                    }`}
-                  >
-                    <span className="hint-label">Active Model</span>
-                    <strong>
-                      {bootstrap.translationDetection.modelPath ||
-                        "No active translation model path yet"}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="hint-label">Python Runtime</span>
-                    <strong>
-                      {bootstrap.translationDetection.runtimePath ||
-                        "No local Python runtime detected yet"}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="hint-label">Language Flow</span>
-                    <strong>
-                      {translationLanguageLabel(
-                        bootstrap.translationDetection.sourceLanguage,
-                      )}{" "}
-                      to{" "}
-                      {translationLanguageLabel(
-                        bootstrap.translationDetection.targetLanguage,
-                      )}
-                    </strong>
-                  </div>
-                </div>
-              </article>
-
-              <article className="panel">
-                <header className="panel-header">
-                  <div>
-                    <p className="panel-kicker">Configuration</p>
-                    <h2>Translation Runtime</h2>
-                  </div>
-                  <TooltipBadge
-                    label="Python"
-                    description="Point the app at a Python 3 executable you already installed, then let the app install ctranslate2, transformers, and sentencepiece into that runtime."
-                  />
-                </header>
-
-                <div className="settings-grid">
-                  <label className="field">
-                    <span>Python runtime</span>
-                    <div className="input-with-action">
-                      <input
-                        type="text"
-                        value={resolvedTranslationRuntimePath}
-                        onChange={(event) =>
-                          updateSettings({
-                            translation: {
-                              runtimePath: event.currentTarget.value,
-                            },
-                          })
-                        }
-                        placeholder="Optional override for a local python.exe. Leave empty to use detected system Python."
-                      />
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void browseForTranslationRuntimeFile()}
-                        disabled={busyAction === "browse"}
-                      >
-                        Browse
-                      </button>
-                    </div>
-                  </label>
-                </div>
-
-                <div className="download-section">
-                  {translationRuntimeInstalled ? (
-                    <div className="installed-card">
-                      <strong>Translation dependencies are already available.</strong>
-                      <p className="microcopy">
-                        {bootstrap.translationDetection.runtimeSource === "manual"
-                          ? "The selected manual Python runtime is ready for translation."
-                          : "A detected local Python runtime is ready for translation."}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="action-row inline-actions">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => void downloadRecommendedTranslationRuntime()}
-                        disabled={
-                          downloadIsActive ||
-                          busyAction === "downloadTranslationRuntime"
-                        }
-                      >
-                        Install Translation Dependencies
-                      </button>
-                    </div>
-                  )}
-                  {renderDownloadBlock("translation-runtime", "Translation Runtime")}
-                </div>
-              </article>
-
-              <article className="panel">
-                <header className="panel-header">
-                  <div>
-                    <p className="panel-kicker">Configuration</p>
-                    <h2>CTranslate2 Model</h2>
-                  </div>
-                  <TooltipBadge
-                    label="Managed or Manual"
-                    description="Pick a managed translation model for the app to download into your asset folder, or point the manual path at another local CTranslate2 model directory."
-                  />
-                </header>
-
-                <div className="settings-grid">
-                  <label className="field">
-                    <span>Managed model</span>
-                    <select
-                      value={settingsDraft.translation.modelChoice}
-                      onChange={(event) =>
-                        updateSettings({
-                          translation: {
-                            modelChoice: event.currentTarget.value,
-                          },
-                        })
-                      }
-                    >
-                      {TRANSLATION_MODEL_OPTIONS.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="field">
-                    <span>Target language</span>
-                    <select
-                      value={settingsDraft.translation.targetLanguage}
-                      onChange={(event) =>
-                        updateSettings({
-                          translation: {
-                            targetLanguage: event.currentTarget.value,
-                          },
-                        })
-                      }
-                    >
-                      {TRANSLATION_LANGUAGE_OPTIONS.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="field">
-                    <span>Translation model directory</span>
-                    <div className="input-with-action">
-                      <input
-                        type="text"
-                        value={resolvedTranslationModelPath}
-                        onChange={(event) =>
-                          updateSettings({
-                            translation: {
-                              modelPath: event.currentTarget.value,
-                            },
-                          })
-                        }
-                        placeholder="Optional manual override for another local CTranslate2 model directory"
-                      />
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void browseForTranslationModelDirectory()}
-                        disabled={busyAction === "browse"}
-                      >
-                        Browse
-                      </button>
-                    </div>
-                  </label>
-                </div>
-
-                <div className="installed-card">
-                  <strong>
-                    {selectedTranslationModel.label}: {selectedTranslationModel.diskSize}{" "}
-                    disk, {selectedTranslationModel.memoryUsage} RAM
-                  </strong>
-                  <p className="microcopy">{selectedTranslationModel.description}</p>
-                </div>
-
-                <div className="download-section">
-                  {translationModelInstalled ? (
-                    <div className="installed-card">
-                      <strong>Selected translation model is already available.</strong>
-                      <p className="microcopy">
-                        {bootstrap.translationDetection.modelManaged
-                          ? "The app-managed translation model for your current selection is installed."
-                          : "A manual translation model path is active."}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="action-row inline-actions">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => void downloadRecommendedTranslationModel()}
-                        disabled={
-                          downloadIsActive ||
-                          busyAction === "downloadTranslationModel"
-                        }
-                      >
-                        Download {selectedTranslationModel.label} Model
-                      </button>
-                    </div>
-                  )}
-                  {renderDownloadBlock("translation-model", "Translation Model")}
-                </div>
-
-                <div className="installed-card">
-                  <strong>
-                    Translation follows Whisper&apos;s source language setting.
-                  </strong>
-                    <p className="microcopy">
-                      Set Whisper language to an explicit supported source
-                      language instead of `auto`, then choose a different target
-                      language here. The app installs the required translation
-                      packages into your selected local Python runtime,
-                      including protobuf.
-                    </p>
-                </div>
-
-                <div className="installed-card">
-                  <strong>Configured Python runtime</strong>
-                  <p className="path-copy">
-                    {resolvedTranslationRuntimePath ||
-                      "No Python runtime selected or detected yet"}
-                  </p>
-                </div>
-
-                <div className="installed-card">
-                  <strong>Configured model path</strong>
-                  <p className="path-copy">
-                    {resolvedTranslationModelPath ||
-                      "No translation model directory selected yet"}
-                  </p>
                 </div>
               </article>
             </>

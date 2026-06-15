@@ -15,6 +15,11 @@ logs/
 .vscode/
 .bootstrap/
 
+# Repository documentation policy
+*.md
+*.txt
+!/README.md
+
 # Node / frontend
 node_modules/
 dist/

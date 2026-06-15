@@ -1,46 +1,43 @@
-# Wonder of U Desktop
+# Wonder of U
 
-Windows-first offline desktop application workspace.
+Wonder of U is a local-first desktop application for capturing system audio,
+transcribing speech with Whisper, and preparing language-learning content for
+Anki.
 
-## Vision
+## Current Capabilities
 
-Build a background tray app that can:
+- Tauri desktop application with tray-first behavior.
+- Global shortcuts for starting and stopping system-audio recording.
+- Windows system-output capture saved as local WAV files.
+- Local Whisper transcription.
+- Managed Whisper runtime and model downloads.
+- Automatic discovery of downloaded Whisper assets after restart.
+- Manual `whisper-cli` and GGML model path overrides.
+- Download progress, pause, resume, cancellation, and update checks.
+- Configurable output and asset directories.
+- Recent recording and transcript history.
 
-- record system audio
-- transcribe locally
-- translate locally with CTranslate2
-- optionally create Anki cards
-- remain lightweight while idle
+## Product Features
 
-## Current Status
+The desktop application is being extended to support:
 
-Phases 1, 2, and 3 are complete with:
+- Windows, macOS, and Linux system-audio capture.
+- Audio-only and audio-plus-visual-context shortcuts.
+- Low-frame-rate screenshot capture encoded into compact H.264 MP4 files.
+- Browser-extension-assisted translation.
+- Japanese furigana generation with editable readings.
+- Existing Anki deck, note type, and field mapping.
+- Persistent card review and retry queue.
+- Light and dark themes.
 
-- Tauri desktop shell
-- tray-first runtime behavior
-- global hotkey wiring
-- strict recorder state shell
-- real Windows system-audio recording
-- Whisper runtime/model management, detection, and manual path overrides
-- automatic transcript generation beside saved recordings when Whisper is ready
-- transcript-based default file renaming after successful transcription
+Audio, transcripts, and generated media remain local unless the user explicitly
+uses a configured translation service or sends a reviewed note to Anki.
 
-Phase 4 is now in progress with:
+## Development
 
-- managed translation model downloads into the app asset folder
-- user-installed local Python runtime detection or manual runtime path overrides
-- app-managed installation of `ctranslate2`, `transformers`, `sentencepiece`, and `protobuf` into the selected Python runtime
-- manual translation model directory overrides when you already have a local CTranslate2 model
-- selectable translation model footprints in the desktop UI
-- target-language selection in the desktop UI
-- translation readiness checks for the selected local Python runtime and dependencies
-- translation text files saved beside transcripts as `recording_name.translation.<lang>.txt`
-
-AI analysis and Anki land in later phases.
-
-## Repository Notes
-
-- The browser extension prototype in the parent folder is intentionally kept
-  separate.
-- Runtime assets and downloaded models should eventually live outside the source
-  tree and be managed by the app.
+```powershell
+npm install
+npm run check
+npm run build
+cargo test --manifest-path .\src-tauri\Cargo.toml
+```
