@@ -152,6 +152,8 @@ struct AppSettings {
     whisper: WhisperSettings,
     #[serde(default)]
     features: FeatureSettings,
+    #[serde(default = "default_theme_preference")]
+    theme: String,
     #[serde(default)]
     launch_at_login: bool,
     #[serde(default)]
@@ -443,6 +445,18 @@ fn default_asset_directory(paths: &AppPathsState) -> PathBuf {
     paths.assets_dir.clone()
 }
 
+fn default_theme_preference() -> String {
+    "system".into()
+}
+
+fn normalize_theme_preference(theme: &str) -> &str {
+    match theme.trim() {
+        "light" => "light",
+        "dark" => "dark",
+        _ => "system",
+    }
+}
+
 fn default_settings<R: Runtime>(
     app: &AppHandle<R>,
     paths: &AppPathsState,
@@ -452,6 +466,7 @@ fn default_settings<R: Runtime>(
         asset_directory: default_asset_directory(paths).display().to_string(),
         whisper: WhisperSettings::default(),
         features: FeatureSettings::default(),
+        theme: default_theme_preference(),
         launch_at_login: false,
         start_minimized: false,
     })
@@ -500,6 +515,7 @@ fn normalize_settings<R: Runtime>(
     let managed_model_candidates = all_managed_model_paths(&asset_directory);
     let cli_path = settings.whisper.cli_path.trim();
     let model_path = settings.whisper.model_path.trim();
+    let theme = normalize_theme_preference(&settings.theme);
 
     let normalized_cli_path = if cli_path.is_empty() {
         String::new()
@@ -544,6 +560,7 @@ fn normalize_settings<R: Runtime>(
         features: FeatureSettings {
             transcription: settings.features.transcription,
         },
+        theme: theme.into(),
         launch_at_login: settings.launch_at_login,
         start_minimized: settings.start_minimized,
     })
@@ -2650,7 +2667,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_recording_name, unique_wav_path, PersistedData};
+    use super::{
+        normalize_theme_preference, sanitize_recording_name, unique_wav_path, PersistedData,
+    };
     use std::path::Path;
 
     #[test]
@@ -2668,6 +2687,13 @@ mod tests {
             second.file_name().unwrap().to_string_lossy(),
             "sample_1.wav"
         );
+    }
+
+    #[test]
+    fn theme_preference_accepts_known_values_and_rejects_unknown_values() {
+        assert_eq!(normalize_theme_preference("light"), "light");
+        assert_eq!(normalize_theme_preference(" dark "), "dark");
+        assert_eq!(normalize_theme_preference("sepia"), "system");
     }
 
     #[test]
@@ -2693,6 +2719,7 @@ mod tests {
         };
 
         assert_eq!(state.untitled_counter, 0);
+        assert_eq!(state.settings.theme, "system");
         assert!(Path::new("C:\\Temp").is_absolute());
     }
 }

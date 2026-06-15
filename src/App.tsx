@@ -40,11 +40,14 @@ type WhisperSettings = {
   language: string;
 };
 
+type ThemePreference = "system" | "light" | "dark";
+
 type AppSettings = {
   outputDirectory: string;
   assetDirectory: string;
   whisper: WhisperSettings;
   features: FeatureSettings;
+  theme: ThemePreference;
   launchAtLogin: boolean;
   startMinimized: boolean;
 };
@@ -180,6 +183,7 @@ const DEFAULT_BOOTSTRAP: AppBootstrap = {
     features: {
       transcription: true,
     },
+    theme: "system",
     launchAtLogin: false,
     startMinimized: false,
   },
@@ -300,6 +304,9 @@ function App() {
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>(
     DEFAULT_BOOTSTRAP.settings,
   );
+  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() =>
+    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+  );
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [autosaveState, setAutosaveState] = useState<AutosaveState>("idle");
   const [autosaveMessage, setAutosaveMessage] = useState(
@@ -324,11 +331,32 @@ function App() {
     [bootstrap.settings],
   );
   const settingsDirty = settingsDraftKey !== savedSettingsKey;
+  const resolvedTheme =
+    settingsDraft.theme === "system" ? systemTheme : settingsDraft.theme;
 
   useEffect(() => {
     settingsDirtyRef.current = settingsDirty;
     currentDraftKeyRef.current = settingsDraftKey;
   }, [settingsDirty, settingsDraftKey]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateSystemTheme = (event: MediaQueryListEvent | MediaQueryList) => {
+      setSystemTheme(event.matches ? "dark" : "light");
+    };
+
+    updateSystemTheme(mediaQuery);
+    mediaQuery.addEventListener("change", updateSystemTheme);
+
+    return () => {
+      mediaQuery.removeEventListener("change", updateSystemTheme);
+    };
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.documentElement.style.colorScheme = resolvedTheme;
+  }, [resolvedTheme]);
 
   function applyBootstrap(
     nextBootstrap: AppBootstrap,
@@ -1093,6 +1121,26 @@ function App() {
               </header>
 
               <div className="settings-grid">
+                <label className="field">
+                  <span>Appearance</span>
+                  <select
+                    value={settingsDraft.theme}
+                    onChange={(event) =>
+                      updateSettings({
+                        theme: event.currentTarget.value as ThemePreference,
+                      })
+                    }
+                  >
+                    <option value="system">Use system setting</option>
+                    <option value="light">Light</option>
+                    <option value="dark">Dark</option>
+                  </select>
+                  <small className="field-help">
+                    System follows your operating system. Light and dark choices
+                    override it on this device.
+                  </small>
+                </label>
+
                 <label className="field">
                   <span>Recording output folder</span>
                   <div className="input-with-action">
