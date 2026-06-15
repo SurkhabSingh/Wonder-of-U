@@ -358,6 +358,32 @@ function App() {
     document.documentElement.style.colorScheme = resolvedTheme;
   }, [resolvedTheme]);
 
+  useEffect(() => {
+    function handleTabShortcut(event: KeyboardEvent) {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+
+      const tabByKey: Partial<Record<string, AppTab>> = {
+        "1": "recorder",
+        "2": "settings",
+        "3": "whisper",
+      };
+      const nextTab = tabByKey[event.key];
+      if (!nextTab) {
+        return;
+      }
+
+      event.preventDefault();
+      setActiveTab(nextTab);
+    }
+
+    window.addEventListener("keydown", handleTabShortcut);
+    return () => {
+      window.removeEventListener("keydown", handleTabShortcut);
+    };
+  }, []);
+
   function applyBootstrap(
     nextBootstrap: AppBootstrap,
     options?: { preserveDraft?: boolean },
@@ -899,13 +925,10 @@ function App() {
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">Local Capture And Transcription</p>
+          <p className="eyebrow">Local audio workspace</p>
           <h1>Wonder of U Desktop</h1>
           <p className="lede">
-            The recorder now handles real system-audio capture plus offline
-            Whisper transcription, while the setup flow stays tighter: use a
-            manual override when you already have `whisper-cli`, or let the app
-            manage the runtime and model for you.
+            Capture system audio and transcribe it locally with Whisper.
           </p>
         </div>
 
@@ -913,7 +936,7 @@ function App() {
           className={`state-chip ${phaseTone}`}
           title={bootstrap.shell.statusText}
         >
-          <span className="state-chip-label">Recorder State</span>
+          <span className="state-chip-label">Recorder</span>
           <strong>{bootstrap.shell.phase}</strong>
           <span className="state-chip-meta">
             {bootstrap.shell.currentRecordingName || "Ready for the next capture"}
@@ -938,26 +961,36 @@ function App() {
 
       <section className="workspace">
         <aside className="sidebar">
+          <div className="sidebar-heading">
+            <span>Workspace</span>
+            <kbd>Alt+1-3</kbd>
+          </div>
           <button
             type="button"
             className={`tab-button ${activeTab === "recorder" ? "active" : ""}`}
             onClick={() => setActiveTab("recorder")}
+            aria-pressed={activeTab === "recorder"}
           >
-            Main Recorder
+            <span>Recorder</span>
+            <kbd>Alt+1</kbd>
           </button>
           <button
             type="button"
             className={`tab-button ${activeTab === "settings" ? "active" : ""}`}
             onClick={() => setActiveTab("settings")}
+            aria-pressed={activeTab === "settings"}
           >
-            Settings
+            <span>Settings</span>
+            <kbd>Alt+2</kbd>
           </button>
           <button
             type="button"
             className={`tab-button ${activeTab === "whisper" ? "active" : ""}`}
             onClick={() => setActiveTab("whisper")}
+            aria-pressed={activeTab === "whisper"}
           >
-            Whisper Setup
+            <span>Whisper Setup</span>
+            <kbd>Alt+3</kbd>
           </button>
 
           <div className="sidebar-note">

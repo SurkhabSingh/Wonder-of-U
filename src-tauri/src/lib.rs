@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    webview::PageLoadEvent,
     AppHandle, Emitter, Manager, Runtime, WindowEvent,
 };
 #[cfg(desktop)]
@@ -51,6 +52,14 @@ struct WhisperModelSpec {
     label: &'static str,
     file_name: &'static str,
     download_url: &'static str,
+}
+
+#[derive(Default)]
+struct StartupVisibility {
+    initialized: AtomicBool,
+    page_loaded: AtomicBool,
+    resolved: AtomicBool,
+    start_minimized: AtomicBool,
 }
 
 const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
@@ -2384,6 +2393,22 @@ fn hide_main_window_inner<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
+fn resolve_startup_visibility<R: Runtime>(
+    app: &AppHandle<R>,
+    startup_visibility: &StartupVisibility,
+) {
+    if !startup_visibility.initialized.load(Ordering::Acquire)
+        || !startup_visibility.page_loaded.load(Ordering::Acquire)
+        || startup_visibility.resolved.swap(true, Ordering::AcqRel)
+    {
+        return;
+    }
+
+    if !startup_visibility.start_minimized.load(Ordering::Acquire) {
+        let _ = show_main_window_inner(app);
+    }
+}
+
 fn setup_error(message: impl Into<String>) -> tauri::Error {
     let boxed_error: Box<dyn std::error::Error> = Box::new(std::io::Error::new(
         std::io::ErrorKind::Other,
@@ -2468,6 +2493,10 @@ fn register_hotkey<R: Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let startup_visibility = Arc::new(StartupVisibility::default());
+    let setup_visibility = Arc::clone(&startup_visibility);
+    let page_load_visibility = Arc::clone(&startup_visibility);
+
     tauri::Builder::default()
         .plugin(
             tauri_plugin_autostart::Builder::new()
@@ -2477,7 +2506,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
             let app_handle = app.handle().clone();
             let paths = build_app_paths(&app_handle)?;
             let persisted = load_persisted_data(&app_handle, &paths)?;
@@ -2640,12 +2669,27 @@ pub fn run() {
                 persisted.settings.start_minimized
             };
 
-            if start_minimized {
-                let _ = hide_main_window_inner(&app_handle);
-            }
+            setup_visibility
+                .start_minimized
+                .store(start_minimized, Ordering::Release);
+            setup_visibility.initialized.store(true, Ordering::Release);
+            resolve_startup_visibility(&app_handle, &setup_visibility);
 
             emit_app_snapshot(&app.handle());
             Ok(())
+        })
+        .on_page_load(move |webview, payload| {
+            if webview.label() != "main"
+                || payload.event() != PageLoadEvent::Finished
+                || payload.url().scheme() == "about"
+            {
+                return;
+            }
+
+            page_load_visibility
+                .page_loaded
+                .store(true, Ordering::Release);
+            resolve_startup_visibility(webview.window().app_handle(), &page_load_visibility);
         })
         .invoke_handler(tauri::generate_handler![
             get_app_bootstrap,
