@@ -260,6 +260,15 @@ function formatTimestamp(timestampMs: number): string {
   }).format(timestampMs);
 }
 
+function fileNameFromPath(path: string | null): string {
+  if (!path) {
+    return "";
+  }
+
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
 function normalizeSelection(
   selection: string | string[] | null,
 ): string | null {
@@ -834,7 +843,7 @@ function App() {
     }
   }
 
-  function renderDownloadBlock(kind: "runtime" | "model", label: string) {
+  function renderDownloadBlock(kind: "runtime" | "model") {
     if (bootstrap.modelDownload.kind !== kind) {
       return null;
     }
@@ -870,7 +879,9 @@ function App() {
             : ""}
         </p>
         {bootstrap.modelDownload.targetPath ? (
-          <p className="path-copy">{bootstrap.modelDownload.targetPath}</p>
+          <p className="path-copy" title={bootstrap.modelDownload.targetPath}>
+            {fileNameFromPath(bootstrap.modelDownload.targetPath)}
+          </p>
         ) : null}
         {downloadIsActive ? (
           <div className="action-row compact-actions">
@@ -896,9 +907,7 @@ function App() {
               Cancel Download
             </button>
           </div>
-        ) : (
-          <p className="download-caption">{label} download status is shown here.</p>
-        )}
+        ) : null}
       </div>
     );
   }
@@ -924,13 +933,7 @@ function App() {
   return (
     <main className="app-shell">
       <section className="hero">
-        <div>
-          <p className="eyebrow">Local audio workspace</p>
-          <h1>Wonder of U Desktop</h1>
-          <p className="lede">
-            Capture system audio and transcribe it locally with Whisper.
-          </p>
-        </div>
+        <h1>Wonder of U</h1>
 
         <div
           className={`state-chip ${phaseTone}`}
@@ -939,7 +942,7 @@ function App() {
           <span className="state-chip-label">Recorder</span>
           <strong>{bootstrap.shell.phase}</strong>
           <span className="state-chip-meta">
-            {bootstrap.shell.currentRecordingName || "Ready for the next capture"}
+            {bootstrap.shell.currentRecordingName || "Ready"}
           </span>
         </div>
       </section>
@@ -993,8 +996,8 @@ function App() {
             <kbd>Alt+3</kbd>
           </button>
 
-          <div className="sidebar-note">
-            <span className="hint-label">Auto Save</span>
+          <div className="sidebar-note" title={autosaveMessage}>
+            <span className="hint-label">Save</span>
             <strong
               className={
                 autosaveState === "error"
@@ -1007,10 +1010,9 @@ function App() {
               {autosaveState === "saving"
                 ? "Saving..."
                 : autosaveState === "error"
-                  ? "Needs attention"
-                  : "On"}
+                  ? "Error"
+                  : "Saved"}
             </strong>
-            <p className="microcopy">{autosaveMessage}</p>
           </div>
         </aside>
 
@@ -1021,17 +1023,13 @@ function App() {
                 <header className="panel-header">
                   <div>
                     <p className="panel-kicker">Recorder</p>
-                    <h2>System Audio Capture</h2>
+                    <h2>System Audio</h2>
                   </div>
                   <div className="panel-actions">
                     <TooltipBadge
                       label="Shortcuts"
                       description={hotkeyTooltip}
                     />
-                    <div className="metric">
-                      <span>Transitions</span>
-                      <strong>{bootstrap.shell.transitionCount}</strong>
-                    </div>
                   </div>
                 </header>
 
@@ -1040,17 +1038,21 @@ function App() {
                     <span className="hint-label">Elapsed</span>
                     <strong>{formatDuration(elapsedRecordingMs)}</strong>
                   </div>
-                  <div className="status-stack">
+                  <div className="status-stack" title={bootstrap.shell.statusText}>
                     <span className="hint-label">Status</span>
-                    <strong>{bootstrap.shell.statusText}</strong>
+                    <strong>
+                      {bootstrap.shell.phase === "idle"
+                        ? "Ready"
+                        : bootstrap.shell.phase === "recording"
+                          ? "Recording"
+                          : bootstrap.shell.phase === "saving"
+                            ? "Saving"
+                            : bootstrap.shell.phase === "transcribing"
+                              ? "Transcribing"
+                              : bootstrap.shell.statusText}
+                    </strong>
                   </div>
                 </div>
-
-                <p className="microcopy">
-                  Recordings always save to your chosen output folder first. If
-                  transcript-based naming is enabled, the file names are updated
-                  after Whisper finishes.
-                </p>
 
                 <div className="action-row">
                   <button
@@ -1078,27 +1080,6 @@ function App() {
                   </button>
                 </div>
 
-                <div className="hint-row">
-                  <div>
-                    <span className="hint-label">Last Shortcut</span>
-                    <strong>
-                      {bootstrap.shell.lastShortcut || "No hotkey has fired yet"}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="hint-label">Last Saved File</span>
-                    <strong>
-                      {bootstrap.shell.lastOutputPath || "No recordings saved yet"}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="hint-label">Last Transcript</span>
-                    <strong>
-                      {bootstrap.shell.lastTranscriptPath ||
-                        "No transcript saved yet"}
-                    </strong>
-                  </div>
-                </div>
               </article>
 
               <article className="panel">
@@ -1110,10 +1091,7 @@ function App() {
                 </header>
 
                 {bootstrap.recentRecordings.length === 0 ? (
-                  <p className="microcopy">
-                    Your saved recordings will appear here after the first
-                    successful system-audio capture.
-                  </p>
+                  <p className="empty-state">No recordings yet</p>
                 ) : (
                   <div className="recording-list">
                     {bootstrap.recentRecordings.map((recording) => (
@@ -1126,12 +1104,18 @@ function App() {
                           <span>{formatBytes(recording.bytesWritten)}</span>
                           <span>{formatTimestamp(recording.createdAtMs)}</span>
                         </div>
-                        <p className="path-copy">{recording.filePath}</p>
-                        {recording.transcriptPath ? (
-                          <p className="path-copy">
-                            Transcript: {recording.transcriptPath}
-                          </p>
-                        ) : null}
+                        <span
+                          className="recording-state"
+                          title={
+                            recording.transcriptPath
+                              ? `Audio: ${recording.filePath}\nTranscript: ${recording.transcriptPath}`
+                              : `Audio: ${recording.filePath}`
+                          }
+                        >
+                          {recording.transcriptPath
+                            ? "Audio + transcript"
+                            : "Audio only"}
+                        </span>
                       </article>
                     ))}
                   </div>
@@ -1147,10 +1131,6 @@ function App() {
                   <p className="panel-kicker">Settings</p>
                   <h2>App Preferences</h2>
                 </div>
-                <TooltipBadge
-                  label="Auto-saved"
-                  description="Every change is saved automatically after a short delay. Recording actions also commit your latest settings before they run."
-                />
               </header>
 
               <div className="settings-grid">
@@ -1168,10 +1148,6 @@ function App() {
                     <option value="light">Light</option>
                     <option value="dark">Dark</option>
                   </select>
-                  <small className="field-help">
-                    System follows your operating system. Light and dark choices
-                    override it on this device.
-                  </small>
                 </label>
 
                 <label className="field">
@@ -1266,17 +1242,6 @@ function App() {
 
                 </div>
 
-                <div className="pill-row">
-                  <span className="pill">
-                    Output: {settingsDraft.outputDirectory || "Not set yet"}
-                  </span>
-                  <span className="pill">
-                    Assets: {settingsDraft.assetDirectory || "Not set yet"}
-                  </span>
-                  <span className="pill">
-                    Log file: {bootstrap.logPath || "Will appear after startup"}
-                  </span>
-                </div>
               </div>
             </article>
           ) : null}
@@ -1287,7 +1252,7 @@ function App() {
                 <header className="panel-header">
                   <div>
                     <p className="panel-kicker">Whisper Setup</p>
-                    <h2>Offline Transcription</h2>
+                    <h2>Whisper</h2>
                   </div>
                   <TooltipBadge
                     label={whisperStatusLabel(bootstrap.whisperDetection.status)}
@@ -1297,32 +1262,29 @@ function App() {
 
                 <div className="meta-list compact-meta-list">
                   <div
-                    title={`CLI source: ${bootstrap.whisperDetection.source || "none"}`}
+                    title={bootstrap.whisperDetection.executablePath || "Not installed"}
                   >
-                    <span className="hint-label">Active whisper-cli</span>
+                    <span className="hint-label">Runtime</span>
                     <strong>
-                      {bootstrap.whisperDetection.executablePath ||
-                        "No active whisper-cli path yet"}
+                      {bootstrap.whisperDetection.cliReady ? "Ready" : "Missing"}
                     </strong>
                   </div>
                   <div
-                    title={`Model source: ${
-                      bootstrap.whisperDetection.modelSource || "none"
-                    }`}
+                    title={bootstrap.whisperDetection.modelPath || "Not installed"}
                   >
-                    <span className="hint-label">Active model</span>
+                    <span className="hint-label">Model</span>
                     <strong>
-                      {bootstrap.whisperDetection.modelPath ||
-                        "No active ggml model path yet"}
+                      {bootstrap.whisperDetection.modelReady ? "Ready" : "Missing"}
                     </strong>
                   </div>
-                  <div title={bootstrap.whisperDetection.message}>
-                    <span className="hint-label">Readiness</span>
-                    <strong>{bootstrap.whisperDetection.message}</strong>
+                  <div>
+                    <span className="hint-label">Language</span>
+                    <strong>{settingsDraft.whisper.language}</strong>
                   </div>
                 </div>
               </article>
 
+              <div className="whisper-config-grid">
               <article className="panel">
                 <header className="panel-header">
                   <div>
@@ -1330,14 +1292,15 @@ function App() {
                     <h2>Whisper CLI</h2>
                   </div>
                   <TooltipBadge
-                    label="Help"
+                    label="?"
                     description="Paste a path if whisper-cli is already installed somewhere else, or let the app download and manage the recommended Windows runtime."
                   />
                 </header>
 
-                <div className="settings-grid">
+                <details className="disclosure">
+                  <summary>Manual runtime override</summary>
                   <label className="field">
-                    <span>Manual whisper-cli path</span>
+                    <span>whisper-cli path</span>
                     <div className="input-with-action">
                       <input
                         type="text"
@@ -1349,7 +1312,7 @@ function App() {
                             },
                           })
                         }
-                        placeholder="Optional override if whisper-cli is already installed elsewhere"
+                        placeholder="whisper-cli path"
                       />
                       <button
                         type="button"
@@ -1361,17 +1324,12 @@ function App() {
                       </button>
                     </div>
                   </label>
-                </div>
+                </details>
 
                 <div className="download-section">
                   {runtimeInstalled ? (
-                    <div className="installed-card">
-                      <strong>Whisper CLI is already available.</strong>
-                      <p className="microcopy">
-                        {bootstrap.whisperDetection.cliManaged
-                          ? "The app-managed runtime is installed and ready."
-                          : "A manual whisper-cli path is active."}
-                      </p>
+                    <div className="installed-card installed-row">
+                      <strong>Runtime ready</strong>
                       {bootstrap.whisperDetection.cliManaged ? (
                         <div className="action-row inline-actions">
                           <button
@@ -1399,7 +1357,7 @@ function App() {
                       </button>
                     </div>
                   )}
-                  {renderDownloadBlock("runtime", "Runtime")}
+                  {renderDownloadBlock("runtime")}
                 </div>
               </article>
 
@@ -1410,7 +1368,7 @@ function App() {
                     <h2>Whisper Model</h2>
                   </div>
                   <TooltipBadge
-                    label="Help"
+                    label="?"
                     description="Choose a model file manually, or let the app download the recommended multilingual model into your selected asset folder."
                   />
                 </header>
@@ -1437,7 +1395,33 @@ function App() {
                   </label>
 
                   <label className="field">
-                    <span>Whisper model file</span>
+                    <span>Language</span>
+                    <input
+                      type="text"
+                      value={settingsDraft.whisper.language}
+                      onChange={(event) =>
+                        updateSettings({
+                          whisper: {
+                            language: event.currentTarget.value,
+                          },
+                        })
+                      }
+                      placeholder="auto or language code"
+                    />
+                  </label>
+                </div>
+
+                <div className="model-summary" title={selectedModel.description}>
+                  <strong>{selectedModel.label}</strong>
+                  <span>
+                    {selectedModel.diskSize} · {selectedModel.memoryUsage} RAM
+                  </span>
+                </div>
+
+                <details className="disclosure">
+                  <summary>Manual model override</summary>
+                  <label className="field">
+                    <span>GGML model path</span>
                     <div className="input-with-action">
                       <input
                         type="text"
@@ -1449,7 +1433,7 @@ function App() {
                             },
                           })
                         }
-                        placeholder="Optional override for a specific ggml model file"
+                        placeholder="GGML model path"
                       />
                       <button
                         type="button"
@@ -1461,41 +1445,12 @@ function App() {
                       </button>
                     </div>
                   </label>
-
-                  <label className="field">
-                    <span>Whisper language</span>
-                    <input
-                      type="text"
-                      value={settingsDraft.whisper.language}
-                      onChange={(event) =>
-                        updateSettings({
-                          whisper: {
-                            language: event.currentTarget.value,
-                          },
-                        })
-                      }
-                      placeholder="Use auto for auto-detect or enter a language code like ja"
-                    />
-                  </label>
-                </div>
-
-                <div className="installed-card">
-                  <strong>
-                    {selectedModel.label}: {selectedModel.diskSize} disk,{" "}
-                    {selectedModel.memoryUsage} RAM
-                  </strong>
-                  <p className="microcopy">{selectedModel.description}</p>
-                </div>
+                </details>
 
                 <div className="download-section">
                   {modelInstalled ? (
-                    <div className="installed-card">
-                      <strong>Selected Whisper model is already available.</strong>
-                      <p className="microcopy">
-                        {bootstrap.whisperDetection.modelManaged
-                          ? "The app-managed model for your current selection is installed."
-                          : "A manual Whisper model path is active."}
-                      </p>
+                    <div className="installed-card installed-row">
+                      <strong>Model ready</strong>
                       {bootstrap.whisperDetection.modelManaged ? (
                         <div className="action-row inline-actions">
                           <button
@@ -1522,9 +1477,10 @@ function App() {
                       </button>
                     </div>
                   )}
-                  {renderDownloadBlock("model", "Model")}
+                  {renderDownloadBlock("model")}
                 </div>
               </article>
+              </div>
             </>
           ) : null}
         </section>
