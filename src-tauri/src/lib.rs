@@ -10,7 +10,7 @@ use std::{
         Arc, Condvar, Mutex,
     },
     thread::JoinHandle,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use recording::{capture_system_audio_loopback, RecordingCaptureResult};
@@ -367,13 +367,23 @@ fn download_recommended_whisper_runtime(app: AppHandle) -> Result<AppBootstrap, 
 }
 
 #[tauri::command]
-fn check_whisper_runtime_update(app: AppHandle) -> Result<WhisperAssetUpdateResult, String> {
-    check_whisper_runtime_update_inner(&app)
+async fn check_whisper_runtime_update(app: AppHandle) -> Result<WhisperAssetUpdateResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        check_whisper_runtime_update_inner(&app_for_blocking)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn check_whisper_model_update(app: AppHandle) -> Result<WhisperAssetUpdateResult, String> {
-    check_whisper_model_update_inner(&app)
+async fn check_whisper_model_update(app: AppHandle) -> Result<WhisperAssetUpdateResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        check_whisper_model_update_inner(&app_for_blocking)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -687,6 +697,15 @@ fn show_native_notification<R: Runtime>(app: &AppHandle<R>, title: &str, body: &
 fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .user_agent("Wonder of U Desktop/0.1.0")
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn update_check_http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent("Wonder of U Desktop/0.1.0")
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(12))
         .build()
         .map_err(|error| error.to_string())
 }
@@ -1061,7 +1080,7 @@ fn check_whisper_runtime_update_inner<R: Runtime>(
         });
     }
 
-    let response = http_client()?
+    let response = update_check_http_client()?
         .get(WHISPER_RELEASES_API_URL)
         .send()
         .map_err(|error| error.to_string())?
@@ -1139,7 +1158,7 @@ fn check_whisper_model_update_inner<R: Runtime>(
         .map_err(|error| error.to_string())?
         .len();
 
-    let response = http_client()?
+    let response = update_check_http_client()?
         .head(model_spec.download_url)
         .send()
         .map_err(|error| error.to_string())?
