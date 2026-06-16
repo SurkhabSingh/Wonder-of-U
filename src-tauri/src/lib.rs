@@ -389,9 +389,14 @@ fn cancel_whisper_model_download(app: AppHandle) -> Result<AppBootstrap, String>
 }
 
 #[tauri::command]
-fn save_settings(app: AppHandle, settings: AppSettings) -> Result<AppBootstrap, String> {
-    save_settings_inner(&app, settings)?;
-    build_app_bootstrap(&app)
+async fn save_settings(app: AppHandle, settings: AppSettings) -> Result<AppBootstrap, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        save_settings_inner(&app_for_blocking, settings)?;
+        build_app_bootstrap(&app_for_blocking)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1184,21 +1189,44 @@ fn apply_launch_at_login_setting<R: Runtime>(
             autostart_manager
                 .enable()
                 .map_err(|error| error.to_string())?;
-        } else {
-            autostart_manager
-                .disable()
-                .map_err(|error| error.to_string())?;
+        } else if let Err(error) = autostart_manager.disable() {
+            let message = error.to_string();
+            if !is_autostart_not_found_error(&message) {
+                return Err(message);
+            }
         }
 
-        return autostart_manager
-            .is_enabled()
-            .map_err(|error| error.to_string());
+        return match autostart_manager.is_enabled() {
+            Ok(actual_state) => Ok(actual_state),
+            Err(error) => {
+                let message = error.to_string();
+                if !enabled && is_autostart_not_found_error(&message) {
+                    Ok(false)
+                } else {
+                    Err(message)
+                }
+            }
+        };
     }
 
     #[cfg(not(desktop))]
     {
         Ok(enabled)
     }
+}
+
+fn is_autostart_not_found_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("os error 2")
+        || normalized.contains("the system cannot find the file")
+        || normalized.contains("cannot find the file specified")
+}
+
+fn whisper_detection_inputs_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    previous.asset_directory != next.asset_directory
+        || previous.whisper.cli_path != next.whisper.cli_path
+        || previous.whisper.model_path != next.whisper.model_path
+        || previous.whisper.model_choice != next.whisper.model_choice
 }
 
 fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppBootstrap, String> {
@@ -1269,11 +1297,28 @@ fn save_settings_inner<R: Runtime>(
     settings: AppSettings,
 ) -> Result<(), String> {
     let paths = app.state::<AppPathsState>().inner().clone();
+    let previous_settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not read current app settings.".to_string())?;
+        persisted.settings.clone()
+    };
     let mut normalized =
         normalize_settings(app, &paths, settings).map_err(|error| error.to_string())?;
     ensure_directory_exists(Path::new(&normalized.output_directory))?;
     ensure_directory_exists(Path::new(&normalized.asset_directory))?;
-    normalized.launch_at_login = apply_launch_at_login_setting(app, normalized.launch_at_login)?;
+
+    let launch_at_login_changed = normalized.launch_at_login != previous_settings.launch_at_login;
+    let refresh_whisper_detection =
+        whisper_detection_inputs_changed(&previous_settings, &normalized);
+
+    normalized.launch_at_login = if launch_at_login_changed {
+        apply_launch_at_login_setting(app, normalized.launch_at_login)?
+    } else {
+        previous_settings.launch_at_login
+    };
 
     let snapshot = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -1286,7 +1331,6 @@ fn save_settings_inner<R: Runtime>(
     };
 
     write_persisted_data(app, &snapshot)?;
-    let _ = refresh_whisper_detection_state(app)?;
     log_event(
         app,
         "INFO",
@@ -1300,6 +1344,13 @@ fn save_settings_inner<R: Runtime>(
             "whisperLanguage": normalized.whisper.language
         }),
     );
+
+    if refresh_whisper_detection {
+        let _ = refresh_whisper_detection_state(app)?;
+    } else {
+        emit_app_snapshot(app);
+    }
+
     Ok(())
 }
 

@@ -113,7 +113,7 @@ type BusyAction =
   | null;
 
 type AutosaveState = "idle" | "saving" | "error";
-type AppTab = "recorder" | "settings" | "whisper";
+type AppTab = "recorder" | "settings";
 
 const MODEL_OPTIONS = [
   {
@@ -367,32 +367,6 @@ function App() {
     document.documentElement.style.colorScheme = resolvedTheme;
   }, [resolvedTheme]);
 
-  useEffect(() => {
-    function handleTabShortcut(event: KeyboardEvent) {
-      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
-        return;
-      }
-
-      const tabByKey: Partial<Record<string, AppTab>> = {
-        "1": "recorder",
-        "2": "settings",
-        "3": "whisper",
-      };
-      const nextTab = tabByKey[event.key];
-      if (!nextTab) {
-        return;
-      }
-
-      event.preventDefault();
-      setActiveTab(nextTab);
-    }
-
-    window.addEventListener("keydown", handleTabShortcut);
-    return () => {
-      window.removeEventListener("keydown", handleTabShortcut);
-    };
-  }, []);
-
   function applyBootstrap(
     nextBootstrap: AppBootstrap,
     options?: { preserveDraft?: boolean },
@@ -520,21 +494,6 @@ function App() {
     (bootstrap.shell.phase === "recording" || bootstrap.shell.phase === "saving")
       ? Math.max(0, clockMs - bootstrap.shell.startedAtMs)
       : 0;
-
-  const phaseTone = useMemo(() => {
-    switch (bootstrap.shell.phase) {
-      case "recording":
-        return "recording";
-      case "saving":
-      case "transcribing":
-      case "downloading-model":
-        return "saving";
-      case "error":
-        return "error";
-      default:
-        return "idle";
-    }
-  }, [bootstrap.shell.phase]);
 
   const isRecording = bootstrap.shell.phase === "recording";
   const isSaving = bootstrap.shell.phase === "saving";
@@ -686,7 +645,7 @@ function App() {
         "download_recommended_whisper_runtime",
       );
       applyBootstrap(nextBootstrap);
-      setActiveTab("whisper");
+      setActiveTab("settings");
     } catch (error) {
       setLoadError(
         error instanceof Error
@@ -707,7 +666,7 @@ function App() {
         "download_recommended_whisper_model",
       );
       applyBootstrap(nextBootstrap);
-      setActiveTab("whisper");
+      setActiveTab("settings");
     } catch (error) {
       setLoadError(
         error instanceof Error
@@ -932,20 +891,24 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="hero">
-        <h1>Wonder of U</h1>
-
-        <div
-          className={`state-chip ${phaseTone}`}
-          title={bootstrap.shell.statusText}
+      <nav className="tab-strip" aria-label="Sections">
+        <button
+          type="button"
+          className={`tab-button ${activeTab === "recorder" ? "active" : ""}`}
+          onClick={() => setActiveTab("recorder")}
+          aria-pressed={activeTab === "recorder"}
         >
-          <span className="state-chip-label">Recorder</span>
-          <strong>{bootstrap.shell.phase}</strong>
-          <span className="state-chip-meta">
-            {bootstrap.shell.currentRecordingName || "Ready"}
-          </span>
-        </div>
-      </section>
+          Recorder
+        </button>
+        <button
+          type="button"
+          className={`tab-button ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => setActiveTab("settings")}
+          aria-pressed={activeTab === "settings"}
+        >
+          Settings
+        </button>
+      </nav>
 
       {loadError ? (
         <section className="banner banner-error">{loadError}</section>
@@ -963,62 +926,9 @@ function App() {
       ) : null}
 
       <section className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar-heading">
-            <span>Workspace</span>
-            <kbd>Alt+1-3</kbd>
-          </div>
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "recorder" ? "active" : ""}`}
-            onClick={() => setActiveTab("recorder")}
-            aria-pressed={activeTab === "recorder"}
-          >
-            <span>Recorder</span>
-            <kbd>Alt+1</kbd>
-          </button>
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "settings" ? "active" : ""}`}
-            onClick={() => setActiveTab("settings")}
-            aria-pressed={activeTab === "settings"}
-          >
-            <span>Settings</span>
-            <kbd>Alt+2</kbd>
-          </button>
-          <button
-            type="button"
-            className={`tab-button ${activeTab === "whisper" ? "active" : ""}`}
-            onClick={() => setActiveTab("whisper")}
-            aria-pressed={activeTab === "whisper"}
-          >
-            <span>Whisper Setup</span>
-            <kbd>Alt+3</kbd>
-          </button>
-
-          <div className="sidebar-note" title={autosaveMessage}>
-            <span className="hint-label">Save</span>
-            <strong
-              className={
-                autosaveState === "error"
-                  ? "status-error"
-                  : autosaveState === "saving"
-                    ? "status-pending"
-                    : "status-ok"
-              }
-            >
-              {autosaveState === "saving"
-                ? "Saving..."
-                : autosaveState === "error"
-                  ? "Error"
-                  : "Saved"}
-            </strong>
-          </div>
-        </aside>
-
         <section className="content-column">
           {activeTab === "recorder" ? (
-            <>
+            <div className="recorder-view">
               <article className="panel panel-primary">
                 <header className="panel-header">
                   <div>
@@ -1079,10 +989,9 @@ function App() {
                     Hide To Tray
                   </button>
                 </div>
-
               </article>
 
-              <article className="panel">
+              <article className="panel recent-panel">
                 <header className="panel-header">
                   <div>
                     <p className="panel-kicker">Recent Output</p>
@@ -1121,133 +1030,135 @@ function App() {
                   </div>
                 )}
               </article>
-            </>
+            </div>
           ) : null}
 
           {activeTab === "settings" ? (
-            <article className="panel">
-              <header className="panel-header">
-                <div>
-                  <p className="panel-kicker">Settings</p>
-                  <h2>App Preferences</h2>
-                </div>
-              </header>
-
-              <div className="settings-grid">
-                <label className="field">
-                  <span>Appearance</span>
-                  <select
-                    value={settingsDraft.theme}
-                    onChange={(event) =>
-                      updateSettings({
-                        theme: event.currentTarget.value as ThemePreference,
-                      })
-                    }
-                  >
-                    <option value="system">Use system setting</option>
-                    <option value="light">Light</option>
-                    <option value="dark">Dark</option>
-                  </select>
-                </label>
-
-                <label className="field">
-                  <span>Recording output folder</span>
-                  <div className="input-with-action">
-                    <input
-                      type="text"
-                      value={settingsDraft.outputDirectory}
-                      onChange={(event) =>
-                        updateSettings({
-                          outputDirectory: event.currentTarget.value,
-                        })
-                      }
-                      placeholder="Choose where WAV files are stored"
-                    />
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => void browseForDirectory("outputDirectory")}
-                      disabled={busyAction === "browse"}
-                    >
-                      Browse
-                    </button>
+            <div className="settings-scroll">
+              <article className="panel">
+                <header className="panel-header">
+                  <div>
+                    <p className="panel-kicker">Settings</p>
+                    <h2>App Preferences</h2>
                   </div>
-                </label>
+                </header>
 
-                <label className="field">
-                  <span>Model and asset folder</span>
-                  <div className="input-with-action">
-                    <input
-                      type="text"
-                      value={settingsDraft.assetDirectory}
+                {autosaveState === "error" ? (
+                  <p className="autosave-error" role="alert">
+                    {autosaveMessage}
+                  </p>
+                ) : null}
+
+                <div className="settings-grid">
+                  <label className="field">
+                    <span>Appearance</span>
+                    <select
+                      value={settingsDraft.theme}
                       onChange={(event) =>
                         updateSettings({
-                          assetDirectory: event.currentTarget.value,
+                          theme: event.currentTarget.value as ThemePreference,
                         })
                       }
-                      placeholder="Choose where Whisper runtime and model assets live"
-                    />
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => void browseForDirectory("assetDirectory")}
-                      disabled={busyAction === "browse"}
                     >
-                      Browse
-                    </button>
+                      <option value="system">Use system setting</option>
+                      <option value="light">Light</option>
+                      <option value="dark">Dark</option>
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Recording output folder</span>
+                    <div className="input-with-action">
+                      <input
+                        type="text"
+                        value={settingsDraft.outputDirectory}
+                        onChange={(event) =>
+                          updateSettings({
+                            outputDirectory: event.currentTarget.value,
+                          })
+                        }
+                        placeholder="Choose where WAV files are stored"
+                      />
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void browseForDirectory("outputDirectory")}
+                        disabled={busyAction === "browse"}
+                      >
+                        Browse
+                      </button>
+                    </div>
+                  </label>
+
+                  <label className="field">
+                    <span>Model and asset folder</span>
+                    <div className="input-with-action">
+                      <input
+                        type="text"
+                        value={settingsDraft.assetDirectory}
+                        onChange={(event) =>
+                          updateSettings({
+                            assetDirectory: event.currentTarget.value,
+                          })
+                        }
+                        placeholder="Choose where Whisper runtime and model assets live"
+                      />
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void browseForDirectory("assetDirectory")}
+                        disabled={busyAction === "browse"}
+                      >
+                        Browse
+                      </button>
+                    </div>
+                  </label>
+
+                  <div className="toggle-grid">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={settingsDraft.features.transcription}
+                        onChange={(event) =>
+                          updateSettings({
+                            features: {
+                              transcription: event.currentTarget.checked,
+                            },
+                          })
+                        }
+                      />
+                      <span>Enable transcription</span>
+                    </label>
+
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={settingsDraft.launchAtLogin}
+                        onChange={(event) =>
+                          updateSettings({
+                            launchAtLogin: event.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <span>Launch with Windows</span>
+                    </label>
+
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={settingsDraft.startMinimized}
+                        onChange={(event) =>
+                          updateSettings({
+                            startMinimized: event.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <span>Start minimized to tray</span>
+                    </label>
                   </div>
-                </label>
-
-                <div className="toggle-grid">
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.features.transcription}
-                      onChange={(event) =>
-                        updateSettings({
-                          features: {
-                            transcription: event.currentTarget.checked,
-                          },
-                        })
-                      }
-                    />
-                    <span>Enable transcription</span>
-                  </label>
-
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.launchAtLogin}
-                      onChange={(event) =>
-                        updateSettings({
-                          launchAtLogin: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <span>Launch with Windows</span>
-                  </label>
-
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.startMinimized}
-                      onChange={(event) =>
-                        updateSettings({
-                          startMinimized: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <span>Start minimized to tray</span>
-                  </label>
-
                 </div>
+              </article>
 
-              </div>
-            </article>
-          ) : null}
-
-          {activeTab === "whisper" ? (
-            <>
               <article className="panel">
                 <header className="panel-header">
                   <div>
@@ -1285,93 +1196,93 @@ function App() {
               </article>
 
               <div className="whisper-config-grid">
-              <article className="panel">
-                <header className="panel-header">
-                  <div>
-                    <p className="panel-kicker">Runtime</p>
-                    <h2>Whisper CLI</h2>
+                <article className="panel">
+                  <header className="panel-header">
+                    <div>
+                      <p className="panel-kicker">Runtime</p>
+                      <h2>Whisper CLI</h2>
+                    </div>
+                    <TooltipBadge
+                      label="?"
+                      description="Paste a path if whisper-cli is already installed somewhere else, or let the app download and manage the recommended Windows runtime."
+                    />
+                  </header>
+
+                  <details className="disclosure">
+                    <summary>Manual runtime override</summary>
+                    <label className="field">
+                      <span>whisper-cli path</span>
+                      <div className="input-with-action">
+                        <input
+                          type="text"
+                          value={resolvedCliPath}
+                          onChange={(event) =>
+                            updateSettings({
+                              whisper: {
+                                cliPath: event.currentTarget.value,
+                              },
+                            })
+                          }
+                          placeholder="whisper-cli path"
+                        />
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void browseForFile("cliPath")}
+                          disabled={busyAction === "browse"}
+                        >
+                          Browse
+                        </button>
+                      </div>
+                    </label>
+                  </details>
+
+                  <div className="download-section">
+                    {runtimeInstalled ? (
+                      <div className="installed-card installed-row">
+                        <strong>Runtime ready</strong>
+                        {bootstrap.whisperDetection.cliManaged ? (
+                          <div className="action-row inline-actions">
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => void checkRuntimeUpdate()}
+                              disabled={busyAction === "checkRuntimeUpdate"}
+                            >
+                              Check for Updates
+                            </button>
+                          </div>
+                        ) : null}
+                        {renderUpdateResult(runtimeUpdateResult)}
+                      </div>
+                    ) : (
+                      <div className="action-row inline-actions">
+                        <button
+                          type="button"
+                          onClick={() => void downloadRecommendedRuntime()}
+                          disabled={
+                            downloadIsActive || busyAction === "downloadRuntime"
+                          }
+                        >
+                          Download Recommended Runtime
+                        </button>
+                      </div>
+                    )}
+                    {renderDownloadBlock("runtime")}
                   </div>
-                  <TooltipBadge
-                    label="?"
-                    description="Paste a path if whisper-cli is already installed somewhere else, or let the app download and manage the recommended Windows runtime."
-                  />
-                </header>
+                </article>
 
-                <details className="disclosure">
-                  <summary>Manual runtime override</summary>
-                  <label className="field">
-                    <span>whisper-cli path</span>
-                    <div className="input-with-action">
-                      <input
-                        type="text"
-                        value={resolvedCliPath}
-                        onChange={(event) =>
-                          updateSettings({
-                            whisper: {
-                              cliPath: event.currentTarget.value,
-                            },
-                          })
-                        }
-                        placeholder="whisper-cli path"
-                      />
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void browseForFile("cliPath")}
-                        disabled={busyAction === "browse"}
-                      >
-                        Browse
-                      </button>
+                <article className="panel">
+                  <header className="panel-header">
+                    <div>
+                      <p className="panel-kicker">Model</p>
+                      <h2>Whisper Model</h2>
                     </div>
-                  </label>
-                </details>
-
-                <div className="download-section">
-                  {runtimeInstalled ? (
-                    <div className="installed-card installed-row">
-                      <strong>Runtime ready</strong>
-                      {bootstrap.whisperDetection.cliManaged ? (
-                        <div className="action-row inline-actions">
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => void checkRuntimeUpdate()}
-                            disabled={busyAction === "checkRuntimeUpdate"}
-                          >
-                            Check for Updates
-                          </button>
-                        </div>
-                      ) : null}
-                      {renderUpdateResult(runtimeUpdateResult)}
-                    </div>
-                  ) : (
-                    <div className="action-row inline-actions">
-                      <button
-                        type="button"
-                        onClick={() => void downloadRecommendedRuntime()}
-                        disabled={
-                          downloadIsActive || busyAction === "downloadRuntime"
-                        }
-                      >
-                        Download Recommended Runtime
-                      </button>
-                    </div>
-                  )}
-                  {renderDownloadBlock("runtime")}
-                </div>
-              </article>
-
-              <article className="panel">
-                <header className="panel-header">
-                  <div>
-                    <p className="panel-kicker">Model</p>
-                    <h2>Whisper Model</h2>
-                  </div>
-                  <TooltipBadge
-                    label="?"
-                    description="Choose a model file manually, or let the app download the recommended multilingual model into your selected asset folder."
-                  />
-                </header>
+                    <TooltipBadge
+                      label="?"
+                      description="Choose a model file manually, or let the app download the recommended multilingual model into your selected asset folder."
+                    />
+                  </header>
 
                 <div className="settings-grid">
                   <label className="field">
@@ -1479,9 +1390,9 @@ function App() {
                   )}
                   {renderDownloadBlock("model")}
                 </div>
-              </article>
+                </article>
               </div>
-            </>
+            </div>
           ) : null}
         </section>
       </section>
