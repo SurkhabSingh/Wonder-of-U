@@ -5,6 +5,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Condvar, Mutex,
@@ -15,6 +16,8 @@ use std::{
 
 use recording::{capture_system_audio_loopback, RecordingCaptureResult};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -29,11 +32,20 @@ use transcription::{
     run_whisper_transcription, verify_whisper_cli, verify_whisper_model,
     WhisperTranscriptionRequest,
 };
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE},
+    System::Threading::CreateMutexW,
+    UI::WindowsAndMessaging::{
+        FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+    },
+};
 use zip::ZipArchive;
 
 const START_SHORTCUT: &str = "Ctrl+Alt+R";
 const STOP_SHORTCUT: &str = "Ctrl+Alt+S";
 const SHOW_SHORTCUT: &str = "Ctrl+Alt+W";
+const APP_TITLE: &str = "Wonder of U";
 const APP_SNAPSHOT_EVENT: &str = "app://snapshot-changed";
 const START_SHORTCUT_CANDIDATES: [&str; 3] = [START_SHORTCUT, "Ctrl+Alt+Shift+R", "Ctrl+Alt+F8"];
 const STOP_SHORTCUT_CANDIDATES: [&str; 3] = [STOP_SHORTCUT, "Ctrl+Alt+Shift+S", "Ctrl+Alt+F9"];
@@ -43,8 +55,11 @@ const WHISPER_RELEASES_API_URL: &str =
     "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
 const RECOMMENDED_WHISPER_RUNTIME_VERSION: &str = "v1.8.4";
 const RECOMMENDED_WHISPER_RUNTIME_FILE: &str = "whisper-bin-x64.zip";
-const RECOMMENDED_WHISPER_RUNTIME_URL: &str =
-    "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-bin-x64.zip";
+const RECOMMENDED_FFMPEG_RUNTIME_FILE: &str = "ffmpeg-master-latest-win64-gpl-shared.zip";
+const RECOMMENDED_FFMPEG_RUNTIME_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip";
+const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Copy, Clone)]
 struct WhisperModelSpec {
@@ -103,6 +118,10 @@ fn default_whisper_model_choice() -> String {
     default_whisper_model_id().to_string()
 }
 
+fn default_whisper_runtime_version() -> String {
+    RECOMMENDED_WHISPER_RUNTIME_VERSION.to_string()
+}
+
 fn whisper_model_spec(model_id: &str) -> &'static WhisperModelSpec {
     WHISPER_MODEL_SPECS
         .iter()
@@ -131,11 +150,32 @@ impl Default for FeatureSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AnkiFieldMapping {
+    transcription: String,
+    audio: String,
+    translation: String,
+    source_path: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AnkiSettings {
+    deck_name: String,
+    note_type: String,
+    #[serde(default)]
+    fields: AnkiFieldMapping,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WhisperSettings {
     cli_path: String,
     model_path: String,
+    #[serde(default = "default_whisper_runtime_version")]
+    runtime_version: String,
     #[serde(default = "default_whisper_model_choice")]
     model_choice: String,
     language: String,
@@ -146,6 +186,7 @@ impl Default for WhisperSettings {
         Self {
             cli_path: String::new(),
             model_path: String::new(),
+            runtime_version: default_whisper_runtime_version(),
             model_choice: default_whisper_model_id().into(),
             language: "auto".into(),
         }
@@ -159,6 +200,8 @@ struct AppSettings {
     asset_directory: String,
     #[serde(default)]
     whisper: WhisperSettings,
+    #[serde(default)]
+    anki: AnkiSettings,
     #[serde(default)]
     features: FeatureSettings,
     #[serde(default = "default_theme_preference")]
@@ -176,6 +219,14 @@ struct RecentRecording {
     file_path: String,
     #[serde(default)]
     transcript_path: Option<String>,
+    #[serde(default)]
+    translation_path: Option<String>,
+    #[serde(default)]
+    anki_note_id: Option<i64>,
+    #[serde(default)]
+    anki_deck_name: Option<String>,
+    #[serde(default)]
+    anki_note_type: Option<String>,
     duration_ms: u64,
     bytes_written: u64,
     created_at_ms: u64,
@@ -245,6 +296,7 @@ struct AppBootstrap {
     settings: AppSettings,
     recent_recordings: Vec<RecentRecording>,
     whisper_detection: WhisperDetection,
+    ffmpeg_detection: FfmpegDetection,
     model_download: ModelDownloadSnapshot,
     log_path: String,
 }
@@ -257,6 +309,8 @@ struct WhisperDetection {
     model_path: Option<String>,
     source: Option<String>,
     model_source: Option<String>,
+    runtime_version: String,
+    available_runtime_versions: Vec<String>,
     cli_ready: bool,
     model_ready: bool,
     cli_managed: bool,
@@ -272,6 +326,8 @@ impl Default for WhisperDetection {
             model_path: None,
             source: None,
             model_source: None,
+            runtime_version: default_whisper_runtime_version(),
+            available_runtime_versions: Vec::new(),
             cli_ready: false,
             model_ready: false,
             cli_managed: false,
@@ -279,6 +335,27 @@ impl Default for WhisperDetection {
             message:
                 "Add or download whisper-cli and a Whisper model to enable offline transcription."
                     .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FfmpegDetection {
+    status: String,
+    executable_path: Option<String>,
+    managed: bool,
+    message: String,
+}
+
+impl Default for FfmpegDetection {
+    fn default() -> Self {
+        Self {
+            status: "notFound".into(),
+            executable_path: None,
+            managed: false,
+            message: "Install app-managed FFmpeg to compress transcribed WAV recordings into MP3."
+                .into(),
         }
     }
 }
@@ -317,6 +394,35 @@ impl Default for ModelDownloadSnapshot {
             target_path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnkiCatalog {
+    status: String,
+    message: String,
+    version: Option<i64>,
+    decks: Vec<String>,
+    note_types: Vec<String>,
+    fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingActionItem {
+    file_path: String,
+    status: String,
+    message: String,
+    note_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingBatchResult {
+    status: String,
+    message: String,
+    items: Vec<RecordingActionItem>,
+    bootstrap: AppBootstrap,
 }
 
 #[derive(Clone)]
@@ -363,6 +469,21 @@ fn download_recommended_whisper_model(app: AppHandle) -> Result<AppBootstrap, St
 #[tauri::command]
 fn download_recommended_whisper_runtime(app: AppHandle) -> Result<AppBootstrap, String> {
     download_recommended_whisper_runtime_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+#[tauri::command]
+fn download_whisper_runtime_version(
+    app: AppHandle,
+    runtime_version: String,
+) -> Result<AppBootstrap, String> {
+    download_whisper_runtime_version_inner(&app, &runtime_version)?;
+    build_app_bootstrap(&app)
+}
+
+#[tauri::command]
+fn download_recommended_ffmpeg(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_ffmpeg_inner(&app)?;
     build_app_bootstrap(&app)
 }
 
@@ -431,6 +552,77 @@ fn hide_main_window(app: AppHandle) -> Result<(), String> {
     hide_main_window_inner(&app).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn load_anki_catalog(
+    app: AppHandle,
+    note_type: Option<String>,
+) -> Result<AnkiCatalog, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        load_anki_catalog_inner(&app_for_blocking, note_type)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn play_recording(app: AppHandle, file_path: String) -> Result<(), String> {
+    play_recording_inner(&app, &file_path)
+}
+
+#[tauri::command]
+fn delete_recording(app: AppHandle, file_path: String) -> Result<AppBootstrap, String> {
+    delete_recording_inner(&app, &file_path)?;
+    build_app_bootstrap(&app)
+}
+
+#[tauri::command]
+fn delete_recordings(
+    app: AppHandle,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    delete_recordings_inner(&app, file_paths)
+}
+
+#[tauri::command]
+async fn push_recordings_to_anki(
+    app: AppHandle,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        push_recordings_to_anki_inner(&app_for_blocking, file_paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn translate_recordings(
+    app: AppHandle,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        translate_recordings_inner(&app_for_blocking, file_paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn transcribe_recordings(
+    app: AppHandle,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        transcribe_recordings_inner(&app_for_blocking, file_paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -489,6 +681,7 @@ fn default_settings<R: Runtime>(
         output_directory: default_output_directory(app)?.display().to_string(),
         asset_directory: default_asset_directory(paths).display().to_string(),
         whisper: WhisperSettings::default(),
+        anki: AnkiSettings::default(),
         features: FeatureSettings::default(),
         theme: default_theme_preference(),
         launch_at_login: false,
@@ -534,8 +727,10 @@ fn normalize_settings<R: Runtime>(
     let asset_directory =
         normalize_directory_input(&settings.asset_directory, &default_asset_directory(paths));
     let language = settings.whisper.language.trim();
+    let runtime_version = sanitize_runtime_version(&settings.whisper.runtime_version);
     let model_choice = whisper_model_spec(settings.whisper.model_choice.trim()).id;
-    let managed_cli_candidates = collect_managed_whisper_cli_candidates(&asset_directory);
+    let managed_cli_candidates =
+        collect_managed_whisper_cli_candidates(&asset_directory, &runtime_version);
     let managed_model_candidates = all_managed_model_paths(&asset_directory);
     let cli_path = settings.whisper.cli_path.trim();
     let model_path = settings.whisper.model_path.trim();
@@ -574,11 +769,23 @@ fn normalize_settings<R: Runtime>(
         whisper: WhisperSettings {
             cli_path: normalized_cli_path,
             model_path: normalized_model_path,
+            runtime_version,
             model_choice: model_choice.to_string(),
             language: if language.is_empty() {
                 "auto".into()
             } else {
                 language.to_string()
+            },
+        },
+        anki: AnkiSettings {
+            deck_name: settings.anki.deck_name.trim().to_string(),
+            note_type: settings.anki.note_type.trim().to_string(),
+            fields: AnkiFieldMapping {
+                transcription: settings.anki.fields.transcription.trim().to_string(),
+                audio: settings.anki.fields.audio.trim().to_string(),
+                translation: settings.anki.fields.translation.trim().to_string(),
+                source_path: settings.anki.fields.source_path.trim().to_string(),
+                created_at: settings.anki.fields.created_at.trim().to_string(),
             },
         },
         features: FeatureSettings {
@@ -624,6 +831,19 @@ fn sanitize_recording_name(name: &str) -> String {
         .trim_end_matches('.')
         .trim()
         .to_string()
+}
+
+fn sanitize_runtime_version(version: &str) -> String {
+    let trimmed = version.trim();
+    if trimmed.is_empty()
+        || !trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return default_whisper_runtime_version();
+    }
+
+    trimmed.to_string()
 }
 
 fn next_recording_stem(state: &mut PersistedData, requested_name: Option<&str>) -> String {
@@ -811,16 +1031,21 @@ fn push_whisper_model_directory(candidates: &mut Vec<PathBuf>, directory: PathBu
     add_model_candidates_from_directory(candidates, &directory);
 }
 
-fn app_managed_runtime_directory(asset_directory: &Path) -> PathBuf {
-    asset_directory
-        .join("whisper-runtime")
-        .join(RECOMMENDED_WHISPER_RUNTIME_VERSION)
+fn managed_runtime_root(asset_directory: &Path) -> PathBuf {
+    asset_directory.join("whisper-runtime")
 }
 
-fn collect_managed_whisper_cli_candidates(asset_directory: &Path) -> Vec<PathBuf> {
+fn app_managed_runtime_directory(asset_directory: &Path, runtime_version: &str) -> PathBuf {
+    managed_runtime_root(asset_directory).join(sanitize_runtime_version(runtime_version))
+}
+
+fn collect_managed_whisper_cli_candidates(
+    asset_directory: &Path,
+    runtime_version: &str,
+) -> Vec<PathBuf> {
     let executable_names = ["whisper-cli.exe", "whisper-cli"];
     let mut candidates = Vec::new();
-    let runtime_directory = app_managed_runtime_directory(asset_directory);
+    let runtime_directory = app_managed_runtime_directory(asset_directory, runtime_version);
 
     for executable_name in executable_names {
         push_whisper_candidate(&mut candidates, runtime_directory.join(executable_name));
@@ -847,6 +1072,132 @@ fn collect_managed_whisper_cli_candidates(asset_directory: &Path) -> Vec<PathBuf
     candidates
 }
 
+fn collect_installed_runtime_versions(asset_directory: &Path) -> Vec<String> {
+    let runtime_root = managed_runtime_root(asset_directory);
+    let Ok(entries) = fs::read_dir(runtime_root) else {
+        return Vec::new();
+    };
+
+    let mut versions = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+
+            let version = entry.file_name().to_string_lossy().to_string();
+            collect_managed_whisper_cli_candidates(asset_directory, &version)
+                .into_iter()
+                .any(|candidate| candidate.exists())
+                .then_some(version)
+        })
+        .collect::<Vec<_>>();
+
+    versions.sort();
+    versions.dedup();
+    versions
+}
+
+fn managed_ffmpeg_root(asset_directory: &Path) -> PathBuf {
+    asset_directory.join("ffmpeg-runtime")
+}
+
+fn managed_ffmpeg_install_directory(asset_directory: &Path) -> PathBuf {
+    managed_ffmpeg_root(asset_directory).join("latest")
+}
+
+fn push_ffmpeg_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
+    }
+}
+
+fn push_ffmpeg_candidates_from_directory(candidates: &mut Vec<PathBuf>, directory: &Path) {
+    if !directory.exists() {
+        return;
+    }
+
+    push_ffmpeg_candidate(candidates, directory.join("ffmpeg.exe"));
+    push_ffmpeg_candidate(candidates, directory.join("ffmpeg"));
+    push_ffmpeg_candidate(candidates, directory.join("bin").join("ffmpeg.exe"));
+    push_ffmpeg_candidate(candidates, directory.join("bin").join("ffmpeg"));
+
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            push_ffmpeg_candidates_from_directory(candidates, &path);
+        } else if path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("ffmpeg.exe") || value == "ffmpeg")
+            .unwrap_or(false)
+        {
+            push_ffmpeg_candidate(candidates, path);
+        }
+    }
+}
+
+fn collect_managed_ffmpeg_candidates(asset_directory: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    push_ffmpeg_candidates_from_directory(
+        &mut candidates,
+        &managed_ffmpeg_install_directory(asset_directory),
+    );
+    candidates
+}
+
+fn verify_ffmpeg_binary(executable_path: &Path) -> Result<(), String> {
+    let mut command = Command::new(executable_path);
+    hide_command_window(&mut command);
+    let output = command
+        .arg("-version")
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Err(if stderr.is_empty() { stdout } else { stderr })
+}
+
+fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
+    let asset_directory = PathBuf::from(&settings.asset_directory);
+    if let Some(managed_path) = collect_managed_ffmpeg_candidates(&asset_directory)
+        .into_iter()
+        .find(|candidate| candidate.exists() && verify_ffmpeg_binary(candidate).is_ok())
+    {
+        return FfmpegDetection {
+            status: "ready".into(),
+            executable_path: Some(managed_path.display().to_string()),
+            managed: true,
+            message:
+                "App-managed FFmpeg is ready. Transcribed recordings will be compressed to MP3."
+                    .into(),
+        };
+    }
+
+    let path_candidate = PathBuf::from("ffmpeg");
+    if verify_ffmpeg_binary(&path_candidate).is_ok() {
+        return FfmpegDetection {
+            status: "ready".into(),
+            executable_path: Some("ffmpeg".into()),
+            managed: false,
+            message:
+                "System FFmpeg is available. Transcribed recordings will be compressed to MP3."
+                    .into(),
+        };
+    }
+
+    FfmpegDetection::default()
+}
+
 fn collect_managed_whisper_model_candidates(
     asset_directory: &Path,
     executable_path: Option<&Path>,
@@ -854,14 +1205,11 @@ fn collect_managed_whisper_model_candidates(
     let mut candidates = Vec::new();
 
     push_whisper_model_directory(&mut candidates, asset_directory.join("models"));
-    push_whisper_model_directory(
-        &mut candidates,
-        app_managed_runtime_directory(asset_directory),
-    );
-    push_whisper_model_directory(
-        &mut candidates,
-        app_managed_runtime_directory(asset_directory).join("models"),
-    );
+    for runtime_version in collect_installed_runtime_versions(asset_directory) {
+        let runtime_directory = app_managed_runtime_directory(asset_directory, &runtime_version);
+        push_whisper_model_directory(&mut candidates, runtime_directory.clone());
+        push_whisper_model_directory(&mut candidates, runtime_directory.join("models"));
+    }
 
     if let Some(cli_path) = executable_path {
         if let Some(bin_directory) = cli_path.parent() {
@@ -931,13 +1279,15 @@ fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetecti
     let manual_cli_path = validate_manual_path(&settings.whisper.cli_path);
     let manual_model_path = validate_manual_path(&settings.whisper.model_path);
     let model_choice = whisper_model_spec(&settings.whisper.model_choice).id;
+    let runtime_version = sanitize_runtime_version(&settings.whisper.runtime_version);
     let asset_directory = PathBuf::from(&settings.asset_directory);
+    let available_runtime_versions = collect_installed_runtime_versions(&asset_directory);
 
     let (executable_path, source) = if let Some(path) = manual_cli_path {
         (Some(path), Some("manual".to_string()))
     } else {
         (
-            collect_managed_whisper_cli_candidates(&asset_directory)
+            collect_managed_whisper_cli_candidates(&asset_directory, &runtime_version)
                 .into_iter()
                 .find(|candidate| candidate.exists()),
             Some("managed".to_string()),
@@ -1019,6 +1369,8 @@ fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetecti
         model_path: model_path.map(|path| path.display().to_string()),
         source,
         model_source,
+        runtime_version,
+        available_runtime_versions,
         cli_ready,
         model_ready,
         cli_managed,
@@ -1097,7 +1449,8 @@ fn check_whisper_runtime_update_inner<R: Runtime>(
         })
         .ok_or_else(|| "Could not read the latest whisper.cpp release tag.".to_string())?;
 
-    let update_available = latest_tag != RECOMMENDED_WHISPER_RUNTIME_VERSION;
+    let current_version = detection.runtime_version;
+    let update_available = latest_tag != current_version;
     Ok(WhisperAssetUpdateResult {
         kind: "runtime".into(),
         status: if update_available {
@@ -1110,7 +1463,7 @@ fn check_whisper_runtime_update_inner<R: Runtime>(
         } else {
             "Your app-managed Whisper runtime is up to date.".into()
         },
-        current_version: Some(RECOMMENDED_WHISPER_RUNTIME_VERSION.into()),
+        current_version: Some(current_version),
         latest_version: Some(latest_tag),
     })
 }
@@ -1244,6 +1597,7 @@ fn is_autostart_not_found_error(message: &str) -> bool {
 fn whisper_detection_inputs_changed(previous: &AppSettings, next: &AppSettings) -> bool {
     previous.asset_directory != next.asset_directory
         || previous.whisper.cli_path != next.whisper.cli_path
+        || previous.whisper.runtime_version != next.whisper.runtime_version
         || previous.whisper.model_path != next.whisper.model_path
         || previous.whisper.model_choice != next.whisper.model_choice
 }
@@ -1261,6 +1615,7 @@ fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppBootstrap, S
         .lock()
         .map_err(|_| "Could not read the app settings.".to_string())?
         .clone();
+    let ffmpeg_detection = detect_local_ffmpeg(&persisted.settings);
     let whisper_detection = app
         .state::<WhisperDetectionState>()
         .0
@@ -1285,6 +1640,7 @@ fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppBootstrap, S
         settings: persisted.settings,
         recent_recordings: persisted.recent_recordings,
         whisper_detection,
+        ffmpeg_detection,
         model_download,
         log_path,
     })
@@ -1358,9 +1714,12 @@ fn save_settings_inner<R: Runtime>(
             "outputDirectory": normalized.output_directory,
             "assetDirectory": normalized.asset_directory,
             "whisperCliPath": normalized.whisper.cli_path,
+            "whisperRuntimeVersion": normalized.whisper.runtime_version,
             "whisperModelPath": normalized.whisper.model_path,
             "whisperModelChoice": normalized.whisper.model_choice,
-            "whisperLanguage": normalized.whisper.language
+            "whisperLanguage": normalized.whisper.language,
+            "ankiDeckName": normalized.anki.deck_name,
+            "ankiNoteType": normalized.anki.note_type
         }),
     );
 
@@ -1394,6 +1753,808 @@ fn insert_recent_recording<R: Runtime>(
     write_persisted_data(app, &persisted_snapshot)
 }
 
+fn hide_command_window(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+fn anki_offline_message(error: &str) -> String {
+    format!(
+        "Anki is currently offline. Start Anki and make sure AnkiConnect is installed, then try again. {error}"
+    )
+}
+
+fn anki_connect_request(
+    action: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(ANKI_CONNECT_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let payload = serde_json::json!({
+        "action": action,
+        "version": 6,
+        "params": params
+    });
+
+    let response = client
+        .post("http://127.0.0.1:8765")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(payload.to_string())
+        .send()
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?;
+    let response = response.text().map_err(|error| error.to_string())?;
+    let response =
+        serde_json::from_str::<serde_json::Value>(&response).map_err(|error| error.to_string())?;
+
+    if let Some(error) = response.get("error").and_then(|value| value.as_str()) {
+        if !error.is_empty() {
+            return Err(error.to_string());
+        }
+    }
+
+    Ok(response
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
+}
+
+fn json_string_array(value: serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn load_anki_catalog_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    note_type: Option<String>,
+) -> Result<AnkiCatalog, String> {
+    let configured_note_type = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not read the Anki settings.".to_string())?;
+        persisted.settings.anki.note_type.clone()
+    };
+    let selected_note_type = note_type.unwrap_or(configured_note_type).trim().to_string();
+
+    let version = match anki_connect_request("version", serde_json::json!({})) {
+        Ok(value) => value.as_i64(),
+        Err(error) => {
+            return Ok(AnkiCatalog {
+                status: "offline".into(),
+                message: anki_offline_message(&error),
+                version: None,
+                decks: Vec::new(),
+                note_types: Vec::new(),
+                fields: Vec::new(),
+            });
+        }
+    };
+
+    let mut decks = json_string_array(anki_connect_request("deckNames", serde_json::json!({}))?);
+    let mut note_types =
+        json_string_array(anki_connect_request("modelNames", serde_json::json!({}))?);
+    decks.sort();
+    note_types.sort();
+
+    let fields = if selected_note_type.is_empty() {
+        Vec::new()
+    } else {
+        json_string_array(anki_connect_request(
+            "modelFieldNames",
+            serde_json::json!({ "modelName": selected_note_type }),
+        )?)
+    };
+
+    Ok(AnkiCatalog {
+        status: "ready".into(),
+        message: "AnkiConnect is ready.".into(),
+        version,
+        decks,
+        note_types,
+        fields,
+    })
+}
+
+fn find_recent_recording<R: Runtime>(
+    app: &AppHandle<R>,
+    file_path: &str,
+) -> Result<RecentRecording, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not read the recording history.".to_string())?;
+    persisted
+        .recent_recordings
+        .iter()
+        .find(|recording| recording.file_path == file_path)
+        .cloned()
+        .ok_or_else(|| "The selected recording is no longer in the recent list.".to_string())
+}
+
+fn update_recent_recording<R: Runtime, F>(
+    app: &AppHandle<R>,
+    file_path: &str,
+    update: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut RecentRecording),
+{
+    let persisted_snapshot = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let mut persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not update the recording history.".to_string())?;
+        let recording = persisted
+            .recent_recordings
+            .iter_mut()
+            .find(|recording| recording.file_path == file_path)
+            .ok_or_else(|| "The selected recording is no longer in the recent list.".to_string())?;
+        update(recording);
+        persisted.clone()
+    };
+
+    write_persisted_data(app, &persisted_snapshot)?;
+    emit_app_snapshot(app);
+    Ok(())
+}
+
+fn anki_media_file_name(path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(sanitize_recording_name)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "recording".into())
+        .replace(' ', "_");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("wav");
+    format!("wonder_of_u_{stem}.{extension}")
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\n', "<br>")
+}
+
+fn push_single_recording_to_anki<R: Runtime>(
+    app: &AppHandle<R>,
+    recording: &RecentRecording,
+    settings: &AnkiSettings,
+) -> Result<i64, String> {
+    if settings.deck_name.is_empty() {
+        return Err("Choose an Anki deck before pushing recordings.".into());
+    }
+    if settings.note_type.is_empty() {
+        return Err("Choose an Anki note type before pushing recordings.".into());
+    }
+    if settings.fields.transcription.is_empty() {
+        return Err("Map an Anki field for the transcript before pushing recordings.".into());
+    }
+
+    let transcript_path = recording
+        .transcript_path
+        .as_deref()
+        .ok_or_else(|| "This recording does not have a transcript yet.".to_string())?;
+    let transcript = fs::read_to_string(transcript_path)
+        .map_err(|error| format!("Could not read transcript: {error}"))?;
+
+    let audio_path = PathBuf::from(&recording.file_path);
+    if !audio_path.exists() {
+        return Err("The audio file is missing from disk.".into());
+    }
+
+    let media_file_name = anki_media_file_name(&audio_path);
+    anki_connect_request(
+        "storeMediaFile",
+        serde_json::json!({
+            "filename": media_file_name,
+            "path": recording.file_path
+        }),
+    )?;
+
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        settings.fields.transcription.clone(),
+        serde_json::Value::String(html_escape(&transcript)),
+    );
+    if !settings.fields.audio.is_empty() {
+        fields.insert(
+            settings.fields.audio.clone(),
+            serde_json::Value::String(format!("[sound:{media_file_name}]")),
+        );
+    }
+    if !settings.fields.source_path.is_empty() {
+        fields.insert(
+            settings.fields.source_path.clone(),
+            serde_json::Value::String(html_escape(&recording.file_path)),
+        );
+    }
+    if !settings.fields.created_at.is_empty() {
+        fields.insert(
+            settings.fields.created_at.clone(),
+            serde_json::Value::String(recording.created_at_ms.to_string()),
+        );
+    }
+    if !settings.fields.translation.is_empty() {
+        if let Some(translation_path) = recording.translation_path.as_deref() {
+            if let Ok(translation) = fs::read_to_string(translation_path) {
+                fields.insert(
+                    settings.fields.translation.clone(),
+                    serde_json::Value::String(html_escape(&translation)),
+                );
+            }
+        }
+    }
+
+    let note_id = anki_connect_request(
+        "addNote",
+        serde_json::json!({
+            "note": {
+                "deckName": settings.deck_name.clone(),
+                "modelName": settings.note_type.clone(),
+                "fields": fields,
+                "options": {
+                    "allowDuplicate": false,
+                    "duplicateScope": "deck",
+                    "duplicateScopeOptions": {
+                        "deckName": settings.deck_name.clone(),
+                        "checkChildren": false,
+                        "checkAllModels": false
+                    }
+                },
+                "tags": ["wonder-of-u"]
+            }
+        }),
+    )?
+    .as_i64()
+    .ok_or_else(|| "AnkiConnect did not return a note id.".to_string())?;
+
+    update_recent_recording(app, &recording.file_path, |recording| {
+        recording.anki_note_id = Some(note_id);
+        recording.anki_deck_name = Some(settings.deck_name.clone());
+        recording.anki_note_type = Some(settings.note_type.clone());
+    })?;
+
+    Ok(note_id)
+}
+
+fn recording_pushed_to_anki_target(recording: &RecentRecording, settings: &AnkiSettings) -> bool {
+    recording.anki_note_id.is_some()
+        && recording.anki_deck_name.as_deref() == Some(settings.deck_name.as_str())
+        && recording.anki_note_type.as_deref() == Some(settings.note_type.as_str())
+}
+
+fn selected_recordings<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<Vec<RecentRecording>, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not read the recording history.".to_string())?;
+    let recordings = if file_paths.is_empty() {
+        persisted
+            .recent_recordings
+            .iter()
+            .filter(|recording| recording.transcript_path.is_some())
+            .cloned()
+            .collect()
+    } else {
+        file_paths
+            .iter()
+            .filter_map(|file_path| {
+                persisted
+                    .recent_recordings
+                    .iter()
+                    .find(|recording| recording.file_path == *file_path)
+                    .cloned()
+            })
+            .collect()
+    };
+
+    Ok(recordings)
+}
+
+fn selected_untranscribed_recordings<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<Vec<RecentRecording>, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not read the recording history.".to_string())?;
+    let recordings = if file_paths.is_empty() {
+        persisted
+            .recent_recordings
+            .iter()
+            .filter(|recording| recording.transcript_path.is_none())
+            .cloned()
+            .collect()
+    } else {
+        file_paths
+            .iter()
+            .filter_map(|file_path| {
+                persisted
+                    .recent_recordings
+                    .iter()
+                    .find(|recording| recording.file_path == *file_path)
+                    .cloned()
+            })
+            .collect()
+    };
+
+    Ok(recordings)
+}
+
+fn apply_transcription_result_to_recording<R: Runtime>(
+    app: &AppHandle<R>,
+    original_file_path: &str,
+    mut recording: RecentRecording,
+    transcript_path: PathBuf,
+) -> Result<RecentRecording, String> {
+    let mut audio_path = PathBuf::from(&recording.file_path);
+    let mut final_transcript_path = transcript_path;
+
+    match rename_recording_outputs_from_transcript(&audio_path, &final_transcript_path) {
+        Ok((renamed_audio_path, renamed_transcript_path)) => {
+            audio_path = renamed_audio_path;
+            final_transcript_path = renamed_transcript_path;
+        }
+        Err(error) => {
+            log_event(
+                app,
+                "ERROR",
+                "recording.rename_from_transcript_failed",
+                serde_json::json!({
+                    "audioPath": recording.file_path,
+                    "message": error
+                }),
+            );
+        }
+    }
+
+    audio_path = compress_transcribed_audio_if_possible(app, &audio_path);
+
+    recording.file_name = audio_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("recording.wav")
+        .to_string();
+    recording.file_path = audio_path.display().to_string();
+    recording.transcript_path = Some(final_transcript_path.display().to_string());
+    recording.bytes_written = fs::metadata(&audio_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(recording.bytes_written);
+
+    let updated_recording = recording.clone();
+    update_recent_recording(app, original_file_path, |recording| {
+        *recording = updated_recording.clone();
+    })?;
+
+    Ok(recording)
+}
+
+fn transcribe_recordings_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect transcription settings.".to_string())?;
+        persisted.settings.clone()
+    };
+    let whisper_detection = refresh_whisper_detection_state(app)?;
+    if whisper_detection.status != "ready" {
+        return Ok(RecordingBatchResult {
+            status: "unavailable".into(),
+            message: format!("Whisper is not ready yet: {}", whisper_detection.message),
+            items: Vec::new(),
+            bootstrap: build_app_bootstrap(app)?,
+        });
+    }
+
+    let cli_path = PathBuf::from(
+        whisper_detection
+            .executable_path
+            .clone()
+            .unwrap_or_default(),
+    );
+    let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
+    let recordings = selected_untranscribed_recordings(app, file_paths)?;
+    let total = recordings.len();
+    let mut items = Vec::new();
+
+    for (index, recording) in recordings.into_iter().enumerate() {
+        if recording.transcript_path.is_some() {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "skipped".into(),
+                message: "Already transcribed.".into(),
+                note_id: recording.anki_note_id,
+            });
+            continue;
+        }
+
+        let original_file_path = recording.file_path.clone();
+        update_shell_snapshot(app, |shell| {
+            shell.phase = "transcribing".into();
+            shell.status_text = format!(
+                "Transcribing {} of {}: {}",
+                index + 1,
+                total,
+                recording.file_name
+            );
+            shell.started_at_ms = None;
+            shell.current_recording_name = None;
+            shell.last_output_path = Some(recording.file_path.clone());
+        })?;
+
+        let result = run_whisper_transcription(&WhisperTranscriptionRequest {
+            cli_path: cli_path.clone(),
+            model_path: model_path.clone(),
+            audio_path: PathBuf::from(&recording.file_path),
+            language: settings.whisper.language.clone(),
+        })
+        .and_then(|result| {
+            apply_transcription_result_to_recording(
+                app,
+                &original_file_path,
+                recording.clone(),
+                result.transcript_path,
+            )
+        });
+
+        match result {
+            Ok(updated_recording) => {
+                log_event(
+                    app,
+                    "INFO",
+                    "transcription.saved",
+                    serde_json::json!({
+                        "audioPath": updated_recording.file_path,
+                        "transcriptPath": updated_recording.transcript_path
+                    }),
+                );
+                items.push(RecordingActionItem {
+                    file_path: updated_recording.file_path,
+                    status: "success".into(),
+                    message: "Transcript created.".into(),
+                    note_id: updated_recording.anki_note_id,
+                });
+            }
+            Err(error) => {
+                log_event(
+                    app,
+                    "ERROR",
+                    "transcription.failed",
+                    serde_json::json!({
+                        "audioPath": original_file_path,
+                        "message": error
+                    }),
+                );
+                items.push(RecordingActionItem {
+                    file_path: original_file_path,
+                    status: "failed".into(),
+                    message: error,
+                    note_id: None,
+                });
+            }
+        }
+    }
+
+    let success_count = items.iter().filter(|item| item.status == "success").count();
+    let skipped_count = items.iter().filter(|item| item.status == "skipped").count();
+    let failed_count = items.iter().filter(|item| item.status == "failed").count();
+    let message = format!(
+        "Transcription finished: {success_count} created, {skipped_count} skipped, {failed_count} failed."
+    );
+
+    update_shell_snapshot(app, |shell| {
+        shell.phase = "idle".into();
+        shell.status_text = message.clone();
+        shell.started_at_ms = None;
+        shell.current_recording_name = None;
+        shell.transition_count += 1;
+    })?;
+
+    Ok(RecordingBatchResult {
+        status: if failed_count == 0 {
+            "completed"
+        } else {
+            "partial"
+        }
+        .into(),
+        message,
+        items,
+        bootstrap: build_app_bootstrap(app)?,
+    })
+}
+
+fn push_recordings_to_anki_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not read the Anki settings.".to_string())?;
+        persisted.settings.anki.clone()
+    };
+    let recordings = selected_recordings(app, file_paths)?;
+    let mut items = Vec::new();
+
+    if let Err(error) = anki_connect_request("version", serde_json::json!({})) {
+        let message = anki_offline_message(&error);
+        update_shell_snapshot(app, |shell| {
+            shell.status_text = message.clone();
+            shell.transition_count += 1;
+        })?;
+        return Ok(RecordingBatchResult {
+            status: "unavailable".into(),
+            message,
+            items: recordings
+                .into_iter()
+                .map(|recording| RecordingActionItem {
+                    file_path: recording.file_path,
+                    status: "failed".into(),
+                    message: "Anki is currently offline.".into(),
+                    note_id: recording.anki_note_id,
+                })
+                .collect(),
+            bootstrap: build_app_bootstrap(app)?,
+        });
+    }
+
+    for recording in recordings {
+        if recording_pushed_to_anki_target(&recording, &settings) {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "skipped".into(),
+                message: format!("Already pushed to {}.", settings.deck_name),
+                note_id: recording.anki_note_id,
+            });
+            continue;
+        }
+
+        match push_single_recording_to_anki(app, &recording, &settings) {
+            Ok(note_id) => items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "success".into(),
+                message: format!("Created Anki note {note_id}."),
+                note_id: Some(note_id),
+            }),
+            Err(error) => items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "failed".into(),
+                message: error,
+                note_id: None,
+            }),
+        }
+    }
+
+    let success_count = items.iter().filter(|item| item.status == "success").count();
+    let skipped_count = items.iter().filter(|item| item.status == "skipped").count();
+    let failed_count = items.iter().filter(|item| item.status == "failed").count();
+
+    update_shell_snapshot(app, |shell| {
+        shell.status_text = format!(
+            "Anki push finished: {success_count} created, {skipped_count} skipped, {failed_count} failed."
+        );
+        shell.transition_count += 1;
+    })?;
+
+    Ok(RecordingBatchResult {
+        status: if failed_count == 0 { "completed" } else { "partial" }.into(),
+        message: format!(
+            "Anki push finished: {success_count} created, {skipped_count} skipped, {failed_count} failed."
+        ),
+        items,
+        bootstrap: build_app_bootstrap(app)?,
+    })
+}
+
+fn delete_recording_inner<R: Runtime>(app: &AppHandle<R>, file_path: &str) -> Result<(), String> {
+    let removed_recording = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let mut persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not update the recording history.".to_string())?;
+        let index = persisted
+            .recent_recordings
+            .iter()
+            .position(|recording| recording.file_path == file_path)
+            .ok_or_else(|| "The selected recording is no longer in the recent list.".to_string())?;
+        let removed = persisted.recent_recordings.remove(index);
+        let snapshot = persisted.clone();
+        drop(persisted);
+        write_persisted_data(app, &snapshot)?;
+        removed
+    };
+
+    for path in [
+        Some(removed_recording.file_path.as_str()),
+        removed_recording.transcript_path.as_deref(),
+        removed_recording.translation_path.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not delete {path}: {error}")),
+        }
+    }
+
+    log_event(
+        app,
+        "INFO",
+        "recording.deleted",
+        serde_json::json!({ "filePath": file_path }),
+    );
+    emit_app_snapshot(app);
+    Ok(())
+}
+
+fn delete_recordings_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let mut items = Vec::new();
+
+    for file_path in file_paths {
+        match delete_recording_inner(app, &file_path) {
+            Ok(()) => items.push(RecordingActionItem {
+                file_path,
+                status: "success".into(),
+                message: "Deleted recording files.".into(),
+                note_id: None,
+            }),
+            Err(error) => items.push(RecordingActionItem {
+                file_path,
+                status: "failed".into(),
+                message: error,
+                note_id: None,
+            }),
+        }
+    }
+
+    let success_count = items.iter().filter(|item| item.status == "success").count();
+    let failed_count = items.iter().filter(|item| item.status == "failed").count();
+    let message = format!("Delete finished: {success_count} deleted, {failed_count} failed.");
+
+    update_shell_snapshot(app, |shell| {
+        shell.status_text = message.clone();
+        shell.transition_count += 1;
+    })?;
+
+    Ok(RecordingBatchResult {
+        status: if failed_count == 0 {
+            "completed"
+        } else {
+            "partial"
+        }
+        .into(),
+        message,
+        items,
+        bootstrap: build_app_bootstrap(app)?,
+    })
+}
+
+fn play_recording_inner<R: Runtime>(app: &AppHandle<R>, file_path: &str) -> Result<(), String> {
+    let recording = find_recent_recording(app, file_path)?;
+    let path = PathBuf::from(&recording.file_path);
+    if !path.exists() {
+        return Err("The audio file is missing from disk.".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("cmd");
+        command.creation_flags(CREATE_NO_WINDOW);
+        command.arg("/C").arg("start").arg("").arg(&path);
+        command.spawn().map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn translate_recordings_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let recordings = selected_recordings(app, file_paths)?;
+    let mut items = Vec::new();
+
+    for recording in recordings {
+        if recording.translation_path.is_some() {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "skipped".into(),
+                message: "Already translated.".into(),
+                note_id: recording.anki_note_id,
+            });
+        } else if recording.transcript_path.is_none() {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "failed".into(),
+                message: "No transcript available to translate.".into(),
+                note_id: recording.anki_note_id,
+            });
+        } else {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "failed".into(),
+                message: "Translation provider is not configured yet. This will be wired through the translation/extension bridge phase.".into(),
+                note_id: recording.anki_note_id,
+            });
+        }
+    }
+
+    let skipped_count = items.iter().filter(|item| item.status == "skipped").count();
+    let failed_count = items.iter().filter(|item| item.status == "failed").count();
+
+    Ok(RecordingBatchResult {
+        status: if failed_count == 0 {
+            "completed"
+        } else {
+            "unavailable"
+        }
+        .into(),
+        message: format!(
+            "Translation request finished: {skipped_count} skipped, {failed_count} unavailable."
+        ),
+        items,
+        bootstrap: build_app_bootstrap(app)?,
+    })
+}
+
 fn clear_managed_whisper_override<R: Runtime>(
     app: &AppHandle<R>,
     asset_kind: &str,
@@ -1411,6 +2572,25 @@ fn clear_managed_whisper_override<R: Runtime>(
             _ => {}
         }
 
+        persisted.clone()
+    };
+
+    write_persisted_data(app, &persisted_snapshot)
+}
+
+fn activate_managed_runtime_version<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime_version: &str,
+) -> Result<(), String> {
+    let normalized_version = sanitize_runtime_version(runtime_version);
+    let persisted_snapshot = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let mut persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not update the managed Whisper runtime.".to_string())?;
+        persisted.settings.whisper.runtime_version = normalized_version;
+        persisted.settings.whisper.cli_path.clear();
         persisted.clone()
     };
 
@@ -1469,7 +2649,156 @@ fn rename_recording_outputs_from_transcript(
     Ok((new_audio_path, new_transcript_path))
 }
 
-fn recommended_runtime_archive_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+fn compress_transcribed_audio_if_possible<R: Runtime>(
+    app: &AppHandle<R>,
+    audio_path: &Path,
+) -> PathBuf {
+    if audio_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("wav"))
+        .unwrap_or(true)
+    {
+        return audio_path.to_path_buf();
+    }
+
+    let parent = audio_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = audio_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("recording");
+    let mp3_path = unique_path_with_suffix(parent, stem, ".mp3");
+
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = match persisted_state.0.lock() {
+            Ok(persisted) => persisted,
+            Err(_) => return audio_path.to_path_buf(),
+        };
+        persisted.settings.clone()
+    };
+    let ffmpeg_detection = detect_local_ffmpeg(&settings);
+    let executable_path = ffmpeg_detection
+        .executable_path
+        .clone()
+        .unwrap_or_else(|| "ffmpeg".into());
+
+    let mut command = Command::new(&executable_path);
+    hide_command_window(&mut command);
+    command
+        .arg("-y")
+        .arg("-nostdin")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(audio_path)
+        .arg("-codec:a")
+        .arg("libmp3lame")
+        .arg("-b:a")
+        .arg("128k")
+        .arg(&mp3_path);
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            log_event(
+                app,
+                "INFO",
+                "audio.compression_skipped",
+                serde_json::json!({
+                    "audioPath": audio_path,
+                    "message": "FFmpeg was not found. Keeping the WAV recording."
+                }),
+            );
+            return audio_path.to_path_buf();
+        }
+        Err(error) => {
+            log_event(
+                app,
+                "WARN",
+                "audio.compression_failed",
+                serde_json::json!({
+                    "audioPath": audio_path,
+                    "message": error.to_string()
+                }),
+            );
+            return audio_path.to_path_buf();
+        }
+    };
+
+    let mp3_ready = output.status.success()
+        && fs::metadata(&mp3_path)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false);
+
+    if !mp3_ready {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let details = [stderr, stdout]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = fs::remove_file(&mp3_path);
+        log_event(
+            app,
+            "WARN",
+            "audio.compression_failed",
+            serde_json::json!({
+                "audioPath": audio_path,
+                "targetPath": mp3_path,
+                "message": if details.is_empty() {
+                    "ffmpeg did not produce a valid MP3 file.".to_string()
+                } else {
+                    details
+                }
+            }),
+        );
+        return audio_path.to_path_buf();
+    }
+
+    match fs::remove_file(audio_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            log_event(
+                app,
+                "WARN",
+                "audio.source_delete_failed",
+                serde_json::json!({
+                    "audioPath": audio_path,
+                    "targetPath": mp3_path,
+                    "message": error.to_string()
+                }),
+            );
+        }
+    }
+
+    log_event(
+        app,
+        "INFO",
+        "audio.compressed",
+        serde_json::json!({
+            "sourcePath": audio_path,
+            "targetPath": mp3_path
+        }),
+    );
+    mp3_path
+}
+
+fn runtime_download_url(runtime_version: &str) -> String {
+    format!(
+        "https://github.com/ggml-org/whisper.cpp/releases/download/{}/{}",
+        sanitize_runtime_version(runtime_version),
+        RECOMMENDED_WHISPER_RUNTIME_FILE
+    )
+}
+
+fn recommended_runtime_archive_path<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime_version: &str,
+) -> Result<PathBuf, String> {
     let persisted_state = app.state::<SharedPersistedState>();
     let persisted = persisted_state
         .0
@@ -1480,11 +2809,16 @@ fn recommended_runtime_archive_path<R: Runtime>(app: &AppHandle<R>) -> Result<Pa
     drop(persisted);
 
     ensure_directory_exists(&runtime_directory)?;
-    Ok(runtime_directory.join(RECOMMENDED_WHISPER_RUNTIME_FILE))
+    Ok(runtime_directory.join(format!(
+        "{}-{}",
+        sanitize_runtime_version(runtime_version),
+        RECOMMENDED_WHISPER_RUNTIME_FILE
+    )))
 }
 
 fn recommended_runtime_install_directory<R: Runtime>(
     app: &AppHandle<R>,
+    runtime_version: &str,
 ) -> Result<PathBuf, String> {
     let persisted_state = app.state::<SharedPersistedState>();
     let persisted = persisted_state
@@ -1494,13 +2828,16 @@ fn recommended_runtime_install_directory<R: Runtime>(
     let asset_directory = PathBuf::from(&persisted.settings.asset_directory);
     drop(persisted);
 
-    let runtime_directory = app_managed_runtime_directory(&asset_directory);
+    let runtime_directory = app_managed_runtime_directory(&asset_directory, runtime_version);
     ensure_directory_exists(&runtime_directory)?;
     Ok(runtime_directory)
 }
 
-fn find_existing_managed_cli_path(asset_directory: &Path) -> Option<PathBuf> {
-    collect_managed_whisper_cli_candidates(asset_directory)
+fn find_existing_managed_cli_path(
+    asset_directory: &Path,
+    runtime_version: &str,
+) -> Option<PathBuf> {
+    collect_managed_whisper_cli_candidates(asset_directory, runtime_version)
         .into_iter()
         .find(|candidate| candidate.exists())
 }
@@ -1518,6 +2855,40 @@ fn recommended_model_target_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathB
 
     ensure_directory_exists(&models_directory)?;
     Ok(models_directory.join(model_choice.file_name))
+}
+
+fn recommended_ffmpeg_archive_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+    let asset_directory = PathBuf::from(&persisted.settings.asset_directory);
+    let downloads_directory = asset_directory.join("downloads");
+    drop(persisted);
+
+    ensure_directory_exists(&downloads_directory)?;
+    Ok(downloads_directory.join(RECOMMENDED_FFMPEG_RUNTIME_FILE))
+}
+
+fn recommended_ffmpeg_install_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+    let asset_directory = PathBuf::from(&persisted.settings.asset_directory);
+    drop(persisted);
+
+    let install_directory = managed_ffmpeg_install_directory(&asset_directory);
+    ensure_directory_exists(&install_directory)?;
+    Ok(install_directory)
+}
+
+fn find_existing_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> {
+    collect_managed_ffmpeg_candidates(asset_directory)
+        .into_iter()
+        .find(|candidate| candidate.exists())
 }
 
 fn remove_directory_contents(path: &Path) -> Result<(), String> {
@@ -1931,6 +3302,14 @@ fn download_recommended_whisper_model_inner<R: Runtime>(app: &AppHandle<R>) -> R
 fn download_recommended_whisper_runtime_inner<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(), String> {
+    download_whisper_runtime_version_inner(app, RECOMMENDED_WHISPER_RUNTIME_VERSION)
+}
+
+fn download_whisper_runtime_version_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime_version: &str,
+) -> Result<(), String> {
+    let runtime_version = sanitize_runtime_version(runtime_version);
     {
         let shell_state = app.state::<SharedShellState>();
         let shell = shell_state
@@ -1956,14 +3335,16 @@ fn download_recommended_whisper_runtime_inner<R: Runtime>(
         control.cancel_requested = false;
     }
 
-    let archive_path = recommended_runtime_archive_path(app)?;
-    let install_directory = recommended_runtime_install_directory(app)?;
+    let archive_path = recommended_runtime_archive_path(app, &runtime_version)?;
+    let install_directory = recommended_runtime_install_directory(app, &runtime_version)?;
+    let download_url = runtime_download_url(&runtime_version);
     let app_handle = app.clone();
 
     update_shell_snapshot(app, |shell| {
         shell.phase = "downloading-model".into();
         shell.status_text = format!(
-            "Downloading the recommended Whisper runtime to {}...",
+            "Downloading Whisper runtime {} to {}...",
+            runtime_version,
             install_directory.display()
         );
         shell.started_at_ms = None;
@@ -1993,33 +3374,35 @@ fn download_recommended_whisper_runtime_inner<R: Runtime>(
                 };
 
                 let cli_path = if let Some(existing_cli_path) =
-                    find_existing_managed_cli_path(&asset_directory)
+                    find_existing_managed_cli_path(&asset_directory, &runtime_version)
                 {
                     verify_whisper_cli(&existing_cli_path)?;
                     existing_cli_path
                 } else {
                     download_file_to_path_with_progress(
                         &app_handle,
-                        RECOMMENDED_WHISPER_RUNTIME_URL,
+                        &download_url,
                         &archive_path,
                         "runtime",
-                        "the recommended Whisper runtime",
+                        &format!("Whisper runtime {runtime_version}"),
                     )?;
 
                     extract_zip_archive_to_directory(&archive_path, &install_directory)?;
-                    find_existing_managed_cli_path(&asset_directory).ok_or_else(|| {
-                        "The runtime downloaded, but whisper-cli.exe was not found.".to_string()
-                    })?
+                    find_existing_managed_cli_path(&asset_directory, &runtime_version).ok_or_else(
+                        || "The runtime downloaded, but whisper-cli.exe was not found.".to_string(),
+                    )?
                 };
                 verify_whisper_cli(&cli_path)?;
-                clear_managed_whisper_override(&app_handle, "runtime")?;
+                activate_managed_runtime_version(&app_handle, &runtime_version)?;
 
                 let detection = refresh_whisper_detection_state(&app_handle)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
                     snapshot.kind = Some("runtime".into());
                     snapshot.status = "completed".into();
-                    snapshot.message =
-                        "Recommended Whisper runtime downloaded successfully.".into();
+                    snapshot.message = format!(
+                        "Whisper runtime {} downloaded and activated.",
+                        runtime_version
+                    );
                     snapshot.downloaded_bytes =
                         snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
                     snapshot.progress_percent = Some(100.0);
@@ -2030,7 +3413,11 @@ fn download_recommended_whisper_runtime_inner<R: Runtime>(
                 update_shell_snapshot(&app_handle, |shell| {
                     shell.phase = "idle".into();
                     shell.status_text = if detection.status == "ready" {
-                        format!("Whisper runtime is ready at {}", cli_path.display())
+                        format!(
+                            "Whisper runtime {} is ready at {}",
+                            runtime_version,
+                            cli_path.display()
+                        )
                     } else {
                         format!(
                             "Runtime downloaded, but Whisper still needs setup: {}",
@@ -2046,7 +3433,8 @@ fn download_recommended_whisper_runtime_inner<R: Runtime>(
                     "whisper.runtime_downloaded",
                     serde_json::json!({
                         "runtimeArchivePath": archive_path.display().to_string(),
-                        "cliPath": cli_path.display().to_string()
+                        "cliPath": cli_path.display().to_string(),
+                        "runtimeVersion": runtime_version
                     }),
                 );
 
@@ -2089,6 +3477,155 @@ fn download_recommended_whisper_runtime_inner<R: Runtime>(
     Ok(())
 }
 
+fn download_recommended_ffmpeg_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    {
+        let shell_state = app.state::<SharedShellState>();
+        let shell = shell_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the shell state.".to_string())?;
+        if shell.phase != "idle" && shell.phase != "error" {
+            return Err("Finish the current task before downloading FFmpeg.".into());
+        }
+    }
+
+    {
+        let control_state = app.state::<ModelDownloadControlState>();
+        let mut control = control_state
+            .control
+            .lock()
+            .map_err(|_| "Could not initialize the download control state.".to_string())?;
+        if control.active {
+            return Err("Another download is already in progress.".into());
+        }
+        control.active = true;
+        control.paused = false;
+        control.cancel_requested = false;
+    }
+
+    let archive_path = recommended_ffmpeg_archive_path(app)?;
+    let install_directory = recommended_ffmpeg_install_directory(app)?;
+    let app_handle = app.clone();
+
+    update_shell_snapshot(app, |shell| {
+        shell.phase = "downloading-model".into();
+        shell.status_text = format!("Downloading FFmpeg to {}...", install_directory.display());
+        shell.started_at_ms = None;
+        shell.current_recording_name = None;
+    })?;
+    update_model_download_snapshot(app, |snapshot| {
+        snapshot.kind = Some("ffmpeg".into());
+        snapshot.status = "starting".into();
+        snapshot.message = "Preparing the FFmpeg download...".into();
+        snapshot.downloaded_bytes = 0;
+        snapshot.total_bytes = None;
+        snapshot.progress_percent = None;
+        snapshot.target_path = Some(archive_path.display().to_string());
+    })?;
+
+    std::thread::Builder::new()
+        .name("ffmpeg-download".into())
+        .spawn(move || {
+            let download_result = (|| -> Result<(), String> {
+                let asset_directory = {
+                    let persisted_state = app_handle.state::<SharedPersistedState>();
+                    let persisted = persisted_state
+                        .0
+                        .lock()
+                        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+                    PathBuf::from(&persisted.settings.asset_directory)
+                };
+
+                let ffmpeg_path = if let Some(existing_path) =
+                    find_existing_managed_ffmpeg_path(&asset_directory)
+                {
+                    verify_ffmpeg_binary(&existing_path)?;
+                    existing_path
+                } else {
+                    download_file_to_path_with_progress(
+                        &app_handle,
+                        RECOMMENDED_FFMPEG_RUNTIME_URL,
+                        &archive_path,
+                        "ffmpeg",
+                        "FFmpeg",
+                    )?;
+
+                    extract_zip_archive_to_directory(&archive_path, &install_directory)?;
+                    find_existing_managed_ffmpeg_path(&asset_directory)
+                        .ok_or_else(|| "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string())?
+                };
+
+                verify_ffmpeg_binary(&ffmpeg_path)?;
+                update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("ffmpeg".into());
+                    snapshot.status = "completed".into();
+                    snapshot.message =
+                        "FFmpeg downloaded. MP3 compression is now enabled.".into();
+                    snapshot.downloaded_bytes =
+                        snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
+                    snapshot.progress_percent = Some(100.0);
+                    snapshot.target_path = Some(ffmpeg_path.display().to_string());
+                })?;
+                reset_model_download_control(&app_handle)?;
+
+                update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = format!(
+                        "FFmpeg is ready at {}. Future transcribed recordings will be compressed to MP3.",
+                        ffmpeg_path.display()
+                    );
+                    shell.started_at_ms = None;
+                })?;
+
+                log_event(
+                    &app_handle,
+                    "INFO",
+                    "ffmpeg.downloaded",
+                    serde_json::json!({
+                        "archivePath": archive_path.display().to_string(),
+                        "ffmpegPath": ffmpeg_path.display().to_string()
+                    }),
+                );
+
+                let _ = fs::remove_file(&archive_path);
+                Ok(())
+            })();
+
+            if let Err(error) = download_result {
+                let cancelled = error.ends_with("download cancelled.");
+                let _ = update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("ffmpeg".into());
+                    if cancelled {
+                        snapshot.status = "cancelled".into();
+                        snapshot.message = "FFmpeg download cancelled.".into();
+                    } else {
+                        snapshot.status = "failed".into();
+                        snapshot.message = format!("FFmpeg download failed: {error}");
+                    }
+                });
+                let _ = reset_model_download_control(&app_handle);
+                let _ = update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = if cancelled {
+                        "FFmpeg download cancelled.".into()
+                    } else {
+                        format!("FFmpeg download failed: {error}")
+                    };
+                    shell.started_at_ms = None;
+                });
+                log_event(
+                    &app_handle,
+                    "ERROR",
+                    "ffmpeg.download_failed",
+                    serde_json::json!({ "message": error }),
+                );
+            }
+        })
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
 fn toggle_whisper_model_download_pause_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let control_state = app.state::<ModelDownloadControlState>();
     let mut control = control_state
@@ -2114,6 +3651,7 @@ fn toggle_whisper_model_download_pause_inner<R: Runtime>(app: &AppHandle<R>) -> 
             .clone();
         match snapshot.kind.as_deref() {
             Some("runtime") => "Runtime",
+            Some("ffmpeg") => "FFmpeg",
             _ => "Model",
         }
     };
@@ -2161,6 +3699,7 @@ fn cancel_whisper_model_download_inner<R: Runtime>(app: &AppHandle<R>) -> Result
             .clone();
         match snapshot.kind.as_deref() {
             Some("runtime") => "runtime",
+            Some("ffmpeg") => "FFmpeg",
             _ => "model",
         }
     };
@@ -2194,6 +3733,10 @@ fn finalize_recording_pipeline<R: Runtime>(
                     .to_string(),
                 file_path: capture.output_path.display().to_string(),
                 transcript_path: None,
+                translation_path: None,
+                anki_note_id: None,
+                anki_deck_name: None,
+                anki_note_type: None,
                 duration_ms: capture.duration_ms,
                 bytes_written: capture.bytes_written,
                 created_at_ms: capture.created_at_ms,
@@ -2272,6 +3815,8 @@ fn finalize_recording_pipeline<R: Runtime>(
                                     );
                                 }
                             }
+
+                            audio_path = compress_transcribed_audio_if_possible(&app, &audio_path);
 
                             recent_recording.file_name = audio_path
                                 .file_name()
@@ -2487,6 +4032,77 @@ fn setup_error(message: impl Into<String>) -> tauri::Error {
     tauri::Error::Setup(boxed_error.into())
 }
 
+#[cfg(target_os = "windows")]
+struct SingleInstanceGuard {
+    handle: HANDLE,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn current_launch_should_focus_existing_instance() -> bool {
+    !std::env::args().any(|argument| argument == "--autostart")
+}
+
+#[cfg(target_os = "windows")]
+fn focus_existing_instance_window() {
+    let window_title = wide_null(APP_TITLE);
+
+    unsafe {
+        let window = FindWindowW(std::ptr::null(), window_title.as_ptr());
+        if window.is_null() {
+            return;
+        }
+
+        if IsIconic(window) != 0 {
+            ShowWindow(window, SW_RESTORE);
+        } else {
+            ShowWindow(window, SW_SHOW);
+        }
+
+        SetForegroundWindow(window);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn acquire_single_instance_or_exit() -> Option<SingleInstanceGuard> {
+    let mutex_name = wide_null("Local\\com.wonderofu.desktop.single-instance");
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr()) };
+    if handle.is_null() {
+        return None;
+    }
+
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        if current_launch_should_focus_existing_instance() {
+            focus_existing_instance_window();
+        }
+
+        unsafe {
+            CloseHandle(handle);
+        }
+        std::process::exit(0);
+    }
+
+    Some(SingleInstanceGuard { handle })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn acquire_single_instance_or_exit() {}
+
 fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcut: &str) {
     let _ = update_shell_snapshot(app, |shell| {
         shell.last_shortcut = Some(shortcut.to_string());
@@ -2563,6 +4179,7 @@ fn register_hotkey<R: Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _single_instance_guard = acquire_single_instance_or_exit();
     let startup_visibility = Arc::new(StartupVisibility::default());
     let setup_visibility = Arc::clone(&startup_visibility);
     let page_load_visibility = Arc::clone(&startup_visibility);
@@ -2644,9 +4261,12 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
 
-            TrayIconBuilder::new()
-                .tooltip("Wonder of U")
-                .menu(&menu)
+            let mut tray_builder = TrayIconBuilder::new().tooltip(APP_TITLE).menu(&menu);
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray_builder = tray_builder.icon(icon);
+            }
+
+            tray_builder
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         let _ = show_main_window_inner(app);
@@ -2765,6 +4385,8 @@ pub fn run() {
             get_app_bootstrap,
             download_recommended_whisper_model,
             download_recommended_whisper_runtime,
+            download_whisper_runtime_version,
+            download_recommended_ffmpeg,
             check_whisper_runtime_update,
             check_whisper_model_update,
             toggle_whisper_model_download_pause,
@@ -2772,6 +4394,13 @@ pub fn run() {
             save_settings,
             start_recording,
             stop_recording,
+            load_anki_catalog,
+            play_recording,
+            delete_recording,
+            delete_recordings,
+            push_recordings_to_anki,
+            translate_recordings,
+            transcribe_recordings,
             show_main_window,
             hide_main_window
         ])
@@ -2782,7 +4411,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_theme_preference, sanitize_recording_name, unique_wav_path, PersistedData,
+        normalize_theme_preference, recording_pushed_to_anki_target, sanitize_recording_name,
+        unique_wav_path, AnkiSettings, PersistedData, RecentRecording,
     };
     use std::path::Path;
 
@@ -2835,5 +4465,39 @@ mod tests {
         assert_eq!(state.untitled_counter, 0);
         assert_eq!(state.settings.theme, "system");
         assert!(Path::new("C:\\Temp").is_absolute());
+    }
+
+    #[test]
+    fn anki_target_match_requires_same_deck_and_note_type() {
+        let settings = AnkiSettings {
+            deck_name: "Japanese".into(),
+            note_type: "Mining".into(),
+            ..Default::default()
+        };
+        let mut recording = RecentRecording {
+            file_name: "sample.wav".into(),
+            file_path: "C:\\Temp\\sample.wav".into(),
+            transcript_path: Some("C:\\Temp\\sample.transcript.txt".into()),
+            translation_path: None,
+            anki_note_id: Some(42),
+            anki_deck_name: Some("Japanese".into()),
+            anki_note_type: Some("Mining".into()),
+            duration_ms: 1,
+            bytes_written: 1,
+            created_at_ms: 1,
+        };
+
+        assert!(recording_pushed_to_anki_target(&recording, &settings));
+
+        recording.anki_deck_name = Some("Other".into());
+        assert!(!recording_pushed_to_anki_target(&recording, &settings));
+
+        recording.anki_deck_name = Some("Japanese".into());
+        recording.anki_note_type = Some("Basic".into());
+        assert!(!recording_pushed_to_anki_target(&recording, &settings));
+
+        recording.anki_note_type = Some("Mining".into());
+        recording.anki_note_id = None;
+        assert!(!recording_pushed_to_anki_target(&recording, &settings));
     }
 }

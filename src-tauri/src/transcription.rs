@@ -1,8 +1,15 @@
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone)]
 pub struct WhisperTranscriptionRequest {
@@ -18,16 +25,33 @@ pub struct WhisperTranscriptionResult {
 }
 
 fn transcript_output_base(audio_path: &Path) -> PathBuf {
-    let parent = audio_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = audio_path
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("recording");
-    parent.join(format!("{stem}.transcript"))
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+
+    env::temp_dir().join(format!(
+        "wonder-of-u-{stem}-{}-{unique_suffix}.transcript",
+        std::process::id()
+    ))
+}
+
+fn hide_command_window(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
 }
 
 pub fn verify_whisper_cli(cli_path: &Path) -> Result<(), String> {
-    let output = Command::new(cli_path)
+    let mut command = Command::new(cli_path);
+    hide_command_window(&mut command);
+
+    let output = command
         .arg("-h")
         .output()
         .map_err(|error| error.to_string())?;
@@ -62,6 +86,7 @@ pub fn run_whisper_transcription(
     let transcript_path = PathBuf::from(format!("{}.txt", output_base.display()));
 
     let mut command = Command::new(&request.cli_path);
+    hide_command_window(&mut command);
     command
         .arg("--model")
         .arg(&request.model_path)
@@ -89,7 +114,25 @@ pub fn run_whisper_transcription(
     }
 
     if !transcript_path.exists() {
-        return Err("whisper-cli finished without writing the transcript file.".into());
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let details = [stderr, stdout]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(if details.is_empty() {
+            format!(
+                "whisper-cli finished without writing the transcript file at {}.",
+                transcript_path.display()
+            )
+        } else {
+            format!(
+                "whisper-cli finished without writing the transcript file at {}. {}",
+                transcript_path.display(),
+                details
+            )
+        });
     }
 
     Ok(WhisperTranscriptionResult { transcript_path })
