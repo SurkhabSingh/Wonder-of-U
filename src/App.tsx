@@ -43,6 +43,7 @@ type FeatureSettings = {
 
 type AnkiFieldMapping = {
   transcription: string;
+  furigana: string;
   audio: string;
   translation: string;
   sourcePath: string;
@@ -177,6 +178,7 @@ type BusyAction =
   | "playRecording"
   | "deleteRecording"
   | "pushAnki"
+  | "addFurigana"
   | "translateRecording"
   | "transcribeRecording"
   | "convertMp3"
@@ -383,6 +385,7 @@ const DEFAULT_BOOTSTRAP: AppBootstrap = {
       noteType: "",
       fields: {
         transcription: "",
+        furigana: "",
         audio: "",
         translation: "",
         sourcePath: "",
@@ -750,7 +753,7 @@ function showSuccess(message: string) {
   }
 
   function formatBatchToastMessage(
-    action: "transcribe" | "translate" | "delete" | "anki" | "convert",
+    action: "transcribe" | "translate" | "delete" | "anki" | "furigana" | "convert",
     result: RecordingBatchResult,
   ): string {
     const successCount = result.items.filter((item) => item.status === "success").length;
@@ -758,6 +761,9 @@ function showSuccess(message: string) {
     const failedItems = result.items.filter((item) => item.status === "failed");
     const failedCount = failedItems.length;
     const firstFailure = failedItems[0]?.message;
+    const furiganaSkippedCount = result.items.filter((item) =>
+      item.message.toLowerCase().includes("furigana was skipped"),
+    ).length;
 
     if (action === "anki") {
       if (failedCount > 0 && successCount === 0) {
@@ -771,7 +777,22 @@ function showSuccess(message: string) {
       if (successCount === 0 && skippedCount > 0) {
         return `${skippedCount} card${skippedCount === 1 ? " is" : "s are"} already in the selected Anki deck.`;
       }
-      return `${successCount} card${successCount === 1 ? "" : "s"} pushed to Anki.`;
+      const baseMessage = `${successCount} card${successCount === 1 ? "" : "s"} pushed to Anki.`;
+      return furiganaSkippedCount > 0
+        ? `${baseMessage} Furigana was skipped for ${furiganaSkippedCount} because the Anki Lookup add-on was unavailable.`
+        : baseMessage;
+    }
+
+    if (action === "furigana") {
+      if (failedCount > 0 && successCount === 0) {
+        return firstFailure
+          ? `No Anki cards were updated with furigana. ${firstFailure}`
+          : "No Anki cards were updated with furigana.";
+      }
+      if (failedCount > 0) {
+        return `${successCount} Anki card${successCount === 1 ? "" : "s"} updated with furigana. ${failedCount} failed: ${firstFailure ?? "check the saved recordings list."}`;
+      }
+      return `${successCount} Anki card${successCount === 1 ? "" : "s"} updated with furigana.`;
     }
 
     if (action === "convert") {
@@ -970,6 +991,7 @@ function showSuccess(message: string) {
     busyAction === "transcribeRecording" ||
     busyAction === "translateRecording" ||
     busyAction === "pushAnki" ||
+    busyAction === "addFurigana" ||
     busyAction === "deleteRecording" ||
     busyAction === "loadAnki" ||
     busyAction === "convertMp3";
@@ -979,13 +1001,15 @@ function showSuccess(message: string) {
       ? "Translating transcript..."
       : busyAction === "pushAnki"
         ? "Pushing cards to Anki..."
-        : busyAction === "deleteRecording"
-          ? "Deleting selected recordings..."
-          : busyAction === "convertMp3"
-            ? "Converting recordings to MP3..."
-            : busyAction === "loadAnki"
-              ? "Loading Anki card data..."
-              : isSaving
+        : busyAction === "addFurigana"
+          ? "Adding furigana to Anki cards..."
+          : busyAction === "deleteRecording"
+            ? "Deleting selected recordings..."
+            : busyAction === "convertMp3"
+              ? "Converting recordings to MP3..."
+              : busyAction === "loadAnki"
+                ? "Loading Anki card data..."
+                : isSaving
                 ? "Finalizing the recording..."
                 : "Working...";
   const downloadIsActive =
@@ -1087,6 +1111,9 @@ function showSuccess(message: string) {
   );
   const selectedUntranslatedRecordings = selectedTranscribedRecordings.filter(
     (recording) => recording.translationPath === null,
+  );
+  const selectedFuriganaRecordings = selectedTranscribedRecordings.filter(
+    (recording) => recording.ankiNoteId !== null,
   );
   const convertibleRecordings = bootstrap.recentRecordings.filter(
     (recording) =>
@@ -1244,12 +1271,30 @@ function showSuccess(message: string) {
   async function startRecording() {
     try {
       setBusyAction("start");
+      setBootstrap((current) => ({
+        ...current,
+        shell: {
+          ...current.shell,
+          phase: "recording",
+          statusText: "Starting system audio capture...",
+          startedAtMs: Date.now(),
+          currentRecordingName: "Starting recording",
+          lastOutputPath: null,
+          lastTranscriptPath: null,
+          transitionCount: current.shell.transitionCount + 1,
+        },
+      }));
       await persistSettingsIfNeeded();
       const nextBootstrap = await invoke<AppBootstrap>("start_recording", {
         requestedName: null,
       });
       applyBootstrap(nextBootstrap);
     } catch (error) {
+      try {
+        applyBootstrap(await invoke<AppBootstrap>("get_app_bootstrap"));
+      } catch {
+        // Keep the original startup error visible if recovery snapshot loading fails.
+      }
       setLoadError(
         error instanceof Error
           ? error.message
@@ -1608,7 +1653,8 @@ function showSuccess(message: string) {
         result.status === "unavailable" ||
         result.status === "partial" ||
         message.toLowerCase().includes("anki is currently offline") ||
-        message.toLowerCase().includes("no cards were pushed")
+        message.toLowerCase().includes("no cards were pushed") ||
+        message.toLowerCase().includes("furigana was skipped")
       ) {
         showWarning(message);
       } else {
@@ -1625,6 +1671,38 @@ function showSuccess(message: string) {
       setLoadError(
         message,
       );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function addFuriganaToAnki(filePaths: string[]) {
+    try {
+      setBusyAction("addFurigana");
+      await persistSettingsIfNeeded();
+      const result = await invoke<RecordingBatchResult>("add_furigana_to_anki", {
+        filePaths,
+      });
+      applyBootstrap(result.bootstrap);
+      const message = formatBatchToastMessage("furigana", result);
+      setRecordingActionMessage(message);
+      if (result.status === "unavailable" || result.status === "partial") {
+        showWarning(message);
+      } else {
+        showSuccess(message);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Furigana could not be added to Anki cards.";
+      if (
+        message.toLowerCase().includes("anki") ||
+        message.toLowerCase().includes("furigana")
+      ) {
+        showWarning(message);
+      }
+      setLoadError(message);
     } finally {
       setBusyAction(null);
     }
@@ -2078,6 +2156,15 @@ function showSuccess(message: string) {
                             </DropdownMenuPrimitive.Content>
                           </DropdownMenuPrimitive.Portal>
                         </DropdownMenuPrimitive.Root>
+                        <button
+                          type="button"
+                          className="target-deck-pill target-deck-trigger"
+                          onClick={() => void refreshAnkiCatalog()}
+                          disabled={busyAction === "loadAnki"}
+                          title="Refresh Anki decks, note types, fields, and pushed-card status"
+                        >
+                          Refresh Anki
+                        </button>
                       </div>
                       <div className="recording-toolbar-actions">
                         {visibleSelectedPaths.length > 0 ? (
@@ -2190,6 +2277,29 @@ function showSuccess(message: string) {
                                       </DropdownMenuPrimitive.SubContent>
                                     </DropdownMenuPrimitive.Portal>
                                   </DropdownMenuPrimitive.Sub>
+                                ) : null}
+                                {selectedFuriganaRecordings.length > 0 ? (
+                                  <DropdownMenuPrimitive.Item
+                                    className="action-menu-item"
+                                    onSelect={() =>
+                                      void addFuriganaToAnki(
+                                        selectedFuriganaRecordings.map(
+                                          (recording) => recording.filePath,
+                                        ),
+                                      )
+                                    }
+                                    disabled={
+                                      !settingsDraft.anki.fields.furigana ||
+                                      busyAction === "addFurigana"
+                                    }
+                                  >
+                                    Add furigana
+                                    <span className="action-menu-meta">
+                                      {settingsDraft.anki.fields.furigana
+                                        ? selectedFuriganaRecordings.length
+                                        : "Map field"}
+                                    </span>
+                                  </DropdownMenuPrimitive.Item>
                                 ) : null}
                                 {selectedUntranslatedRecordings.length > 0 ? (
                                   <DropdownMenuPrimitive.Item
@@ -2348,6 +2458,9 @@ function showSuccess(message: string) {
                       const canPushToAnyDeck =
                         Boolean(recording.transcriptPath) &&
                         !recording.audioDeleted;
+                      const canAddFuriganaToCard =
+                        Boolean(recording.transcriptPath) &&
+                        recording.ankiNoteId !== null;
 
                       return (
                       <article
@@ -2546,6 +2659,26 @@ function showSuccess(message: string) {
                                         </DropdownMenuPrimitive.SubContent>
                                       </DropdownMenuPrimitive.Portal>
                                     </DropdownMenuPrimitive.Sub>
+                                    <DropdownMenuPrimitive.Item
+                                      className="action-menu-item"
+                                      onSelect={() =>
+                                        void addFuriganaToAnki([
+                                          recording.filePath,
+                                        ])
+                                      }
+                                      disabled={
+                                        !canAddFuriganaToCard ||
+                                        !settingsDraft.anki.fields.furigana ||
+                                        busyAction === "addFurigana"
+                                      }
+                                    >
+                                      Add furigana
+                                      {!settingsDraft.anki.fields.furigana ? (
+                                        <span className="action-menu-meta">
+                                          Map field
+                                        </span>
+                                      ) : null}
+                                    </DropdownMenuPrimitive.Item>
                                   </>
                                 ) : null}
                                 {recording.transcriptPath &&
@@ -3247,6 +3380,7 @@ function showSuccess(message: string) {
                             noteType,
                             fields: {
                               transcription: "",
+                              furigana: "",
                               audio: "",
                               translation: "",
                               sourcePath: "",
@@ -3262,6 +3396,7 @@ function showSuccess(message: string) {
                   </label>
 
                   {renderAnkiFieldSelect("transcription", "Transcript field")}
+                  {renderAnkiFieldSelect("furigana", "Furigana field")}
                   {renderAnkiFieldSelect("audio", "Audio field")}
                   {renderAnkiFieldSelect("translation", "Translation field")}
                   {renderAnkiFieldSelect("sourcePath", "Source path field")}
@@ -3269,11 +3404,12 @@ function showSuccess(message: string) {
                 </div>
 
                 <div className="update-card">
-                  <strong>Furigana support requires the Wonder of U Anki add-on.</strong>
+                  <strong>Recommended Basic-card mapping: Audio -&gt; Front, Transcript/Furigana -&gt; Back.</strong>
                   <p className="microcopy">
-                    Japanese furigana will come from our Anki add-on when it is
-                    installed. For now Wonder of U will detect the add-on by name;
-                    the Anki add-on ID will be added after we publish it.
+                    Push first to create the card with the recording on the
+                    front. Then use Add furigana to update the mapped furigana
+                    field with hover-to-show ruby text from the Wonder of U
+                    Anki add-on.
                   </p>
                 </div>
               </article>

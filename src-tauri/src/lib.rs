@@ -58,6 +58,8 @@ const RECOMMENDED_WHISPER_RUNTIME_FILE: &str = "whisper-bin-x64.zip";
 const RECOMMENDED_FFMPEG_RUNTIME_FILE: &str = "ffmpeg-master-latest-win64-gpl-shared.zip";
 const RECOMMENDED_FFMPEG_RUNTIME_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip";
 const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
+const ANKI_LOOKUP_FURIGANA_URL: &str = "http://127.0.0.1:8766/furigana";
+const ANKI_LOOKUP_TIMEOUT: Duration = Duration::from_millis(2500);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -160,6 +162,8 @@ impl Default for FeatureSettings {
 #[serde(rename_all = "camelCase")]
 struct AnkiFieldMapping {
     transcription: String,
+    #[serde(default)]
+    furigana: String,
     audio: String,
     translation: String,
     source_path: String,
@@ -433,6 +437,21 @@ struct RecordingBatchResult {
     bootstrap: AppBootstrap,
 }
 
+struct AnkiPushOutcome {
+    note_id: i64,
+    furigana_message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FuriganaBridgeResponse {
+    ok: bool,
+    #[serde(default)]
+    furigana_html: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 #[derive(Clone)]
 struct AppPathsState {
     data_dir: PathBuf,
@@ -633,6 +652,19 @@ async fn translate_recordings(
 }
 
 #[tauri::command]
+async fn add_furigana_to_anki(
+    app: AppHandle,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        add_furigana_to_anki_inner(&app_for_blocking, file_paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn transcribe_recordings(
     app: AppHandle,
     file_paths: Vec<String>,
@@ -817,6 +849,7 @@ fn normalize_settings<R: Runtime>(
             note_type: settings.anki.note_type.trim().to_string(),
             fields: AnkiFieldMapping {
                 transcription: settings.anki.fields.transcription.trim().to_string(),
+                furigana: settings.anki.fields.furigana.trim().to_string(),
                 audio: settings.anki.fields.audio.trim().to_string(),
                 translation: settings.anki.fields.translation.trim().to_string(),
                 source_path: settings.anki.fields.source_path.trim().to_string(),
@@ -1843,6 +1876,144 @@ fn anki_connect_request(
         .unwrap_or(serde_json::Value::Null))
 }
 
+fn anki_note_exists(note_id: i64) -> Result<bool, String> {
+    let result = anki_connect_request(
+        "notesInfo",
+        serde_json::json!({
+            "notes": [note_id]
+        }),
+    )?;
+
+    let Some(notes) = result.as_array() else {
+        return Ok(false);
+    };
+
+    Ok(notes.iter().any(|note| {
+        note.get("noteId")
+            .and_then(|value| value.as_i64())
+            .is_some_and(|candidate| candidate == note_id)
+    }))
+}
+
+fn clear_recording_anki_reference<R: Runtime>(
+    app: &AppHandle<R>,
+    file_path: &str,
+) -> Result<(), String> {
+    update_recent_recording(app, file_path, |recording| {
+        recording.anki_note_id = None;
+        recording.anki_deck_name = None;
+        recording.anki_note_type = None;
+    })
+}
+
+fn refresh_recording_anki_reference<R: Runtime>(
+    app: &AppHandle<R>,
+    mut recording: RecentRecording,
+) -> Result<RecentRecording, String> {
+    let Some(note_id) = recording.anki_note_id else {
+        return Ok(recording);
+    };
+
+    if anki_note_exists(note_id)? {
+        return Ok(recording);
+    }
+
+    clear_recording_anki_reference(app, &recording.file_path)?;
+    recording.anki_note_id = None;
+    recording.anki_deck_name = None;
+    recording.anki_note_type = None;
+    Ok(recording)
+}
+
+fn refresh_recent_anki_note_references<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let recordings_with_notes = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect pushed Anki cards.".to_string())?;
+        persisted
+            .recent_recordings
+            .iter()
+            .filter_map(|recording| {
+                recording
+                    .anki_note_id
+                    .map(|note_id| (recording.file_path.clone(), note_id))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut missing_file_paths = Vec::new();
+    for (file_path, note_id) in recordings_with_notes {
+        if !anki_note_exists(note_id)? {
+            missing_file_paths.push(file_path);
+        }
+    }
+
+    if missing_file_paths.is_empty() {
+        return Ok(());
+    }
+
+    let persisted_snapshot = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let mut persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not update pushed Anki card status.".to_string())?;
+        for recording in &mut persisted.recent_recordings {
+            if missing_file_paths
+                .iter()
+                .any(|file_path| file_path == &recording.file_path)
+            {
+                recording.anki_note_id = None;
+                recording.anki_deck_name = None;
+                recording.anki_note_type = None;
+            }
+        }
+        persisted.clone()
+    };
+
+    write_persisted_data(app, &persisted_snapshot)?;
+    emit_app_snapshot(app);
+    Ok(())
+}
+
+fn request_furigana_html(text: &str) -> Result<String, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(ANKI_LOOKUP_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let response_text = client
+        .post(ANKI_LOOKUP_FURIGANA_URL)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::json!({ "text": text }).to_string())
+        .send()
+        .map_err(|error| {
+            format!(
+                "Anki Lookup add-on is not running or did not respond. Open Anki with the Wonder of U/Anki Lookup add-on installed, then try again. {error}"
+            )
+        })?
+        .error_for_status()
+        .map_err(|error| {
+            format!("Anki Lookup add-on rejected the furigana request. {error}")
+        })?
+        .text()
+        .map_err(|error| format!("Anki Lookup add-on response could not be read. {error}"))?;
+    let response = serde_json::from_str::<FuriganaBridgeResponse>(&response_text)
+        .map_err(|error| format!("Anki Lookup add-on returned invalid furigana data. {error}"))?;
+
+    if response.ok {
+        response
+            .furigana_html
+            .ok_or_else(|| "Anki Lookup add-on did not return furigana HTML.".to_string())
+    } else {
+        Err(response
+            .error
+            .unwrap_or_else(|| "Anki Lookup add-on could not create furigana.".into()))
+    }
+}
+
 fn json_string_array(value: serde_json::Value) -> Vec<String> {
     value
         .as_array()
@@ -1882,6 +2053,15 @@ fn load_anki_catalog_inner<R: Runtime>(
             });
         }
     };
+
+    if let Err(error) = refresh_recent_anki_note_references(app) {
+        log_event(
+            app,
+            "WARN",
+            "anki.note_reference_refresh_failed",
+            serde_json::json!({ "message": error }),
+        );
+    }
 
     let mut decks = json_string_array(anki_connect_request("deckNames", serde_json::json!({}))?);
     let mut note_types =
@@ -2032,7 +2212,7 @@ fn push_single_recording_to_anki<R: Runtime>(
     app: &AppHandle<R>,
     recording: &RecentRecording,
     settings: &AnkiSettings,
-) -> Result<i64, String> {
+) -> Result<AnkiPushOutcome, String> {
     if settings.deck_name.is_empty() {
         return Err("Choose an Anki deck before pushing recordings.".into());
     }
@@ -2049,7 +2229,6 @@ fn push_single_recording_to_anki<R: Runtime>(
         .ok_or_else(|| "This recording does not have a transcript yet.".to_string())?;
     let transcript = fs::read_to_string(transcript_path)
         .map_err(|error| format!("Could not read transcript: {error}"))?;
-
     let audio_path = PathBuf::from(&recording.file_path);
     if !audio_path.exists() {
         return Err("The audio file is missing from disk.".into());
@@ -2128,7 +2307,10 @@ fn push_single_recording_to_anki<R: Runtime>(
         recording.anki_note_type = Some(settings.note_type.clone());
     })?;
 
-    Ok(note_id)
+    Ok(AnkiPushOutcome {
+        note_id,
+        furigana_message: None,
+    })
 }
 
 fn recording_pushed_to_anki_target(recording: &RecentRecording, settings: &AnkiSettings) -> bool {
@@ -2334,7 +2516,8 @@ fn transcribe_recordings_inner<R: Runtime>(
                 items.push(RecordingActionItem {
                     file_path: updated_recording.file_path,
                     status: "success".into(),
-                    message: "Transcript created. WAV audio was kept for transcription accuracy.".into(),
+                    message: "Transcript created. WAV audio was kept for transcription accuracy."
+                        .into(),
                     note_id: updated_recording.anki_note_id,
                 });
             }
@@ -2398,7 +2581,10 @@ fn push_recordings_to_anki_inner<R: Runtime>(
             .map_err(|_| "Could not read the Anki settings.".to_string())?;
         (
             persisted.settings.anki.clone(),
-            persisted.settings.features.delete_local_audio_after_anki_push,
+            persisted
+                .settings
+                .features
+                .delete_local_audio_after_anki_push,
         )
     };
     push_recordings_to_anki_with_settings_inner(
@@ -2427,7 +2613,10 @@ fn push_recordings_to_anki_deck_inner<R: Runtime>(
             .map_err(|_| "Could not read the Anki settings.".to_string())?;
         (
             persisted.settings.anki.clone(),
-            persisted.settings.features.delete_local_audio_after_anki_push,
+            persisted
+                .settings
+                .features
+                .delete_local_audio_after_anki_push,
         )
     };
     settings.deck_name = deck_name;
@@ -2471,6 +2660,21 @@ fn push_recordings_to_anki_with_settings_inner<R: Runtime>(
     }
 
     for recording in recordings {
+        let original_file_path = recording.file_path.clone();
+        let original_note_id = recording.anki_note_id;
+        let recording = match refresh_recording_anki_reference(app, recording) {
+            Ok(recording) => recording,
+            Err(error) => {
+                items.push(RecordingActionItem {
+                    file_path: original_file_path,
+                    status: "failed".into(),
+                    message: format!("Could not verify the existing Anki card: {error}"),
+                    note_id: original_note_id,
+                });
+                continue;
+            }
+        };
+
         if recording_pushed_to_anki_target(&recording, &settings) {
             items.push(RecordingActionItem {
                 file_path: recording.file_path,
@@ -2482,8 +2686,13 @@ fn push_recordings_to_anki_with_settings_inner<R: Runtime>(
         }
 
         match push_single_recording_to_anki(app, &recording, &settings) {
-            Ok(note_id) => {
+            Ok(outcome) => {
+                let note_id = outcome.note_id;
                 let mut message = format!("Created Anki note {note_id}.");
+                if let Some(furigana_message) = outcome.furigana_message {
+                    message.push(' ');
+                    message.push_str(&furigana_message);
+                }
                 if delete_local_audio_after_push {
                     match delete_local_audio_after_anki_push(app, &recording.file_path) {
                         Ok(()) => {
@@ -2529,6 +2738,162 @@ fn push_recordings_to_anki_with_settings_inner<R: Runtime>(
         items,
         bootstrap: build_app_bootstrap(app)?,
     })
+}
+
+fn add_furigana_to_anki_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not read the Anki settings.".to_string())?;
+        persisted.settings.anki.clone()
+    };
+
+    if settings.fields.furigana.is_empty() {
+        return Err("Map an Anki field for furigana before updating existing cards.".into());
+    }
+
+    let recordings = selected_recordings(app, file_paths)?;
+    let mut items = Vec::new();
+
+    if let Err(error) = anki_connect_request("version", serde_json::json!({})) {
+        let message = anki_offline_message(&error);
+        update_shell_snapshot(app, |shell| {
+            shell.status_text = message.clone();
+            shell.transition_count += 1;
+        })?;
+        return Ok(RecordingBatchResult {
+            status: "unavailable".into(),
+            message,
+            items: recordings
+                .into_iter()
+                .map(|recording| RecordingActionItem {
+                    file_path: recording.file_path,
+                    status: "failed".into(),
+                    message: "Anki is currently offline.".into(),
+                    note_id: recording.anki_note_id,
+                })
+                .collect(),
+            bootstrap: build_app_bootstrap(app)?,
+        });
+    }
+
+    for recording in recordings {
+        let file_path = recording.file_path.clone();
+        match add_furigana_to_single_anki_card(app, recording, &settings) {
+            Ok(note_id) => items.push(RecordingActionItem {
+                file_path,
+                status: "success".into(),
+                message: format!("Updated Anki note {note_id} with furigana."),
+                note_id: Some(note_id),
+            }),
+            Err((file_path, note_id, error)) => items.push(RecordingActionItem {
+                file_path,
+                status: "failed".into(),
+                message: error,
+                note_id,
+            }),
+        }
+    }
+
+    let success_count = items.iter().filter(|item| item.status == "success").count();
+    let failed_count = items.iter().filter(|item| item.status == "failed").count();
+    let message =
+        format!("Furigana update finished: {success_count} updated, {failed_count} failed.");
+
+    update_shell_snapshot(app, |shell| {
+        shell.status_text = message.clone();
+        shell.transition_count += 1;
+    })?;
+
+    Ok(RecordingBatchResult {
+        status: if failed_count == 0 {
+            "completed"
+        } else {
+            "partial"
+        }
+        .into(),
+        message,
+        items,
+        bootstrap: build_app_bootstrap(app)?,
+    })
+}
+
+fn add_furigana_to_single_anki_card<R: Runtime>(
+    app: &AppHandle<R>,
+    recording: RecentRecording,
+    settings: &AnkiSettings,
+) -> Result<i64, (String, Option<i64>, String)> {
+    let file_path = recording.file_path.clone();
+    let note_id = recording.anki_note_id;
+
+    let Some(note_id) = note_id else {
+        return Err((
+            file_path,
+            None,
+            "Push this recording to Anki before adding furigana.".into(),
+        ));
+    };
+
+    let recording = refresh_recording_anki_reference(app, recording).map_err(|error| {
+        (
+            file_path.clone(),
+            Some(note_id),
+            format!("Could not verify the existing Anki card: {error}"),
+        )
+    })?;
+    if recording.anki_note_id.is_none() {
+        return Err((
+            file_path,
+            Some(note_id),
+            "The Anki card was deleted. Push this recording again before adding furigana.".into(),
+        ));
+    }
+
+    let transcript_path = recording.transcript_path.as_deref().ok_or_else(|| {
+        (
+            file_path.clone(),
+            Some(note_id),
+            "Transcribe this recording before adding furigana.".into(),
+        )
+    })?;
+    let transcript = fs::read_to_string(transcript_path).map_err(|error| {
+        (
+            file_path.clone(),
+            Some(note_id),
+            format!("Could not read transcript: {error}"),
+        )
+    })?;
+    let furigana_html = request_furigana_html(&transcript)
+        .map_err(|error| (file_path.clone(), Some(note_id), error))?;
+
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        settings.fields.furigana.clone(),
+        serde_json::Value::String(furigana_html),
+    );
+    anki_connect_request(
+        "updateNoteFields",
+        serde_json::json!({
+            "note": {
+                "id": note_id,
+                "fields": fields
+            }
+        }),
+    )
+    .map_err(|error| {
+        (
+            file_path,
+            Some(note_id),
+            user_friendly_anki_error(&error, settings),
+        )
+    })?;
+
+    Ok(note_id)
 }
 
 fn convert_recordings_to_mp3_inner<R: Runtime>(
@@ -3357,6 +3722,15 @@ fn start_recording_inner<R: Runtime>(
     };
 
     write_persisted_data(app, &persisted_snapshot)?;
+    update_shell_snapshot(app, |shell| {
+        shell.phase = "recording".into();
+        shell.status_text = format!("Starting system audio capture to {}", output_path.display());
+        shell.started_at_ms = Some(started_at_ms);
+        shell.current_recording_name = Some(display_name.clone());
+        shell.last_output_path = None;
+        shell.last_transcript_path = None;
+        shell.transition_count += 1;
+    })?;
 
     let stop_signal = Arc::new(AtomicBool::new(false));
     let log_path = app.state::<AppPathsState>().inner().log_file.clone();
@@ -3374,7 +3748,17 @@ fn start_recording_inner<R: Runtime>(
                 started_at_ms,
             )
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            let message = error.to_string();
+            let _ = update_shell_snapshot(app, |shell| {
+                shell.phase = "error".into();
+                shell.status_text = message.clone();
+                shell.started_at_ms = None;
+                shell.current_recording_name = None;
+                shell.transition_count += 1;
+            });
+            message
+        })?;
 
     {
         let recorder_state = app.state::<RecorderState>();
@@ -4665,6 +5049,7 @@ pub fn run() {
             delete_recordings,
             push_recordings_to_anki,
             push_recordings_to_anki_deck,
+            add_furigana_to_anki,
             translate_recordings,
             transcribe_recordings,
             convert_recordings_to_mp3,
