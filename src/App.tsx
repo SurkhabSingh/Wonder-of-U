@@ -1,7 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import * as AccordionPrimitive from "@radix-ui/react-accordion";
+import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
+import * as SelectPrimitive from "@radix-ui/react-select";
+import * as TabsPrimitive from "@radix-ui/react-tabs";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { Toaster, toast } from "sonner";
 
 type RecorderPhase =
   | "idle"
@@ -31,6 +37,8 @@ type ShellSnapshot = {
 
 type FeatureSettings = {
   transcription: boolean;
+  deleteLocalAudioAfterAnkiPush: boolean;
+  allowMp3Conversion: boolean;
 };
 
 type AnkiFieldMapping = {
@@ -76,6 +84,7 @@ type RecentRecording = {
   ankiNoteId: number | null;
   ankiDeckName: string | null;
   ankiNoteType: string | null;
+  audioDeleted: boolean;
   durationMs: number;
   bytesWritten: number;
   createdAtMs: number;
@@ -170,20 +179,30 @@ type BusyAction =
   | "pushAnki"
   | "translateRecording"
   | "transcribeRecording"
+  | "convertMp3"
   | null;
 
 type AutosaveState = "idle" | "saving" | "error";
-type AppWarning = {
-  id: number;
-  message: string;
-};
-type AppTab = "recorder" | "settings";
+type AppPage =
+  | "recorder"
+  | "recordings"
+  | "preferences"
+  | "whisper"
+  | "runtime"
+  | "model"
+  | "storage"
+  | "anki";
 type RecordingFilter =
   | "all"
   | "needsTranscription"
   | "needsAnki"
   | "needsTranslation"
   | "complete";
+
+type SelectOption = {
+  value: string;
+  label: string;
+};
 
 const MODEL_OPTIONS = [
   {
@@ -330,6 +349,8 @@ const LANGUAGE_OPTIONS = [
 ] as const;
 
 const APP_SNAPSHOT_EVENT = "app://snapshot-changed";
+const MP3_CONVERSION_WARNING =
+  "MP3 reduces file size but uses lossy compression, so audio quality may be lower. Existing Anki cards are not affected.";
 const DEFAULT_BOOTSTRAP: AppBootstrap = {
   shell: {
     phase: "idle",
@@ -370,6 +391,8 @@ const DEFAULT_BOOTSTRAP: AppBootstrap = {
     },
     features: {
       transcription: true,
+      deleteLocalAudioAfterAnkiPush: false,
+      allowMp3Conversion: false,
     },
     theme: "system",
     launchAtLogin: false,
@@ -474,6 +497,10 @@ function fileNameFromPath(path: string | null): string {
   return segments[segments.length - 1] ?? path;
 }
 
+function pathHasExtension(path: string, extension: string): boolean {
+  return path.toLowerCase().endsWith(`.${extension.toLowerCase()}`);
+}
+
 function normalizeSelection(
   selection: string | string[] | null,
 ): string | null {
@@ -507,9 +534,106 @@ function TooltipBadge({
   description: string;
 }) {
   return (
-    <span className="tooltip-badge" title={description} aria-label={description}>
-      {label}
-    </span>
+    <TooltipPrimitive.Root>
+      <TooltipPrimitive.Trigger asChild>
+        <span className="tooltip-badge" aria-label={description}>
+          {label}
+        </span>
+      </TooltipPrimitive.Trigger>
+      <TooltipPrimitive.Portal>
+        <TooltipPrimitive.Content className="themed-tooltip-content" sideOffset={7}>
+          {description}
+          <TooltipPrimitive.Arrow className="themed-tooltip-arrow" />
+        </TooltipPrimitive.Content>
+      </TooltipPrimitive.Portal>
+    </TooltipPrimitive.Root>
+  );
+}
+
+function TooltipWrap({
+  description,
+  children,
+}: {
+  description: string;
+  children: ReactElement;
+}) {
+  return (
+    <TooltipPrimitive.Root>
+      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
+      <TooltipPrimitive.Portal>
+        <TooltipPrimitive.Content className="themed-tooltip-content" sideOffset={7}>
+          {description}
+          <TooltipPrimitive.Arrow className="themed-tooltip-arrow" />
+        </TooltipPrimitive.Content>
+      </TooltipPrimitive.Portal>
+    </TooltipPrimitive.Root>
+  );
+}
+
+const EMPTY_SELECT_VALUE = "__wonder_of_u_empty__";
+
+function toRadixSelectValue(value: string): string {
+  return value === "" ? EMPTY_SELECT_VALUE : value;
+}
+
+function fromRadixSelectValue(value: string): string {
+  return value === EMPTY_SELECT_VALUE ? "" : value;
+}
+
+function ThemedSelect({
+  value,
+  options,
+  onChange,
+  placeholder = "Select option",
+  disabled = false,
+  title,
+}: {
+  value: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <SelectPrimitive.Root
+      value={toRadixSelectValue(value)}
+      onValueChange={(nextValue) => onChange(fromRadixSelectValue(nextValue))}
+      disabled={disabled}
+    >
+      <SelectPrimitive.Trigger
+        className="themed-select-trigger"
+        title={title}
+        aria-label={placeholder}
+      >
+        <SelectPrimitive.Value placeholder={placeholder} />
+        <SelectPrimitive.Icon className="themed-select-icon" aria-hidden="true">
+          ▾
+        </SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Content
+          className="themed-select-content"
+          position="popper"
+          sideOffset={6}
+        >
+          <SelectPrimitive.Viewport className="themed-select-viewport">
+            {options.map((option) => (
+              <SelectPrimitive.Item
+                key={`${option.value}:${option.label}`}
+                className="themed-select-item"
+                value={toRadixSelectValue(option.value)}
+              >
+                <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+                <SelectPrimitive.ItemIndicator className="themed-select-check">
+                  ✓
+                </SelectPrimitive.ItemIndicator>
+              </SelectPrimitive.Item>
+            ))}
+          </SelectPrimitive.Viewport>
+        </SelectPrimitive.Content>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
   );
 }
 
@@ -527,9 +651,8 @@ function App() {
     "Changes save automatically.",
   );
   const [loadError, setLoadError] = useState("");
-  const [appWarning, setAppWarning] = useState<AppWarning | null>(null);
   const [clockMs, setClockMs] = useState(() => Date.now());
-  const [activeTab, setActiveTab] = useState<AppTab>("recorder");
+  const [activePage, setActivePage] = useState<AppPage>("recorder");
   const [runtimeUpdateResult, setRuntimeUpdateResult] =
     useState<WhisperAssetUpdateResult | null>(null);
   const [modelUpdateResult, setModelUpdateResult] =
@@ -539,8 +662,12 @@ function App() {
   const [recordingActionMessage, setRecordingActionMessage] = useState("");
   const [selectedRecordings, setSelectedRecordings] = useState<string[]>([]);
   const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
+  const [openRecordingMenuPath, setOpenRecordingMenuPath] = useState<string | null>(
+    null,
+  );
   const settingsDirtyRef = useRef(false);
   const currentDraftKeyRef = useRef("");
+  const ankiAutoRefreshInFlightRef = useRef(false);
 
   const settingsDraftKey = useMemo(
     () => JSON.stringify(settingsDraft),
@@ -558,20 +685,6 @@ function App() {
     settingsDirtyRef.current = settingsDirty;
     currentDraftKeyRef.current = settingsDraftKey;
   }, [settingsDirty, settingsDraftKey]);
-
-  useEffect(() => {
-    if (!appWarning) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setAppWarning((current) =>
-        current?.id === appWarning.id ? null : current,
-      );
-    }, 5000);
-
-    return () => window.clearTimeout(timer);
-  }, [appWarning]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -604,7 +717,81 @@ function App() {
   }
 
   function showWarning(message: string) {
-    setAppWarning({ id: Date.now(), message });
+    toast.warning(message, { duration: 5000 });
+  }
+
+function showSuccess(message: string) {
+    toast.success(message, { duration: 3500 });
+  }
+
+  function mergeSavedAnkiSettingsIntoCatalog(catalog: AnkiCatalog): AnkiCatalog {
+    const savedFields = Object.values(settingsDraft.anki.fields).filter(Boolean);
+    return {
+      ...catalog,
+      decks: Array.from(
+        new Set([
+          ...(settingsDraft.anki.deckName ? [settingsDraft.anki.deckName] : []),
+          ...catalog.decks,
+        ]),
+      ),
+      noteTypes: Array.from(
+        new Set([
+          ...(settingsDraft.anki.noteType ? [settingsDraft.anki.noteType] : []),
+          ...catalog.noteTypes,
+        ]),
+      ),
+      fields: Array.from(new Set([...savedFields, ...catalog.fields])),
+      message:
+        catalog.status === "idle" &&
+        (settingsDraft.anki.deckName || settingsDraft.anki.noteType)
+          ? "Using your saved Anki mapping. Refresh only if you changed decks, note types, or fields in Anki."
+          : catalog.message,
+    };
+  }
+
+  function formatBatchToastMessage(
+    action: "transcribe" | "translate" | "delete" | "anki" | "convert",
+    result: RecordingBatchResult,
+  ): string {
+    const successCount = result.items.filter((item) => item.status === "success").length;
+    const skippedCount = result.items.filter((item) => item.status === "skipped").length;
+    const failedItems = result.items.filter((item) => item.status === "failed");
+    const failedCount = failedItems.length;
+    const firstFailure = failedItems[0]?.message;
+
+    if (action === "anki") {
+      if (failedCount > 0 && successCount === 0) {
+        return firstFailure
+          ? `No cards were pushed to Anki. ${firstFailure}`
+          : "No cards were pushed to Anki.";
+      }
+      if (failedCount > 0) {
+        return `${successCount} card${successCount === 1 ? "" : "s"} pushed to Anki. ${failedCount} failed: ${firstFailure ?? "check the saved recordings list."}`;
+      }
+      if (successCount === 0 && skippedCount > 0) {
+        return `${skippedCount} card${skippedCount === 1 ? " is" : "s are"} already in the selected Anki deck.`;
+      }
+      return `${successCount} card${successCount === 1 ? "" : "s"} pushed to Anki.`;
+    }
+
+    if (action === "convert") {
+      if (failedCount > 0 && successCount === 0) {
+        return firstFailure ?? "No recordings were converted to MP3.";
+      }
+      if (failedCount > 0) {
+        return `${successCount} recording${successCount === 1 ? "" : "s"} converted to MP3. ${failedCount} failed.`;
+      }
+      if (successCount === 0 && skippedCount > 0) {
+        return `${skippedCount} recording${skippedCount === 1 ? " was" : "s were"} skipped. Only transcribed WAV recordings can be converted.`;
+      }
+      return `${successCount} recording${successCount === 1 ? "" : "s"} converted to MP3.`;
+    }
+
+    if (failedCount > 0 && successCount === 0) {
+      return firstFailure ?? result.message;
+    }
+
+    return result.message;
   }
 
   useEffect(() => {
@@ -732,6 +919,35 @@ function App() {
     settingsDraft.whisper.modelPath,
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshWhenAnkiIsAvailable() {
+      if (cancelled || ankiAutoRefreshInFlightRef.current) {
+        return;
+      }
+
+      ankiAutoRefreshInFlightRef.current = true;
+      try {
+        await refreshAnkiCatalog(undefined, {
+          skipPersist: true,
+          silent: true,
+          suppressErrors: true,
+        });
+      } finally {
+        ankiAutoRefreshInFlightRef.current = false;
+      }
+    }
+
+    void refreshWhenAnkiIsAvailable();
+    const interval = window.setInterval(refreshWhenAnkiIsAvailable, 10000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [settingsDraft.anki.noteType]);
+
   const elapsedRecordingMs =
     bootstrap.shell.startedAtMs !== null &&
     (bootstrap.shell.phase === "recording" || bootstrap.shell.phase === "saving")
@@ -748,12 +964,30 @@ function App() {
     busyAction === "start" ||
     busyAction === "stop" ||
     busyAction === "transcribeRecording";
-  const showBusyOverlay = isSaving || isTranscribing;
-  const busyOverlayLabel = isTranscribing
-    ? "Transcribing the saved recording..."
-    : isSaving
-      ? "Finalizing the recording..."
-      : "";
+  const showBusyOverlay =
+    isSaving ||
+    isTranscribing ||
+    busyAction === "transcribeRecording" ||
+    busyAction === "translateRecording" ||
+    busyAction === "pushAnki" ||
+    busyAction === "deleteRecording" ||
+    busyAction === "loadAnki" ||
+    busyAction === "convertMp3";
+  const busyOverlayLabel = isTranscribing || busyAction === "transcribeRecording"
+    ? "Transcribing saved audio..."
+    : busyAction === "translateRecording"
+      ? "Translating transcript..."
+      : busyAction === "pushAnki"
+        ? "Pushing cards to Anki..."
+        : busyAction === "deleteRecording"
+          ? "Deleting selected recordings..."
+          : busyAction === "convertMp3"
+            ? "Converting recordings to MP3..."
+            : busyAction === "loadAnki"
+              ? "Loading Anki card data..."
+              : isSaving
+                ? "Finalizing the recording..."
+                : "Working...";
   const downloadIsActive =
     bootstrap.modelDownload.status === "starting" ||
     bootstrap.modelDownload.status === "downloading" ||
@@ -801,12 +1035,20 @@ function App() {
   const untranscribedRecordings = bootstrap.recentRecordings.filter(
     (recording) => !recording.transcriptPath,
   );
-  const recordingPushedToCurrentAnkiTarget = (recording: RecentRecording) =>
+  const recordingPushedToDeck = (recording: RecentRecording, deckName: string) =>
     recording.ankiNoteId !== null &&
-    recording.ankiDeckName === settingsDraft.anki.deckName &&
-    recording.ankiNoteType === settingsDraft.anki.noteType;
+    recording.ankiDeckName !== null &&
+    recording.ankiDeckName === deckName;
+  const recordingPushableToDeck = (recording: RecentRecording, deckName: string) =>
+    deckName.trim().length > 0 &&
+    Boolean(recording.transcriptPath) &&
+    !recording.audioDeleted &&
+    !recordingPushedToDeck(recording, deckName);
+  const recordingPushedToCurrentAnkiDeck = (recording: RecentRecording) =>
+    recordingPushedToDeck(recording, settingsDraft.anki.deckName);
   const pushableRecordings = transcribedRecordings.filter(
-    (recording) => !recordingPushedToCurrentAnkiTarget(recording),
+    (recording) =>
+      !recording.audioDeleted && !recordingPushedToCurrentAnkiDeck(recording),
   );
   const untranslatedRecordings = transcribedRecordings.filter(
     (recording) => recording.translationPath === null,
@@ -814,7 +1056,7 @@ function App() {
   const completeRecordings = bootstrap.recentRecordings.filter(
     (recording) =>
       Boolean(recording.transcriptPath) &&
-      recordingPushedToCurrentAnkiTarget(recording) &&
+      recordingPushedToCurrentAnkiDeck(recording) &&
       recording.translationPath !== null,
   );
   const visibleRecordings =
@@ -833,17 +1075,30 @@ function App() {
   const visibleSelectedPaths = visibleSelectedRecordings.map(
     (recording) => recording.filePath,
   );
+  const useBatchActionsOnly = visibleSelectedPaths.length > 1;
   const selectedTranscribedRecordings = visibleSelectedRecordings.filter(
     (recording) => recording.transcriptPath,
   );
   const selectedPushableRecordings = selectedTranscribedRecordings.filter(
-    (recording) => !recordingPushedToCurrentAnkiTarget(recording),
+    (recording) => recordingPushableToDeck(recording, settingsDraft.anki.deckName),
   );
   const selectedUntranscribedRecordings = visibleSelectedRecordings.filter(
     (recording) => !recording.transcriptPath,
   );
   const selectedUntranslatedRecordings = selectedTranscribedRecordings.filter(
     (recording) => recording.translationPath === null,
+  );
+  const convertibleRecordings = bootstrap.recentRecordings.filter(
+    (recording) =>
+      !recording.audioDeleted &&
+      recording.transcriptPath !== null &&
+      pathHasExtension(recording.filePath, "wav"),
+  );
+  const selectedConvertibleRecordings = visibleSelectedRecordings.filter(
+    (recording) =>
+      !recording.audioDeleted &&
+      recording.transcriptPath !== null &&
+      pathHasExtension(recording.filePath, "wav"),
   );
   const recordingFilterTabs: Array<{
     id: RecordingFilter;
@@ -864,6 +1119,61 @@ function App() {
     },
     { id: "complete", label: "Complete", count: completeRecordings.length },
   ];
+  const displayedAnkiCatalog = mergeSavedAnkiSettingsIntoCatalog(ankiCatalog);
+  const configuredAnkiDeckLabel =
+    settingsDraft.anki.deckName.trim() || "No deck selected";
+  const availableAnkiDecks = displayedAnkiCatalog.decks.filter(
+    (deck) => deck.trim().length > 0,
+  );
+  const configuredDeckMenuOptions = availableAnkiDecks.length > 0
+    ? availableAnkiDecks
+    : settingsDraft.anki.deckName
+      ? [settingsDraft.anki.deckName]
+      : [];
+  const selectedRecordingsPushableToDeck = (deckName: string) =>
+    selectedTranscribedRecordings.filter((recording) =>
+      recordingPushableToDeck(recording, deckName),
+    );
+  const workflowPages: Array<{ id: AppPage; label: string; description: string }> = [
+    { id: "recorder", label: "Recorder", description: "Capture system audio" },
+    {
+      id: "recordings",
+      label: "Saved Recordings",
+      description: `${bootstrap.recentRecordings.length} local item${
+        bootstrap.recentRecordings.length === 1 ? "" : "s"
+      }`,
+    },
+  ];
+  const setupPages: Array<{ id: AppPage; label: string; description: string }> = [
+    { id: "preferences", label: "App Preferences", description: "Theme and folders" },
+    {
+      id: "whisper",
+      label: "Whisper Status",
+      description: whisperStatusLabel(bootstrap.whisperDetection.status),
+    },
+    { id: "runtime", label: "Whisper CLI", description: activeRuntimeVersion },
+    { id: "model", label: "Whisper Model", description: selectedModel.label },
+    {
+      id: "storage",
+      label: "MP3 Compression",
+      description:
+        bootstrap.ffmpegDetection.status === "ready" ? "FFmpeg ready" : "FFmpeg missing",
+    },
+    {
+      id: "anki",
+      label: "Anki Mapping",
+      description: displayedAnkiCatalog.status === "ready" ? "Connected" : "Saved mapping",
+    },
+  ];
+  const activePageLabel =
+    [...workflowPages, ...setupPages].find((page) => page.id === activePage)?.label ??
+    "Recorder";
+
+  useEffect(() => {
+    if (useBatchActionsOnly) {
+      setOpenRecordingMenuPath(null);
+    }
+  }, [useBatchActionsOnly]);
 
   function updateSettings(
     update: Partial<Omit<AppSettings, "features" | "whisper" | "anki">> & {
@@ -991,7 +1301,7 @@ function App() {
         { runtimeVersion },
       );
       applyBootstrap(nextBootstrap);
-      setActiveTab("settings");
+      setActivePage("runtime");
     } catch (error) {
       setLoadError(
         error instanceof Error
@@ -1014,7 +1324,7 @@ function App() {
         "download_recommended_ffmpeg",
       );
       applyBootstrap(nextBootstrap);
-      setActiveTab("settings");
+      setActivePage("storage");
     } catch (error) {
       setLoadError(
         error instanceof Error ? error.message : "FFmpeg could not be prepared.",
@@ -1033,7 +1343,7 @@ function App() {
         "download_recommended_whisper_model",
       );
       applyBootstrap(nextBootstrap);
-      setActiveTab("settings");
+      setActivePage("model");
     } catch (error) {
       setLoadError(
         error instanceof Error
@@ -1181,22 +1491,33 @@ function App() {
     setSelectedRecordings([]);
   }
 
-  async function refreshAnkiCatalog(noteType?: string) {
+  async function refreshAnkiCatalog(
+    noteType?: string,
+    options?: { silent?: boolean; skipPersist?: boolean; suppressErrors?: boolean },
+  ) {
     try {
-      setBusyAction("loadAnki");
-      await persistSettingsIfNeeded();
+      if (!options?.silent) {
+        setBusyAction("loadAnki");
+      }
+      if (!options?.skipPersist) {
+        await persistSettingsIfNeeded();
+      }
       const catalog = await invoke<AnkiCatalog>("load_anki_catalog", {
         noteType: (noteType ?? settingsDraft.anki.noteType) || null,
       });
       setAnkiCatalog(catalog);
     } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The Anki catalog could not be loaded.",
-      );
+      if (!options?.suppressErrors) {
+        setLoadError(
+          error instanceof Error
+            ? error.message
+            : "The Anki catalog could not be loaded.",
+        );
+      }
     } finally {
-      setBusyAction(null);
+      if (!options?.silent) {
+        setBusyAction(null);
+      }
     }
   }
 
@@ -1214,6 +1535,13 @@ function App() {
   }
 
   async function deleteRecording(filePath: string) {
+    const confirmed = window.confirm(
+      "Delete this saved recording from Wonder of U? This removes the local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
     try {
       setBusyAction("deleteRecording");
       const nextBootstrap = await invoke<AppBootstrap>("delete_recording", {
@@ -1221,6 +1549,7 @@ function App() {
       });
       applyBootstrap(nextBootstrap);
       setRecordingActionMessage("Recording deleted.");
+      showSuccess("Recording deleted.");
     } catch (error) {
       setLoadError(
         error instanceof Error ? error.message : "The recording could not be deleted.",
@@ -1238,7 +1567,7 @@ function App() {
     const confirmed = window.confirm(
       `Delete ${filePaths.length} selected recording${
         filePaths.length === 1 ? "" : "s"
-      } and their transcript files?`,
+      } from Wonder of U? This removes local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.`,
     );
     if (!confirmed) {
       return;
@@ -1251,6 +1580,7 @@ function App() {
       });
       applyBootstrap(result.bootstrap);
       setRecordingActionMessage(result.message);
+      showSuccess(result.message);
     } catch (error) {
       setLoadError(
         error instanceof Error
@@ -1262,21 +1592,27 @@ function App() {
     }
   }
 
-  async function pushRecordingsToAnki(filePaths: string[]) {
+  async function pushRecordingsToAnki(filePaths: string[], deckName?: string) {
     try {
       setBusyAction("pushAnki");
       await persistSettingsIfNeeded();
+      const targetDeck = deckName?.trim();
       const result = await invoke<RecordingBatchResult>(
-        "push_recordings_to_anki",
-        { filePaths },
+        targetDeck ? "push_recordings_to_anki_deck" : "push_recordings_to_anki",
+        targetDeck ? { filePaths, deckName: targetDeck } : { filePaths },
       );
       applyBootstrap(result.bootstrap);
-      setRecordingActionMessage(result.message);
+      const message = formatBatchToastMessage("anki", result);
+      setRecordingActionMessage(message);
       if (
         result.status === "unavailable" ||
-        result.message.toLowerCase().includes("anki is currently offline")
+        result.status === "partial" ||
+        message.toLowerCase().includes("anki is currently offline") ||
+        message.toLowerCase().includes("no cards were pushed")
       ) {
-        showWarning(result.message);
+        showWarning(message);
+      } else {
+        showSuccess(message);
       }
     } catch (error) {
       const message =
@@ -1302,7 +1638,9 @@ function App() {
         filePaths,
       });
       applyBootstrap(result.bootstrap);
-      setRecordingActionMessage(result.message);
+      const message = formatBatchToastMessage("transcribe", result);
+      setRecordingActionMessage(message);
+      showSuccess(message);
     } catch (error) {
       setLoadError(
         error instanceof Error
@@ -1321,13 +1659,50 @@ function App() {
         filePaths,
       });
       applyBootstrap(result.bootstrap);
-      setRecordingActionMessage(result.message);
+      const message = formatBatchToastMessage("translate", result);
+      setRecordingActionMessage(message);
+      showSuccess(message);
     } catch (error) {
       setLoadError(
         error instanceof Error
           ? error.message
           : "The translation request could not be completed.",
       );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function convertRecordingsToMp3(filePaths: string[]) {
+    const confirmed = window.confirm(
+      `Convert ${filePaths.length} recording${
+        filePaths.length === 1 ? "" : "s"
+      } to MP3? Wonder of U will keep the transcript/history, create MP3 files, and remove the original local WAV files after conversion succeeds. Existing Anki cards are not affected.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setBusyAction("convertMp3");
+      const result = await invoke<RecordingBatchResult>("convert_recordings_to_mp3", {
+        filePaths,
+      });
+      applyBootstrap(result.bootstrap);
+      const message = formatBatchToastMessage("convert", result);
+      setRecordingActionMessage(message);
+      if (result.status === "partial") {
+        showWarning(message);
+      } else {
+        showSuccess(message);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "The selected recordings could not be converted to MP3.";
+      showWarning(message);
+      setLoadError(message);
     } finally {
       setBusyAction(null);
     }
@@ -1422,93 +1797,128 @@ function App() {
 
   function renderAnkiFieldSelect(field: keyof AnkiFieldMapping, label: string) {
     const currentValue = settingsDraft.anki.fields[field];
-    const fieldOptions = ankiCatalog.fields;
+    const fieldOptions = displayedAnkiCatalog.fields;
+    const options: SelectOption[] = [
+      { value: "", label: "Not mapped" },
+      ...(currentValue && !fieldOptions.includes(currentValue)
+        ? [{ value: currentValue, label: currentValue }]
+        : []),
+      ...fieldOptions.map((fieldName) => ({
+        value: fieldName,
+        label: fieldName,
+      })),
+    ];
 
     return (
       <label className="field">
         <span>{label}</span>
-        <select
+        <ThemedSelect
           value={currentValue}
-          onChange={(event) =>
+          options={options}
+          placeholder="Not mapped"
+          onChange={(nextValue) =>
             updateSettings({
               anki: {
                 fields: {
-                  [field]: event.currentTarget.value,
+                  [field]: nextValue,
                 },
               },
             })
           }
-        >
-          <option value="">Not mapped</option>
-          {currentValue && !fieldOptions.includes(currentValue) ? (
-            <option value={currentValue}>{currentValue}</option>
-          ) : null}
-          {fieldOptions.map((fieldName) => (
-            <option key={fieldName} value={fieldName}>
-              {fieldName}
-            </option>
-          ))}
-        </select>
+        />
       </label>
     );
   }
 
   return (
     <main className="app-shell">
-      <nav className="tab-strip" aria-label="Sections">
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "recorder" ? "active" : ""}`}
-          onClick={() => setActiveTab("recorder")}
-          aria-pressed={activeTab === "recorder"}
-        >
-          Recorder
-        </button>
-        <button
-          type="button"
-          className={`tab-button ${activeTab === "settings" ? "active" : ""}`}
-          onClick={() => setActiveTab("settings")}
-          aria-pressed={activeTab === "settings"}
-        >
-          Settings
-        </button>
-      </nav>
+      <TooltipPrimitive.Provider delayDuration={180}>
+        <Toaster
+          position="top-right"
+          richColors
+          closeButton
+          toastOptions={{
+            className: "app-toast",
+          }}
+        />
 
       {loadError ? (
         <section className="banner banner-error">{loadError}</section>
       ) : null}
 
-      {appWarning ? (
-        <section className="warning-toast" role="alert">
-          <div>
-            <strong>Warning</strong>
-            <p>{appWarning.message}</p>
-          </div>
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => setAppWarning(null)}
-            aria-label="Dismiss warning"
-          >
-            Close
-          </button>
-        </section>
-      ) : null}
-
       {showBusyOverlay ? (
-        <section className="busy-panel">
-          <div className="busy-spinner" aria-hidden="true" />
-          <div>
-            <p className="panel-kicker">Working</p>
-            <strong>{busyOverlayLabel}</strong>
-            <p className="microcopy">{bootstrap.shell.statusText}</p>
+        <section className="busy-overlay" role="status" aria-live="polite">
+          <div className="busy-panel">
+            <div className="busy-spinner" aria-hidden="true" />
+            <div>
+              <p className="panel-kicker">Working</p>
+              <strong>{busyOverlayLabel}</strong>
+              <p className="microcopy">{bootstrap.shell.statusText}</p>
+            </div>
           </div>
         </section>
       ) : null}
 
       <section className="workspace">
-        <section className="content-column">
-          {activeTab === "recorder" ? (
+        <section className="app-layout">
+          <aside className="page-sidebar" aria-label="Application sections">
+            <div className="sidebar-title">
+              <p className="panel-kicker">Wonder of U</p>
+              <strong>{activePageLabel}</strong>
+            </div>
+            <AccordionPrimitive.Root
+              type="multiple"
+              defaultValue={["workflow", "setup"]}
+              className="page-accordion"
+            >
+              <AccordionPrimitive.Item value="workflow" className="page-accordion-item">
+                <AccordionPrimitive.Header>
+                  <AccordionPrimitive.Trigger className="page-accordion-trigger">
+                    Workflow
+                    <span aria-hidden="true">⌄</span>
+                  </AccordionPrimitive.Trigger>
+                </AccordionPrimitive.Header>
+                <AccordionPrimitive.Content className="page-accordion-content">
+                  {workflowPages.map((page) => (
+                    <button
+                      key={page.id}
+                      type="button"
+                      className={`page-link ${activePage === page.id ? "active" : ""}`}
+                      onClick={() => setActivePage(page.id)}
+                    >
+                      <span>{page.label}</span>
+                      <small>{page.description}</small>
+                    </button>
+                  ))}
+                </AccordionPrimitive.Content>
+              </AccordionPrimitive.Item>
+
+              <AccordionPrimitive.Item value="setup" className="page-accordion-item">
+                <AccordionPrimitive.Header>
+                  <AccordionPrimitive.Trigger className="page-accordion-trigger">
+                    Setup
+                    <span aria-hidden="true">⌄</span>
+                  </AccordionPrimitive.Trigger>
+                </AccordionPrimitive.Header>
+                <AccordionPrimitive.Content className="page-accordion-content">
+                  {setupPages.map((page) => (
+                    <button
+                      key={page.id}
+                      type="button"
+                      className={`page-link ${activePage === page.id ? "active" : ""}`}
+                      onClick={() => setActivePage(page.id)}
+                    >
+                      <span>{page.label}</span>
+                      <small>{page.description}</small>
+                    </button>
+                  ))}
+                </AccordionPrimitive.Content>
+              </AccordionPrimitive.Item>
+            </AccordionPrimitive.Root>
+          </aside>
+
+          <section className="content-column">
+          {activePage === "recorder" ? (
             <div className="recorder-view">
               <article className="panel panel-primary">
                 <header className="panel-header">
@@ -1571,7 +1981,11 @@ function App() {
                   </button>
                 </div>
               </article>
+            </div>
+          ) : null}
 
+          {activePage === "recordings" ? (
+            <div className="recorder-view recordings-view">
               <article className="panel recent-panel">
                 <header className="panel-header">
                   <div>
@@ -1586,52 +2000,254 @@ function App() {
 
                 {bootstrap.recentRecordings.length > 0 ? (
                   <>
-                    <div
+                    <TabsPrimitive.Root
+                      value={recordingFilter}
+                      onValueChange={(value) =>
+                        setRecordingFilter(value as RecordingFilter)
+                      }
+                      className="recording-filter-root"
+                    >
+                    <TabsPrimitive.List
                       className="recording-filter-tabs"
-                      role="tablist"
                       aria-label="Saved recording filters"
                     >
                       {recordingFilterTabs.map((tab) => (
-                        <button
+                        <TabsPrimitive.Trigger
                           key={tab.id}
-                          type="button"
-                          className={`recording-filter-tab ${
-                            recordingFilter === tab.id ? "active" : ""
-                          }`}
-                          role="tab"
-                          aria-selected={recordingFilter === tab.id}
-                          onClick={() => setRecordingFilter(tab.id)}
+                          value={tab.id}
+                          className="recording-filter-tab"
                         >
                           <span>{tab.label}</span>
                           <strong>{tab.count}</strong>
-                        </button>
+                        </TabsPrimitive.Trigger>
                       ))}
-                    </div>
+                    </TabsPrimitive.List>
+                    </TabsPrimitive.Root>
 
-                    <div className="recording-toolbar">
-                      <span className="selection-summary">
-                        {visibleSelectedPaths.length > 0
-                          ? `${visibleSelectedPaths.length} selected`
-                          : `${visibleRecordings.length} shown`}
-                      </span>
+                    <div
+                      className={`recording-toolbar ${
+                        visibleSelectedPaths.length > 0
+                          ? "recording-toolbar-selected"
+                          : ""
+                      }`}
+                    >
+                      <div className="recording-toolbar-summary">
+                        <span className="selection-summary">
+                          {visibleSelectedPaths.length > 0
+                            ? `${visibleSelectedPaths.length} selected`
+                            : `${visibleRecordings.length} shown`}
+                        </span>
+                        <DropdownMenuPrimitive.Root>
+                          <DropdownMenuPrimitive.Trigger asChild>
+                            <button
+                              type="button"
+                              className="target-deck-pill target-deck-trigger"
+                              disabled={configuredDeckMenuOptions.length === 0}
+                              title="Change the default Anki deck for normal pushes"
+                            >
+                              Deck: {configuredAnkiDeckLabel}
+                            </button>
+                          </DropdownMenuPrimitive.Trigger>
+                          <DropdownMenuPrimitive.Portal>
+                            <DropdownMenuPrimitive.Content
+                              className="action-menu-content target-deck-menu-content"
+                              align="start"
+                              sideOffset={6}
+                            >
+                              <DropdownMenuPrimitive.Label className="action-menu-label">
+                                Default push deck
+                              </DropdownMenuPrimitive.Label>
+                              {configuredDeckMenuOptions.map((deck) => (
+                                <DropdownMenuPrimitive.Item
+                                  key={deck}
+                                  className="action-menu-item"
+                                  onSelect={() =>
+                                    updateSettings({
+                                      anki: {
+                                        deckName: deck,
+                                      },
+                                    })
+                                  }
+                                >
+                                  <span>{deck}</span>
+                                  {settingsDraft.anki.deckName === deck ? (
+                                    <span className="action-menu-meta">Current</span>
+                                  ) : null}
+                                </DropdownMenuPrimitive.Item>
+                              ))}
+                            </DropdownMenuPrimitive.Content>
+                          </DropdownMenuPrimitive.Portal>
+                        </DropdownMenuPrimitive.Root>
+                      </div>
                       <div className="recording-toolbar-actions">
-                        {selectedUntranscribedRecordings.length > 0 ? (
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() =>
-                              void transcribeRecordings(
-                                selectedUntranscribedRecordings.map(
-                                  (recording) => recording.filePath,
-                                ),
-                              )
-                            }
-                            disabled={busyAction === "transcribeRecording"}
-                          >
-                            Transcribe Selected
-                          </button>
+                        {visibleSelectedPaths.length > 0 ? (
+                          <DropdownMenuPrimitive.Root>
+                            <DropdownMenuPrimitive.Trigger asChild>
+                              <button
+                                type="button"
+                                className="secondary selected-actions-trigger"
+                              >
+                                Batch Actions
+                              </button>
+                            </DropdownMenuPrimitive.Trigger>
+                            <DropdownMenuPrimitive.Portal>
+                              <DropdownMenuPrimitive.Content
+                                className="action-menu-content selected-actions-menu-content"
+                                align="end"
+                                sideOffset={6}
+                              >
+                                <DropdownMenuPrimitive.Label className="action-menu-label">
+                                  Selected recordings
+                                </DropdownMenuPrimitive.Label>
+                                {selectedUntranscribedRecordings.length > 0 ? (
+                                  <DropdownMenuPrimitive.Item
+                                    className="action-menu-item"
+                                    onSelect={() =>
+                                      void transcribeRecordings(
+                                        selectedUntranscribedRecordings.map(
+                                          (recording) => recording.filePath,
+                                        ),
+                                      )
+                                    }
+                                    disabled={busyAction === "transcribeRecording"}
+                                  >
+                                    Transcribe
+                                    <span className="action-menu-meta">
+                                      {selectedUntranscribedRecordings.length}
+                                    </span>
+                                  </DropdownMenuPrimitive.Item>
+                                ) : null}
+                                {selectedPushableRecordings.length > 0 ? (
+                                  <DropdownMenuPrimitive.Item
+                                    className="action-menu-item"
+                                    onSelect={() =>
+                                      void pushRecordingsToAnki(
+                                        selectedPushableRecordings.map(
+                                          (recording) => recording.filePath,
+                                        ),
+                                      )
+                                    }
+                                    disabled={busyAction === "pushAnki"}
+                                  >
+                                    Push to target deck
+                                    <span className="action-menu-meta">
+                                      {selectedPushableRecordings.length}
+                                    </span>
+                                  </DropdownMenuPrimitive.Item>
+                                ) : null}
+                                {selectedTranscribedRecordings.some(
+                                  (recording) => !recording.audioDeleted,
+                                ) && configuredDeckMenuOptions.length > 0 ? (
+                                  <DropdownMenuPrimitive.Sub>
+                                    <DropdownMenuPrimitive.SubTrigger
+                                      className="action-menu-item action-menu-sub-trigger"
+                                      disabled={busyAction === "pushAnki"}
+                                    >
+                                      Push to another deck
+                                      <span className="action-menu-sub-arrow" aria-hidden="true">
+                                        &gt;
+                                      </span>
+                                    </DropdownMenuPrimitive.SubTrigger>
+                                    <DropdownMenuPrimitive.Portal>
+                                      <DropdownMenuPrimitive.SubContent
+                                        className="action-menu-content action-menu-sub-content"
+                                        sideOffset={8}
+                                        alignOffset={-4}
+                                      >
+                                        <DropdownMenuPrimitive.Label className="action-menu-label">
+                                          Choose target deck
+                                        </DropdownMenuPrimitive.Label>
+                                        {configuredDeckMenuOptions.map((deck) => {
+                                          const deckPushable =
+                                            selectedRecordingsPushableToDeck(deck);
+                                          return (
+                                            <DropdownMenuPrimitive.Item
+                                              key={deck}
+                                              className="action-menu-item"
+                                              onSelect={() =>
+                                                void pushRecordingsToAnki(
+                                                  deckPushable.map(
+                                                    (recording) =>
+                                                      recording.filePath,
+                                                  ),
+                                                  deck,
+                                                )
+                                              }
+                                              disabled={
+                                                deckPushable.length === 0 ||
+                                                busyAction === "pushAnki"
+                                              }
+                                            >
+                                              <span>{deck}</span>
+                                              <span className="action-menu-meta">
+                                                {deckPushable.length > 0
+                                                  ? deckPushable.length
+                                                  : "Done"}
+                                              </span>
+                                            </DropdownMenuPrimitive.Item>
+                                          );
+                                        })}
+                                      </DropdownMenuPrimitive.SubContent>
+                                    </DropdownMenuPrimitive.Portal>
+                                  </DropdownMenuPrimitive.Sub>
+                                ) : null}
+                                {selectedUntranslatedRecordings.length > 0 ? (
+                                  <DropdownMenuPrimitive.Item
+                                    className="action-menu-item"
+                                    onSelect={() =>
+                                      void translateRecordings(
+                                        selectedUntranslatedRecordings.map(
+                                          (recording) => recording.filePath,
+                                        ),
+                                      )
+                                    }
+                                    disabled={busyAction === "translateRecording"}
+                                  >
+                                    Translate
+                                    <span className="action-menu-meta">
+                                      {selectedUntranslatedRecordings.length}
+                                    </span>
+                                  </DropdownMenuPrimitive.Item>
+                                ) : null}
+                                {settingsDraft.features.allowMp3Conversion &&
+                                selectedConvertibleRecordings.length > 0 ? (
+                                  <DropdownMenuPrimitive.Item
+                                    className="action-menu-item"
+                                    title={MP3_CONVERSION_WARNING}
+                                    onSelect={() =>
+                                      void convertRecordingsToMp3(
+                                        selectedConvertibleRecordings.map(
+                                          (recording) => recording.filePath,
+                                        ),
+                                      )
+                                    }
+                                    disabled={busyAction === "convertMp3"}
+                                  >
+                                    Convert to MP3
+                                    <span className="action-menu-meta">
+                                      {selectedConvertibleRecordings.length}
+                                    </span>
+                                  </DropdownMenuPrimitive.Item>
+                                ) : null}
+                                <DropdownMenuPrimitive.Separator className="action-menu-separator" />
+                                <DropdownMenuPrimitive.Item
+                                  className="action-menu-item action-menu-item-danger"
+                                  onSelect={() =>
+                                    void deleteRecordings(visibleSelectedPaths)
+                                  }
+                                  disabled={busyAction === "deleteRecording"}
+                                >
+                                  Delete
+                                  <span className="action-menu-meta">
+                                    {visibleSelectedPaths.length}
+                                  </span>
+                                </DropdownMenuPrimitive.Item>
+                              </DropdownMenuPrimitive.Content>
+                            </DropdownMenuPrimitive.Portal>
+                          </DropdownMenuPrimitive.Root>
                         ) : null}
-                        {recordingFilter === "needsTranscription" &&
+                        {visibleSelectedPaths.length === 0 &&
+                        recordingFilter === "needsTranscription" &&
                         untranscribedRecordings.length > 0 ? (
                           <button
                             type="button"
@@ -1648,23 +2264,8 @@ function App() {
                             Transcribe All
                           </button>
                         ) : null}
-                        {selectedPushableRecordings.length > 0 ? (
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() =>
-                              void pushRecordingsToAnki(
-                                selectedPushableRecordings.map(
-                                  (recording) => recording.filePath,
-                                ),
-                              )
-                            }
-                            disabled={busyAction === "pushAnki"}
-                          >
-                            Push Selected
-                          </button>
-                        ) : null}
-                        {recordingFilter === "needsAnki" &&
+                        {visibleSelectedPaths.length === 0 &&
+                        recordingFilter === "needsAnki" &&
                         pushableRecordings.length > 0 ? (
                           <button
                             type="button"
@@ -1681,23 +2282,8 @@ function App() {
                             Push All
                           </button>
                         ) : null}
-                        {selectedUntranslatedRecordings.length > 0 ? (
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() =>
-                              void translateRecordings(
-                                selectedUntranslatedRecordings.map(
-                                  (recording) => recording.filePath,
-                                ),
-                              )
-                            }
-                            disabled={busyAction === "translateRecording"}
-                          >
-                            Translate Selected
-                          </button>
-                        ) : null}
-                        {recordingFilter === "needsTranslation" &&
+                        {visibleSelectedPaths.length === 0 &&
+                        recordingFilter === "needsTranslation" &&
                         untranslatedRecordings.length > 0 ? (
                           <button
                             type="button"
@@ -1714,26 +2300,34 @@ function App() {
                             Translate All
                           </button>
                         ) : null}
-                        {visibleSelectedPaths.length > 0 ? (
-                          <>
+                        {visibleSelectedPaths.length === 0 &&
+                        settingsDraft.features.allowMp3Conversion &&
+                        convertibleRecordings.length > 0 ? (
+                          <TooltipWrap description={MP3_CONVERSION_WARNING}>
                             <button
                               type="button"
-                              className="ghost danger-action"
+                              className="secondary"
                               onClick={() =>
-                                void deleteRecordings(visibleSelectedPaths)
+                                void convertRecordingsToMp3(
+                                  convertibleRecordings.map(
+                                    (recording) => recording.filePath,
+                                  ),
+                                )
                               }
-                              disabled={busyAction === "deleteRecording"}
+                              disabled={busyAction === "convertMp3"}
                             >
-                              Delete Selected
+                              Convert All WAV
                             </button>
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={clearRecordingSelection}
-                            >
-                              Clear
-                            </button>
-                          </>
+                          </TooltipWrap>
+                        ) : null}
+                        {visibleSelectedPaths.length > 0 ? (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={clearRecordingSelection}
+                          >
+                            Clear selection
+                          </button>
                         ) : null}
                       </div>
                     </div>
@@ -1746,8 +2340,20 @@ function App() {
                   <p className="empty-state">No recordings in this status</p>
                 ) : (
                   <div className="recording-list">
-                    {visibleRecordings.map((recording) => (
-                      <article className="recording-item" key={recording.filePath}>
+                    {visibleRecordings.map((recording) => {
+                      const canPushToConfiguredDeck =
+                        Boolean(recording.transcriptPath) &&
+                        !recording.audioDeleted &&
+                        !recordingPushedToCurrentAnkiDeck(recording);
+                      const canPushToAnyDeck =
+                        Boolean(recording.transcriptPath) &&
+                        !recording.audioDeleted;
+
+                      return (
+                      <article
+                        className="recording-item"
+                        key={recording.filePath}
+                      >
                         <div className="recording-head">
                           <label className="recording-select">
                             <input
@@ -1775,9 +2381,11 @@ function App() {
                           }
                         >
                           <span className="recording-state">
-                            {recording.transcriptPath
-                              ? "Audio + transcript"
-                              : "Audio only"}
+                            {recording.audioDeleted
+                              ? "Transcript only - local audio deleted"
+                              : recording.transcriptPath
+                                ? "Audio + transcript"
+                                : "Audio only"}
                           </span>
                           {recording.ankiNoteId !== null ? (
                             <span
@@ -1804,75 +2412,205 @@ function App() {
                           ) : null}
                         </div>
                         <div className="recording-actions">
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => void playRecording(recording.filePath)}
-                            disabled={busyAction === "playRecording"}
+                          <DropdownMenuPrimitive.Root
+                            modal={false}
+                            open={
+                              !useBatchActionsOnly &&
+                              openRecordingMenuPath === recording.filePath
+                            }
+                            onOpenChange={(open) =>
+                              setOpenRecordingMenuPath(
+                                open && !useBatchActionsOnly
+                                  ? recording.filePath
+                                  : null,
+                              )
+                            }
                           >
-                            Play
-                          </button>
-                          {!recording.transcriptPath ? (
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() =>
-                                void transcribeRecordings([recording.filePath])
-                              }
-                              disabled={busyAction === "transcribeRecording"}
-                            >
-                              Transcribe
-                            </button>
-                          ) : null}
-                          {recording.transcriptPath &&
-                          !recordingPushedToCurrentAnkiTarget(recording) ? (
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() =>
-                                void pushRecordingsToAnki([recording.filePath])
-                              }
-                              disabled={busyAction === "pushAnki"}
-                            >
-                              {recording.ankiNoteId !== null
-                                ? "Push Again"
-                                : "Push"}
-                            </button>
-                          ) : null}
-                          {recording.transcriptPath &&
-                          recording.translationPath === null ? (
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() =>
-                                void translateRecordings([recording.filePath])
-                              }
-                              disabled={busyAction === "translateRecording"}
-                            >
-                              Translate
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="ghost danger-action"
-                            onClick={() => void deleteRecording(recording.filePath)}
-                            disabled={busyAction === "deleteRecording"}
-                          >
-                            Delete
-                          </button>
+                            <DropdownMenuPrimitive.Trigger asChild>
+                              <button
+                                type="button"
+                                className="secondary compact-menu-trigger"
+                                disabled={useBatchActionsOnly}
+                                title={
+                                  useBatchActionsOnly
+                                    ? "Use Batch Actions while multiple recordings are selected."
+                                    : "Open recording actions"
+                                }
+                              >
+                                Actions
+                              </button>
+                            </DropdownMenuPrimitive.Trigger>
+                            <DropdownMenuPrimitive.Portal>
+                              <DropdownMenuPrimitive.Content
+                                className="action-menu-content"
+                                align="end"
+                                sideOffset={6}
+                              >
+                                <DropdownMenuPrimitive.Label className="action-menu-label">
+                                  Actions
+                                </DropdownMenuPrimitive.Label>
+                                <DropdownMenuPrimitive.Item
+                                  className="action-menu-item"
+                                  onSelect={() =>
+                                    void playRecording(recording.filePath)
+                                  }
+                                  disabled={
+                                    recording.audioDeleted ||
+                                    busyAction === "playRecording"
+                                  }
+                                >
+                                  Play
+                                </DropdownMenuPrimitive.Item>
+                                {!recording.transcriptPath ? (
+                                  <DropdownMenuPrimitive.Item
+                                    className="action-menu-item"
+                                    onSelect={() =>
+                                      void transcribeRecordings([
+                                        recording.filePath,
+                                      ])
+                                    }
+                                    disabled={busyAction === "transcribeRecording"}
+                                  >
+                                    Transcribe
+                                  </DropdownMenuPrimitive.Item>
+                                ) : null}
+                                {recording.transcriptPath ? (
+                                  <>
+                                    <DropdownMenuPrimitive.Separator className="action-menu-separator" />
+                                    <DropdownMenuPrimitive.Item
+                                      className="action-menu-item"
+                                      onSelect={() =>
+                                        void pushRecordingsToAnki([
+                                          recording.filePath,
+                                        ])
+                                      }
+                                      disabled={
+                                        !canPushToConfiguredDeck ||
+                                        !settingsDraft.anki.deckName ||
+                                        busyAction === "pushAnki"
+                                      }
+                                    >
+                                      Push to {configuredAnkiDeckLabel}
+                                    </DropdownMenuPrimitive.Item>
+                                    <DropdownMenuPrimitive.Sub>
+                                      <DropdownMenuPrimitive.SubTrigger
+                                        className="action-menu-item action-menu-sub-trigger"
+                                        disabled={
+                                          !canPushToAnyDeck ||
+                                          availableAnkiDecks.length === 0 ||
+                                          busyAction === "pushAnki"
+                                        }
+                                      >
+                                        Push to another deck
+                                        <span className="action-menu-sub-arrow" aria-hidden="true">
+                                          &gt;
+                                        </span>
+                                      </DropdownMenuPrimitive.SubTrigger>
+                                      <DropdownMenuPrimitive.Portal>
+                                        <DropdownMenuPrimitive.SubContent
+                                          className="action-menu-content action-menu-sub-content"
+                                          sideOffset={8}
+                                          alignOffset={-4}
+                                        >
+                                          <DropdownMenuPrimitive.Label className="action-menu-label">
+                                            Choose target deck
+                                          </DropdownMenuPrimitive.Label>
+                                          {availableAnkiDecks.map((deck) => {
+                                            const alreadyPushedToDeck =
+                                              recordingPushedToDeck(recording, deck);
+                                            return (
+                                              <DropdownMenuPrimitive.Item
+                                                key={deck}
+                                                className="action-menu-item"
+                                                onSelect={() => {
+                                                  setOpenRecordingMenuPath(null);
+                                                  void pushRecordingsToAnki(
+                                                    [recording.filePath],
+                                                    deck,
+                                                  );
+                                                }}
+                                                disabled={
+                                                  alreadyPushedToDeck ||
+                                                  busyAction === "pushAnki"
+                                                }
+                                              >
+                                                <span>{deck}</span>
+                                                {alreadyPushedToDeck ? (
+                                                  <span className="action-menu-meta">
+                                                    Done
+                                                  </span>
+                                                ) : null}
+                                              </DropdownMenuPrimitive.Item>
+                                            );
+                                          })}
+                                        </DropdownMenuPrimitive.SubContent>
+                                      </DropdownMenuPrimitive.Portal>
+                                    </DropdownMenuPrimitive.Sub>
+                                  </>
+                                ) : null}
+                                {recording.transcriptPath &&
+                                recording.translationPath === null ? (
+                                  <DropdownMenuPrimitive.Item
+                                    className="action-menu-item"
+                                    onSelect={() =>
+                                      void translateRecordings([
+                                        recording.filePath,
+                                      ])
+                                    }
+                                    disabled={busyAction === "translateRecording"}
+                                  >
+                                    Translate
+                                  </DropdownMenuPrimitive.Item>
+                                ) : null}
+                                {settingsDraft.features.allowMp3Conversion &&
+                                recording.transcriptPath &&
+                                !recording.audioDeleted &&
+                                pathHasExtension(recording.filePath, "wav") ? (
+                                  <TooltipWrap description={MP3_CONVERSION_WARNING}>
+                                    <DropdownMenuPrimitive.Item
+                                      className="action-menu-item"
+                                      title={MP3_CONVERSION_WARNING}
+                                      onSelect={() =>
+                                        void convertRecordingsToMp3([
+                                          recording.filePath,
+                                        ])
+                                      }
+                                      disabled={busyAction === "convertMp3"}
+                                    >
+                                      Convert to MP3
+                                    </DropdownMenuPrimitive.Item>
+                                  </TooltipWrap>
+                                ) : null}
+                                <DropdownMenuPrimitive.Separator className="action-menu-separator" />
+                                <DropdownMenuPrimitive.Item
+                                  className="action-menu-item action-menu-item-danger"
+                                  onSelect={() =>
+                                    void deleteRecording(recording.filePath)
+                                  }
+                                  disabled={busyAction === "deleteRecording"}
+                                >
+                                  Delete
+                                </DropdownMenuPrimitive.Item>
+                              </DropdownMenuPrimitive.Content>
+                            </DropdownMenuPrimitive.Portal>
+                          </DropdownMenuPrimitive.Root>
                         </div>
                       </article>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </article>
             </div>
           ) : null}
 
-          {activeTab === "settings" ? (
-            <div className="settings-scroll">
+          {activePage !== "recorder" && activePage !== "recordings" ? (
+            <div className="settings-scroll settings-page-single">
               <div className="settings-overview-grid">
-                <article className="panel settings-card">
+                <article
+                  className="panel settings-card"
+                  hidden={activePage !== "preferences"}
+                >
                 <header className="panel-header">
                   <div>
                     <p className="panel-kicker">Settings</p>
@@ -1889,18 +2627,20 @@ function App() {
                 <div className="settings-grid">
                   <label className="field">
                     <span>Appearance</span>
-                    <select
+                    <ThemedSelect
                       value={settingsDraft.theme}
-                      onChange={(event) =>
+                      options={[
+                        { value: "system", label: "Use system setting" },
+                        { value: "light", label: "Light" },
+                        { value: "dark", label: "Dark" },
+                      ]}
+                      placeholder="Appearance"
+                      onChange={(nextValue) =>
                         updateSettings({
-                          theme: event.currentTarget.value as ThemePreference,
+                          theme: nextValue as ThemePreference,
                         })
                       }
-                    >
-                      <option value="system">Use system setting</option>
-                      <option value="light">Light</option>
-                      <option value="dark">Dark</option>
-                    </select>
+                    />
                   </label>
 
                   <label className="field">
@@ -1970,6 +2710,47 @@ function App() {
                     <label className="toggle">
                       <input
                         type="checkbox"
+                        checked={
+                          settingsDraft.features.deleteLocalAudioAfterAnkiPush
+                        }
+                        onChange={(event) => {
+                          const enabled = event.currentTarget.checked;
+                          if (enabled) {
+                            const confirmed = window.confirm(
+                              "Enable local audio cleanup after Anki push? After Anki successfully copies the audio into its media folder, Wonder of U will delete the local audio file from this machine. The transcript and history stay in Wonder of U, and existing Anki cards are not affected.",
+                            );
+                            if (!confirmed) {
+                              return;
+                            }
+                          }
+                          updateSettings({
+                            features: {
+                              deleteLocalAudioAfterAnkiPush: enabled,
+                            },
+                          });
+                        }}
+                      />
+                      <span>Delete local audio after Anki push</span>
+                    </label>
+
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={settingsDraft.features.allowMp3Conversion}
+                        onChange={(event) =>
+                          updateSettings({
+                            features: {
+                              allowMp3Conversion: event.currentTarget.checked,
+                            },
+                          })
+                        }
+                      />
+                      <span>Allow manual MP3 conversion</span>
+                    </label>
+
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
                         checked={settingsDraft.launchAtLogin}
                         onChange={(event) =>
                           updateSettings({
@@ -1996,7 +2777,10 @@ function App() {
                 </div>
                 </article>
 
-                <article className="panel settings-card">
+                <article
+                  className="panel settings-card"
+                  hidden={activePage !== "whisper"}
+                >
                 <header className="panel-header">
                   <div>
                     <p className="panel-kicker">Whisper Setup</p>
@@ -2036,7 +2820,10 @@ function App() {
               </div>
 
               <div className="whisper-config-grid">
-                <article className="panel settings-card">
+                <article
+                  className="panel settings-card"
+                  hidden={activePage !== "runtime"}
+                >
                   <header className="panel-header">
                     <div>
                       <p className="panel-kicker">Runtime</p>
@@ -2051,12 +2838,17 @@ function App() {
                   {installedRuntimeVersions.length > 0 ? (
                     <label className="field runtime-version-field">
                       <span>Active runtime</span>
-                      <select
+                      <ThemedSelect
                         value={activeRuntimeVersion}
-                        onChange={(event) =>
+                        options={installedRuntimeVersions.map((version) => ({
+                          value: version,
+                          label: version,
+                        }))}
+                        placeholder="Active runtime"
+                        onChange={(nextValue) =>
                           updateSettings({
                             whisper: {
-                              runtimeVersion: event.currentTarget.value,
+                              runtimeVersion: nextValue,
                               cliPath: "",
                             },
                           })
@@ -2067,13 +2859,7 @@ function App() {
                             ? "Clear the manual runtime override to use app-managed versions."
                             : "Choose any installed app-managed Whisper runtime."
                         }
-                      >
-                        {installedRuntimeVersions.map((version) => (
-                          <option key={version} value={version}>
-                            {version}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </label>
                   ) : null}
 
@@ -2159,7 +2945,10 @@ function App() {
                   </div>
                 </article>
 
-                <article className="panel settings-card">
+                <article
+                  className="panel settings-card"
+                  hidden={activePage !== "model"}
+                >
                   <header className="panel-header">
                     <div>
                       <p className="panel-kicker">Model</p>
@@ -2174,47 +2963,50 @@ function App() {
                 <div className="settings-grid">
                   <label className="field">
                     <span>Managed model</span>
-                    <select
+                    <ThemedSelect
                       value={settingsDraft.whisper.modelChoice}
-                      onChange={(event) =>
+                      options={MODEL_OPTIONS.map((option) => ({
+                        value: option.id,
+                        label: option.label,
+                      }))}
+                      placeholder="Managed model"
+                      onChange={(nextValue) =>
                         updateSettings({
                           whisper: {
-                            modelChoice: event.currentTarget.value,
+                            modelChoice: nextValue,
                           },
                         })
                       }
-                    >
-                      {MODEL_OPTIONS.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </label>
 
                   <label className="field">
                     <span>Language</span>
-                    <select
+                    <ThemedSelect
                       value={selectedLanguageCode}
-                      onChange={(event) =>
+                      options={[
+                        ...(!selectedLanguageKnown
+                          ? [
+                              {
+                                value: selectedLanguageCode,
+                                label: `Custom (${selectedLanguageCode})`,
+                              },
+                            ]
+                          : []),
+                        ...LANGUAGE_OPTIONS.map((option) => ({
+                          value: option.code,
+                          label: `${option.label} (${option.code})`,
+                        })),
+                      ]}
+                      placeholder="Language"
+                      onChange={(nextValue) =>
                         updateSettings({
                           whisper: {
-                            language: event.currentTarget.value,
+                            language: nextValue,
                           },
                         })
                       }
-                    >
-                      {!selectedLanguageKnown ? (
-                        <option value={selectedLanguageCode}>
-                          Custom ({selectedLanguageCode})
-                        </option>
-                      ) : null}
-                      {LANGUAGE_OPTIONS.map((option) => (
-                        <option key={option.code} value={option.code}>
-                          {option.label} ({option.code})
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </label>
                 </div>
 
@@ -2290,7 +3082,10 @@ function App() {
                 </div>
                 </article>
 
-                <article className="panel settings-card settings-card-wide">
+                <article
+                  className="panel settings-card settings-card-wide"
+                  hidden={activePage !== "storage"}
+                >
                   <header className="panel-header">
                     <div>
                       <p className="panel-kicker">Storage</p>
@@ -2315,10 +3110,15 @@ function App() {
                   >
                     <strong>{bootstrap.ffmpegDetection.message}</strong>
                     <p className="microcopy">
-                      Wonder of U records WAV for reliable Whisper transcription,
-                      then compresses the saved audio to MP3 after the transcript is
-                      created. If FFmpeg is missing or conversion fails, the WAV is
-                      kept.
+                      Wonder of U keeps WAV audio for transcription because that is
+                      the safest input path for Whisper. After a transcript exists,
+                      you can convert individual recordings, selected recordings, or
+                      all available WAV recordings to MP3 from Saved Recordings.
+                      If a card was already pushed to Anki, converting the local
+                      file later will not break that existing Anki card because
+                      Anki keeps its own copied media file.
+                      The Convert to MP3 action stays hidden until you enable
+                      manual MP3 conversion in App Preferences.
                     </p>
                     {bootstrap.ffmpegDetection.executablePath ? (
                       <p
@@ -2346,7 +3146,10 @@ function App() {
                 </article>
               </div>
 
-              <article className="panel anki-panel settings-card settings-card-wide">
+              <article
+                className="panel anki-panel settings-card settings-card-wide"
+                hidden={activePage !== "anki"}
+              >
                 <header className="panel-header">
                   <div>
                     <p className="panel-kicker">Anki</p>
@@ -2354,8 +3157,8 @@ function App() {
                   </div>
                   <div className="panel-actions">
                     <TooltipBadge
-                      label={ankiCatalog.status === "ready" ? "Ready" : "Setup"}
-                      description={ankiCatalog.message}
+                      label={displayedAnkiCatalog.status === "ready" ? "Ready" : "Saved"}
+                      description={displayedAnkiCatalog.message}
                     />
                     <button
                       type="button"
@@ -2370,17 +3173,17 @@ function App() {
 
                 <div
                   className={`update-card ${
-                    ankiCatalog.status === "ready"
+                    displayedAnkiCatalog.status === "ready"
                       ? "current"
-                      : ankiCatalog.status === "offline"
+                      : displayedAnkiCatalog.status === "offline"
                         ? "error"
                         : ""
                   }`}
                 >
-                  <strong>{ankiCatalog.message}</strong>
-                  {ankiCatalog.version !== null ? (
+                  <strong>{displayedAnkiCatalog.message}</strong>
+                  {displayedAnkiCatalog.version !== null ? (
                     <p className="microcopy">
-                      AnkiConnect version {ankiCatalog.version}
+                      AnkiConnect version {displayedAnkiCatalog.version}
                     </p>
                   ) : null}
                 </div>
@@ -2388,37 +3191,57 @@ function App() {
                 <div className="settings-grid anki-grid">
                   <label className="field">
                     <span>Deck</span>
-                    <select
+                    <ThemedSelect
                       value={settingsDraft.anki.deckName}
-                      onChange={(event) =>
+                      options={[
+                        { value: "", label: "Choose deck" },
+                        ...(settingsDraft.anki.deckName &&
+                        !displayedAnkiCatalog.decks.includes(settingsDraft.anki.deckName)
+                          ? [
+                              {
+                                value: settingsDraft.anki.deckName,
+                                label: settingsDraft.anki.deckName,
+                              },
+                            ]
+                          : []),
+                        ...displayedAnkiCatalog.decks.map((deck) => ({
+                          value: deck,
+                          label: deck,
+                        })),
+                      ]}
+                      placeholder="Choose deck"
+                      onChange={(nextValue) =>
                         updateSettings({
                           anki: {
-                            deckName: event.currentTarget.value,
+                            deckName: nextValue,
                           },
                         })
                       }
-                    >
-                      <option value="">Choose deck</option>
-                      {settingsDraft.anki.deckName &&
-                      !ankiCatalog.decks.includes(settingsDraft.anki.deckName) ? (
-                        <option value={settingsDraft.anki.deckName}>
-                          {settingsDraft.anki.deckName}
-                        </option>
-                      ) : null}
-                      {ankiCatalog.decks.map((deck) => (
-                        <option key={deck} value={deck}>
-                          {deck}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </label>
 
                   <label className="field">
                     <span>Note type</span>
-                    <select
+                    <ThemedSelect
                       value={settingsDraft.anki.noteType}
-                      onChange={(event) => {
-                        const noteType = event.currentTarget.value;
+                      options={[
+                        { value: "", label: "Choose note type" },
+                        ...(settingsDraft.anki.noteType &&
+                        !displayedAnkiCatalog.noteTypes.includes(settingsDraft.anki.noteType)
+                          ? [
+                              {
+                                value: settingsDraft.anki.noteType,
+                                label: settingsDraft.anki.noteType,
+                              },
+                            ]
+                          : []),
+                        ...displayedAnkiCatalog.noteTypes.map((noteType) => ({
+                          value: noteType,
+                          label: noteType,
+                        })),
+                      ]}
+                      placeholder="Choose note type"
+                      onChange={(noteType) => {
                         updateSettings({
                           anki: {
                             noteType,
@@ -2435,20 +3258,7 @@ function App() {
                           void refreshAnkiCatalog(noteType);
                         }
                       }}
-                    >
-                      <option value="">Choose note type</option>
-                      {settingsDraft.anki.noteType &&
-                      !ankiCatalog.noteTypes.includes(settingsDraft.anki.noteType) ? (
-                        <option value={settingsDraft.anki.noteType}>
-                          {settingsDraft.anki.noteType}
-                        </option>
-                      ) : null}
-                      {ankiCatalog.noteTypes.map((noteType) => (
-                        <option key={noteType} value={noteType}>
-                          {noteType}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </label>
 
                   {renderAnkiFieldSelect("transcription", "Transcript field")}
@@ -2457,11 +3267,22 @@ function App() {
                   {renderAnkiFieldSelect("sourcePath", "Source path field")}
                   {renderAnkiFieldSelect("createdAt", "Created-at field")}
                 </div>
+
+                <div className="update-card">
+                  <strong>Furigana support requires the Wonder of U Anki add-on.</strong>
+                  <p className="microcopy">
+                    Japanese furigana will come from our Anki add-on when it is
+                    installed. For now Wonder of U will detect the add-on by name;
+                    the Anki add-on ID will be added after we publish it.
+                  </p>
+                </div>
               </article>
             </div>
           ) : null}
         </section>
+        </section>
       </section>
+      </TooltipPrimitive.Provider>
     </main>
   );
 }

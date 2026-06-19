@@ -140,12 +140,18 @@ enum HotkeyAction {
 #[serde(rename_all = "camelCase")]
 struct FeatureSettings {
     transcription: bool,
+    #[serde(default)]
+    delete_local_audio_after_anki_push: bool,
+    #[serde(default)]
+    allow_mp3_conversion: bool,
 }
 
 impl Default for FeatureSettings {
     fn default() -> Self {
         Self {
             transcription: true,
+            delete_local_audio_after_anki_push: false,
+            allow_mp3_conversion: false,
         }
     }
 }
@@ -227,6 +233,8 @@ struct RecentRecording {
     anki_deck_name: Option<String>,
     #[serde(default)]
     anki_note_type: Option<String>,
+    #[serde(default)]
+    audio_deleted: bool,
     duration_ms: u64,
     bytes_written: u64,
     created_at_ms: u64,
@@ -354,7 +362,7 @@ impl Default for FfmpegDetection {
             status: "notFound".into(),
             executable_path: None,
             managed: false,
-            message: "Install app-managed FFmpeg to compress transcribed WAV recordings into MP3."
+            message: "Install app-managed FFmpeg to manually convert transcribed WAV recordings into MP3."
                 .into(),
         }
     }
@@ -598,6 +606,20 @@ async fn push_recordings_to_anki(
 }
 
 #[tauri::command]
+async fn push_recordings_to_anki_deck(
+    app: AppHandle,
+    file_paths: Vec<String>,
+    deck_name: String,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        push_recordings_to_anki_deck_inner(&app_for_blocking, file_paths, deck_name)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn translate_recordings(
     app: AppHandle,
     file_paths: Vec<String>,
@@ -618,6 +640,19 @@ async fn transcribe_recordings(
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         transcribe_recordings_inner(&app_for_blocking, file_paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn convert_recordings_to_mp3(
+    app: AppHandle,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        convert_recordings_to_mp3_inner(&app_for_blocking, file_paths)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -790,6 +825,10 @@ fn normalize_settings<R: Runtime>(
         },
         features: FeatureSettings {
             transcription: settings.features.transcription,
+            delete_local_audio_after_anki_push: settings
+                .features
+                .delete_local_audio_after_anki_push,
+            allow_mp3_conversion: settings.features.allow_mp3_conversion,
         },
         theme: theme.into(),
         launch_at_login: settings.launch_at_login,
@@ -1178,7 +1217,7 @@ fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
             executable_path: Some(managed_path.display().to_string()),
             managed: true,
             message:
-                "App-managed FFmpeg is ready. Transcribed recordings will be compressed to MP3."
+                "App-managed FFmpeg is ready. Transcribed WAV recordings can be manually converted to MP3."
                     .into(),
         };
     }
@@ -1190,7 +1229,7 @@ fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
             executable_path: Some("ffmpeg".into()),
             managed: false,
             message:
-                "System FFmpeg is available. Transcribed recordings will be compressed to MP3."
+                "System FFmpeg is available. Transcribed WAV recordings can be manually converted to MP3."
                     .into(),
         };
     }
@@ -1914,6 +1953,27 @@ where
     Ok(())
 }
 
+fn delete_local_audio_after_anki_push<R: Runtime>(
+    app: &AppHandle<R>,
+    file_path: &str,
+) -> Result<(), String> {
+    let audio_path = PathBuf::from(file_path);
+    match fs::remove_file(&audio_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Anki card was created, but local audio cleanup failed: {error}"
+            ));
+        }
+    }
+
+    update_recent_recording(app, file_path, |recording| {
+        recording.audio_deleted = true;
+        recording.bytes_written = 0;
+    })
+}
+
 fn anki_media_file_name(path: &Path) -> String {
     let stem = path
         .file_stem()
@@ -1936,6 +1996,36 @@ fn html_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\n', "<br>")
+}
+
+fn user_friendly_anki_error(error: &str, settings: &AnkiSettings) -> String {
+    let normalized = error.to_lowercase();
+    if normalized.contains("duplicate") {
+        return format!(
+            "This transcript already exists in the '{}' deck. Wonder of U did not create a duplicate card.",
+            settings.deck_name
+        );
+    }
+
+    if normalized.contains("model") && normalized.contains("not") && normalized.contains("found") {
+        return format!(
+            "Anki could not find the '{}' note type. Refresh Anki mapping and choose an available note type.",
+            settings.note_type
+        );
+    }
+
+    if normalized.contains("deck") && normalized.contains("not") && normalized.contains("found") {
+        return format!(
+            "Anki could not find the '{}' deck. Refresh Anki mapping and choose an available deck.",
+            settings.deck_name
+        );
+    }
+
+    if normalized.contains("field") {
+        return "Anki rejected one of the mapped fields. Refresh Anki mapping and check that every selected field still exists on the note type.".into();
+    }
+
+    format!("Anki could not create the card. {error}")
 }
 
 fn push_single_recording_to_anki<R: Runtime>(
@@ -2027,7 +2117,8 @@ fn push_single_recording_to_anki<R: Runtime>(
                 "tags": ["wonder-of-u"]
             }
         }),
-    )?
+    )
+    .map_err(|error| user_friendly_anki_error(&error, settings))?
     .as_i64()
     .ok_or_else(|| "AnkiConnect did not return a note id.".to_string())?;
 
@@ -2137,8 +2228,6 @@ fn apply_transcription_result_to_recording<R: Runtime>(
         }
     }
 
-    audio_path = compress_transcribed_audio_if_possible(app, &audio_path);
-
     recording.file_name = audio_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -2245,7 +2334,7 @@ fn transcribe_recordings_inner<R: Runtime>(
                 items.push(RecordingActionItem {
                     file_path: updated_recording.file_path,
                     status: "success".into(),
-                    message: "Transcript created.".into(),
+                    message: "Transcript created. WAV audio was kept for transcription accuracy.".into(),
                     note_id: updated_recording.anki_note_id,
                 });
             }
@@ -2301,14 +2390,61 @@ fn push_recordings_to_anki_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
 ) -> Result<RecordingBatchResult, String> {
-    let settings = {
+    let (settings, delete_local_audio_after_push) = {
         let persisted_state = app.state::<SharedPersistedState>();
         let persisted = persisted_state
             .0
             .lock()
             .map_err(|_| "Could not read the Anki settings.".to_string())?;
-        persisted.settings.anki.clone()
+        (
+            persisted.settings.anki.clone(),
+            persisted.settings.features.delete_local_audio_after_anki_push,
+        )
     };
+    push_recordings_to_anki_with_settings_inner(
+        app,
+        file_paths,
+        settings,
+        delete_local_audio_after_push,
+    )
+}
+
+fn push_recordings_to_anki_deck_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+    deck_name: String,
+) -> Result<RecordingBatchResult, String> {
+    let deck_name = deck_name.trim().to_string();
+    if deck_name.is_empty() {
+        return Err("Choose an Anki deck before pushing recordings.".into());
+    }
+
+    let (mut settings, delete_local_audio_after_push) = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not read the Anki settings.".to_string())?;
+        (
+            persisted.settings.anki.clone(),
+            persisted.settings.features.delete_local_audio_after_anki_push,
+        )
+    };
+    settings.deck_name = deck_name;
+    push_recordings_to_anki_with_settings_inner(
+        app,
+        file_paths,
+        settings,
+        delete_local_audio_after_push,
+    )
+}
+
+fn push_recordings_to_anki_with_settings_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+    settings: AnkiSettings,
+    delete_local_audio_after_push: bool,
+) -> Result<RecordingBatchResult, String> {
     let recordings = selected_recordings(app, file_paths)?;
     let mut items = Vec::new();
 
@@ -2346,12 +2482,25 @@ fn push_recordings_to_anki_inner<R: Runtime>(
         }
 
         match push_single_recording_to_anki(app, &recording, &settings) {
-            Ok(note_id) => items.push(RecordingActionItem {
-                file_path: recording.file_path,
-                status: "success".into(),
-                message: format!("Created Anki note {note_id}."),
-                note_id: Some(note_id),
-            }),
+            Ok(note_id) => {
+                let mut message = format!("Created Anki note {note_id}.");
+                if delete_local_audio_after_push {
+                    match delete_local_audio_after_anki_push(app, &recording.file_path) {
+                        Ok(()) => {
+                            message.push_str(" Local audio was deleted after Anki copied it.");
+                        }
+                        Err(error) => {
+                            message.push_str(&format!(" {error}"));
+                        }
+                    }
+                }
+                items.push(RecordingActionItem {
+                    file_path: recording.file_path,
+                    status: "success".into(),
+                    message,
+                    note_id: Some(note_id),
+                });
+            }
             Err(error) => items.push(RecordingActionItem {
                 file_path: recording.file_path,
                 status: "failed".into(),
@@ -2376,6 +2525,113 @@ fn push_recordings_to_anki_inner<R: Runtime>(
         status: if failed_count == 0 { "completed" } else { "partial" }.into(),
         message: format!(
             "Anki push finished: {success_count} created, {skipped_count} skipped, {failed_count} failed."
+        ),
+        items,
+        bootstrap: build_app_bootstrap(app)?,
+    })
+}
+
+fn convert_recordings_to_mp3_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let recordings = selected_recordings(app, file_paths)?;
+    let mut items = Vec::new();
+
+    for recording in recordings {
+        let original_file_path = recording.file_path.clone();
+        let audio_path = PathBuf::from(&recording.file_path);
+        let is_wav = audio_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("wav"))
+            .unwrap_or(false);
+
+        if recording.audio_deleted {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "skipped".into(),
+                message: "Local audio was already deleted after Anki copied it.".into(),
+                note_id: recording.anki_note_id,
+            });
+            continue;
+        }
+
+        if recording.transcript_path.is_none() {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "skipped".into(),
+                message: "Transcribe this recording before converting it to MP3.".into(),
+                note_id: recording.anki_note_id,
+            });
+            continue;
+        }
+
+        if !is_wav {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "skipped".into(),
+                message: "This recording is already MP3 or is not a WAV file.".into(),
+                note_id: recording.anki_note_id,
+            });
+            continue;
+        }
+
+        let converted_path = compress_transcribed_audio_if_possible(app, &audio_path);
+        let converted_to_mp3 = converted_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("mp3"))
+            .unwrap_or(false);
+
+        if !converted_to_mp3 {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "failed".into(),
+                message: "MP3 conversion did not complete. The WAV file was kept.".into(),
+                note_id: recording.anki_note_id,
+            });
+            continue;
+        }
+
+        let mut updated_recording = recording.clone();
+        updated_recording.file_name = converted_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("recording.mp3")
+            .to_string();
+        updated_recording.file_path = converted_path.display().to_string();
+        updated_recording.bytes_written = fs::metadata(&converted_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(updated_recording.bytes_written);
+
+        update_recent_recording(app, &original_file_path, |recording| {
+            *recording = updated_recording.clone();
+        })?;
+
+        items.push(RecordingActionItem {
+            file_path: updated_recording.file_path,
+            status: "success".into(),
+            message: "Recording converted to MP3.".into(),
+            note_id: updated_recording.anki_note_id,
+        });
+    }
+
+    let success_count = items.iter().filter(|item| item.status == "success").count();
+    let skipped_count = items.iter().filter(|item| item.status == "skipped").count();
+    let failed_count = items.iter().filter(|item| item.status == "failed").count();
+
+    update_shell_snapshot(app, |shell| {
+        shell.status_text = format!(
+            "MP3 conversion finished: {success_count} converted, {skipped_count} skipped, {failed_count} failed."
+        );
+        shell.transition_count += 1;
+    })?;
+
+    Ok(RecordingBatchResult {
+        status: if failed_count == 0 { "completed" } else { "partial" }.into(),
+        message: format!(
+            "MP3 conversion finished: {success_count} converted, {skipped_count} skipped, {failed_count} failed."
         ),
         items,
         bootstrap: build_app_bootstrap(app)?,
@@ -2685,6 +2941,9 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
 
     let mut command = Command::new(&executable_path);
     hide_command_window(&mut command);
+    if let Some(ffmpeg_directory) = Path::new(&executable_path).parent() {
+        command.current_dir(ffmpeg_directory);
+    }
     command
         .arg("-y")
         .arg("-nostdin")
@@ -2693,6 +2952,9 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
         .arg("error")
         .arg("-i")
         .arg(audio_path)
+        .arg("-map")
+        .arg("0:a:0")
+        .arg("-vn")
         .arg("-codec:a")
         .arg("libmp3lame")
         .arg("-b:a")
@@ -2708,6 +2970,7 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
                 "audio.compression_skipped",
                 serde_json::json!({
                     "audioPath": audio_path,
+                    "ffmpegStatus": ffmpeg_detection.status,
                     "message": "FFmpeg was not found. Keeping the WAV recording."
                 }),
             );
@@ -2720,6 +2983,7 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
                 "audio.compression_failed",
                 serde_json::json!({
                     "audioPath": audio_path,
+                    "executablePath": executable_path,
                     "message": error.to_string()
                 }),
             );
@@ -2748,6 +3012,8 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
             serde_json::json!({
                 "audioPath": audio_path,
                 "targetPath": mp3_path,
+                "executablePath": executable_path,
+                "statusCode": output.status.code(),
                 "message": if details.is_empty() {
                     "ffmpeg did not produce a valid MP3 file.".to_string()
                 } else {
@@ -3737,6 +4003,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                 anki_note_id: None,
                 anki_deck_name: None,
                 anki_note_type: None,
+                audio_deleted: false,
                 duration_ms: capture.duration_ms,
                 bytes_written: capture.bytes_written,
                 created_at_ms: capture.created_at_ms,
@@ -3815,8 +4082,6 @@ fn finalize_recording_pipeline<R: Runtime>(
                                     );
                                 }
                             }
-
-                            audio_path = compress_transcribed_audio_if_possible(&app, &audio_path);
 
                             recent_recording.file_name = audio_path
                                 .file_name()
@@ -4399,8 +4664,10 @@ pub fn run() {
             delete_recording,
             delete_recordings,
             push_recordings_to_anki,
+            push_recordings_to_anki_deck,
             translate_recordings,
             transcribe_recordings,
+            convert_recordings_to_mp3,
             show_main_window,
             hide_main_window
         ])
@@ -4482,6 +4749,7 @@ mod tests {
             anki_note_id: Some(42),
             anki_deck_name: Some("Japanese".into()),
             anki_note_type: Some("Mining".into()),
+            audio_deleted: false,
             duration_ms: 1,
             bytes_written: 1,
             created_at_ms: 1,
