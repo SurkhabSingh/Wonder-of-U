@@ -81,6 +81,7 @@ type RecentRecording = {
   fileName: string;
   filePath: string;
   transcriptPath: string | null;
+  transcriptLanguage: string | null;
   translationPath: string | null;
   ankiNoteId: number | null;
   ankiDeckName: string | null;
@@ -502,6 +503,22 @@ function fileNameFromPath(path: string | null): string {
 
 function pathHasExtension(path: string, extension: string): boolean {
   return path.toLowerCase().endsWith(`.${extension.toLowerCase()}`);
+}
+
+function recordingSupportsFurigana(recording: RecentRecording): boolean {
+  const language = recording.transcriptLanguage?.toLowerCase();
+  return language === "ja" || language === "japanese";
+}
+
+function transcriptLanguageLabel(language: string | null): string | null {
+  if (!language) {
+    return null;
+  }
+
+  return (
+    LANGUAGE_OPTIONS.find((option) => option.code === language)?.label ??
+    language.toUpperCase()
+  );
 }
 
 function normalizeSelection(
@@ -1113,7 +1130,8 @@ function showSuccess(message: string) {
     (recording) => recording.translationPath === null,
   );
   const selectedFuriganaRecordings = selectedTranscribedRecordings.filter(
-    (recording) => recording.ankiNoteId !== null,
+    (recording) =>
+      recording.ankiNoteId !== null && recordingSupportsFurigana(recording),
   );
   const convertibleRecordings = bootstrap.recentRecordings.filter(
     (recording) =>
@@ -2460,7 +2478,11 @@ function showSuccess(message: string) {
                         !recording.audioDeleted;
                       const canAddFuriganaToCard =
                         Boolean(recording.transcriptPath) &&
-                        recording.ankiNoteId !== null;
+                        recording.ankiNoteId !== null &&
+                        recordingSupportsFurigana(recording);
+                      const languageLabel = transcriptLanguageLabel(
+                        recording.transcriptLanguage,
+                      );
 
                       return (
                       <article
@@ -2521,6 +2543,11 @@ function showSuccess(message: string) {
                           {recording.translationPath !== null ? (
                             <span className="recording-state success-state">
                               Translated
+                            </span>
+                          ) : null}
+                          {languageLabel ? (
+                            <span className="recording-state">
+                              {languageLabel}
                             </span>
                           ) : null}
                         </div>
@@ -2659,26 +2686,28 @@ function showSuccess(message: string) {
                                         </DropdownMenuPrimitive.SubContent>
                                       </DropdownMenuPrimitive.Portal>
                                     </DropdownMenuPrimitive.Sub>
-                                    <DropdownMenuPrimitive.Item
-                                      className="action-menu-item"
-                                      onSelect={() =>
-                                        void addFuriganaToAnki([
-                                          recording.filePath,
-                                        ])
-                                      }
-                                      disabled={
-                                        !canAddFuriganaToCard ||
-                                        !settingsDraft.anki.fields.furigana ||
-                                        busyAction === "addFurigana"
-                                      }
-                                    >
-                                      Add furigana
-                                      {!settingsDraft.anki.fields.furigana ? (
-                                        <span className="action-menu-meta">
-                                          Map field
-                                        </span>
-                                      ) : null}
-                                    </DropdownMenuPrimitive.Item>
+                                    {recordingSupportsFurigana(recording) ? (
+                                      <DropdownMenuPrimitive.Item
+                                        className="action-menu-item"
+                                        onSelect={() =>
+                                          void addFuriganaToAnki([
+                                            recording.filePath,
+                                          ])
+                                        }
+                                        disabled={
+                                          !canAddFuriganaToCard ||
+                                          !settingsDraft.anki.fields.furigana ||
+                                          busyAction === "addFurigana"
+                                        }
+                                      >
+                                        Add furigana
+                                        {!settingsDraft.anki.fields.furigana ? (
+                                          <span className="action-menu-meta">
+                                            Map field
+                                          </span>
+                                        ) : null}
+                                      </DropdownMenuPrimitive.Item>
+                                    ) : null}
                                   </>
                                 ) : null}
                                 {recording.transcriptPath &&

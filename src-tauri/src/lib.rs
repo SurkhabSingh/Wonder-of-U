@@ -230,6 +230,8 @@ struct RecentRecording {
     #[serde(default)]
     transcript_path: Option<String>,
     #[serde(default)]
+    transcript_language: Option<String>,
+    #[serde(default)]
     translation_path: Option<String>,
     #[serde(default)]
     anki_note_id: Option<i64>,
@@ -777,11 +779,69 @@ fn load_persisted_data<R: Runtime>(
 
     state.settings = normalize_settings(app, paths, state.settings)?;
     state.recent_recordings.truncate(RECENT_RECORDINGS_LIMIT);
+    normalize_recent_recording_languages(&mut state.recent_recordings);
     if state.untitled_counter == 0 {
         state.untitled_counter = 1;
     }
 
     Ok(state)
+}
+
+fn normalize_recent_recording_languages(recordings: &mut [RecentRecording]) {
+    for recording in recordings {
+        if recording.transcript_language.is_some() {
+            continue;
+        }
+
+        let Some(transcript_path) = recording.transcript_path.as_deref() else {
+            continue;
+        };
+
+        recording.transcript_language =
+            derive_transcript_language_from_path(Path::new(transcript_path), "auto");
+    }
+}
+
+fn derive_transcript_language_from_path(
+    transcript_path: &Path,
+    requested_language: &str,
+) -> Option<String> {
+    if let Some(language) = normalize_transcript_language_code(requested_language) {
+        return Some(language);
+    }
+
+    let transcript = fs::read_to_string(transcript_path).ok()?;
+    if transcript_looks_japanese(&transcript) {
+        Some("ja".into())
+    } else {
+        None
+    }
+}
+
+fn normalize_transcript_language_code(language: &str) -> Option<String> {
+    let normalized = language.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "auto" => None,
+        "ja" | "japanese" => Some("ja".into()),
+        _ => Some(normalized),
+    }
+}
+
+fn transcript_looks_japanese(transcript: &str) -> bool {
+    transcript.chars().any(is_japanese_kana)
+}
+
+fn is_japanese_kana(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3040..=0x30ff | 0x31f0..=0x31ff | 0xff66..=0xff9f
+    )
+}
+
+fn is_japanese_transcript_language(language: Option<&str>) -> bool {
+    language
+        .map(normalize_transcript_language_code)
+        .is_some_and(|normalized| normalized.as_deref() == Some("ja"))
 }
 
 fn normalize_settings<R: Runtime>(
@@ -2388,6 +2448,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     original_file_path: &str,
     mut recording: RecentRecording,
     transcript_path: PathBuf,
+    requested_language: &str,
 ) -> Result<RecentRecording, String> {
     let mut audio_path = PathBuf::from(&recording.file_path);
     let mut final_transcript_path = transcript_path;
@@ -2417,6 +2478,8 @@ fn apply_transcription_result_to_recording<R: Runtime>(
         .to_string();
     recording.file_path = audio_path.display().to_string();
     recording.transcript_path = Some(final_transcript_path.display().to_string());
+    recording.transcript_language =
+        derive_transcript_language_from_path(&final_transcript_path, requested_language);
     recording.bytes_written = fs::metadata(&audio_path)
         .map(|metadata| metadata.len())
         .unwrap_or(recording.bytes_written);
@@ -2499,6 +2562,7 @@ fn transcribe_recordings_inner<R: Runtime>(
                 &original_file_path,
                 recording.clone(),
                 result.transcript_path,
+                &settings.whisper.language,
             )
         });
 
@@ -2868,6 +2932,13 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
             format!("Could not read transcript: {error}"),
         )
     })?;
+    if !recording_transcript_supports_furigana(&recording, &transcript) {
+        return Err((
+            file_path,
+            Some(note_id),
+            "Add furigana is only available for Japanese transcripts.".into(),
+        ));
+    }
     let furigana_html = request_furigana_html(&transcript)
         .map_err(|error| (file_path.clone(), Some(note_id), error))?;
 
@@ -2894,6 +2965,18 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
     })?;
 
     Ok(note_id)
+}
+
+fn recording_transcript_supports_furigana(recording: &RecentRecording, transcript: &str) -> bool {
+    if is_japanese_transcript_language(recording.transcript_language.as_deref()) {
+        return true;
+    }
+
+    if recording.transcript_language.is_some() {
+        return false;
+    }
+
+    transcript_looks_japanese(transcript)
 }
 
 fn convert_recordings_to_mp3_inner<R: Runtime>(
@@ -4383,6 +4466,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                     .to_string(),
                 file_path: capture.output_path.display().to_string(),
                 transcript_path: None,
+                transcript_language: None,
                 translation_path: None,
                 anki_note_id: None,
                 anki_deck_name: None,
@@ -4475,6 +4559,11 @@ fn finalize_recording_pipeline<R: Runtime>(
                             recent_recording.file_path = audio_path.display().to_string();
                             recent_recording.transcript_path =
                                 Some(transcript_path.display().to_string());
+                            recent_recording.transcript_language =
+                                derive_transcript_language_from_path(
+                                    &transcript_path,
+                                    &settings.whisper.language,
+                                );
                             recent_recording.bytes_written = fs::metadata(&audio_path)
                                 .map(|metadata| metadata.len())
                                 .unwrap_or(recent_recording.bytes_written);
@@ -5063,8 +5152,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_theme_preference, recording_pushed_to_anki_target, sanitize_recording_name,
-        unique_wav_path, AnkiSettings, PersistedData, RecentRecording,
+        normalize_theme_preference, recording_pushed_to_anki_target,
+        recording_transcript_supports_furigana, sanitize_recording_name, unique_wav_path,
+        AnkiSettings, PersistedData, RecentRecording,
     };
     use std::path::Path;
 
@@ -5130,6 +5220,7 @@ mod tests {
             file_name: "sample.wav".into(),
             file_path: "C:\\Temp\\sample.wav".into(),
             transcript_path: Some("C:\\Temp\\sample.transcript.txt".into()),
+            transcript_language: Some("ja".into()),
             translation_path: None,
             anki_note_id: Some(42),
             anki_deck_name: Some("Japanese".into()),
@@ -5152,5 +5243,44 @@ mod tests {
         recording.anki_note_type = Some("Mining".into());
         recording.anki_note_id = None;
         assert!(!recording_pushed_to_anki_target(&recording, &settings));
+    }
+
+    #[test]
+    fn furigana_requires_japanese_transcript_language() {
+        let mut recording = RecentRecording {
+            file_name: "sample.wav".into(),
+            file_path: "C:\\Temp\\sample.wav".into(),
+            transcript_path: Some("C:\\Temp\\sample.transcript.txt".into()),
+            transcript_language: Some("en".into()),
+            translation_path: None,
+            anki_note_id: Some(42),
+            anki_deck_name: Some("Japanese".into()),
+            anki_note_type: Some("Mining".into()),
+            audio_deleted: false,
+            duration_ms: 1,
+            bytes_written: 1,
+            created_at_ms: 1,
+        };
+
+        assert!(!recording_transcript_supports_furigana(
+            &recording,
+            "日本語を食べる"
+        ));
+
+        recording.transcript_language = Some("ja".into());
+        assert!(recording_transcript_supports_furigana(
+            &recording,
+            "plain text"
+        ));
+
+        recording.transcript_language = None;
+        assert!(recording_transcript_supports_furigana(
+            &recording,
+            "日本語を食べる"
+        ));
+        assert!(!recording_transcript_supports_furigana(
+            &recording,
+            "plain text"
+        ));
     }
 }
