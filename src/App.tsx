@@ -1,13 +1,14 @@
-import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import * as SelectPrimitive from "@radix-ui/react-select";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
+import { ThemedSelect } from "./components/ui/ThemedSelect";
+import { TooltipBadge, TooltipWrap } from "./components/ui/Tooltip";
 import {
   APP_SNAPSHOT_EVENT,
   DEFAULT_ANKI_CATALOG,
@@ -49,117 +50,6 @@ import type {
   WhisperAssetUpdateResult,
   WhisperSettings,
 } from "./types";
-
-function TooltipBadge({
-  label,
-  description,
-}: {
-  label: string;
-  description: string;
-}) {
-  return (
-    <TooltipPrimitive.Root>
-      <TooltipPrimitive.Trigger asChild>
-        <span className="tooltip-badge" aria-label={description}>
-          {label}
-        </span>
-      </TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content className="themed-tooltip-content" sideOffset={7}>
-          {description}
-          <TooltipPrimitive.Arrow className="themed-tooltip-arrow" />
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
-    </TooltipPrimitive.Root>
-  );
-}
-
-function TooltipWrap({
-  description,
-  children,
-}: {
-  description: string;
-  children: ReactElement;
-}) {
-  return (
-    <TooltipPrimitive.Root>
-      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content className="themed-tooltip-content" sideOffset={7}>
-          {description}
-          <TooltipPrimitive.Arrow className="themed-tooltip-arrow" />
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
-    </TooltipPrimitive.Root>
-  );
-}
-
-const EMPTY_SELECT_VALUE = "__wonder_of_u_empty__";
-
-function toRadixSelectValue(value: string): string {
-  return value === "" ? EMPTY_SELECT_VALUE : value;
-}
-
-function fromRadixSelectValue(value: string): string {
-  return value === EMPTY_SELECT_VALUE ? "" : value;
-}
-
-function ThemedSelect({
-  value,
-  options,
-  onChange,
-  placeholder = "Select option",
-  disabled = false,
-  title,
-}: {
-  value: string;
-  options: SelectOption[];
-  onChange: (value: string) => void;
-  placeholder?: string;
-  disabled?: boolean;
-  title?: string;
-}) {
-  return (
-    <SelectPrimitive.Root
-      value={toRadixSelectValue(value)}
-      onValueChange={(nextValue) => onChange(fromRadixSelectValue(nextValue))}
-      disabled={disabled}
-    >
-      <SelectPrimitive.Trigger
-        className="themed-select-trigger"
-        title={title}
-        aria-label={placeholder}
-      >
-        <SelectPrimitive.Value placeholder={placeholder} />
-        <SelectPrimitive.Icon className="themed-select-icon" aria-hidden="true">
-          ▾
-        </SelectPrimitive.Icon>
-      </SelectPrimitive.Trigger>
-      <SelectPrimitive.Portal>
-        <SelectPrimitive.Content
-          className="themed-select-content"
-          position="popper"
-          sideOffset={6}
-        >
-          <SelectPrimitive.Viewport className="themed-select-viewport">
-            {options.map((option) => (
-              <SelectPrimitive.Item
-                key={`${option.value}:${option.label}`}
-                className="themed-select-item"
-                value={toRadixSelectValue(option.value)}
-              >
-                <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
-                <SelectPrimitive.ItemIndicator className="themed-select-check">
-                  ✓
-                </SelectPrimitive.ItemIndicator>
-              </SelectPrimitive.Item>
-            ))}
-          </SelectPrimitive.Viewport>
-        </SelectPrimitive.Content>
-      </SelectPrimitive.Portal>
-    </SelectPrimitive.Root>
-  );
-}
 
 function App() {
   const [bootstrap, setBootstrap] = useState<AppBootstrap>(DEFAULT_BOOTSTRAP);
