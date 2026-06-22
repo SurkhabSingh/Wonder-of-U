@@ -191,6 +191,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       transcription: true,
       deleteLocalAudioAfterAnkiPush: false,
       allowMp3Conversion: false,
+      autoAddFuriganaAfterAnkiPush: false,
     },
     theme: "system",
     launchAtLogin: false,

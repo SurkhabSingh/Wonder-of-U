@@ -1,15 +1,18 @@
 import type { AnkiFieldMapping, SelectOption } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
+import { TooltipBadge } from "../ui/Tooltip";
 
 export function AnkiFieldSelect({
   field,
   label,
+  description,
   currentValue,
   fieldOptions,
   onChange,
 }: {
   field: keyof AnkiFieldMapping;
   label: string;
+  description?: string;
   currentValue: string;
   fieldOptions: string[];
   onChange: (field: keyof AnkiFieldMapping, value: string) => void;
@@ -27,7 +30,10 @@ export function AnkiFieldSelect({
 
   return (
     <label className="field">
-      <span>{label}</span>
+      <span className="field-label-with-help">
+        <span>{label}</span>
+        {description ? <TooltipBadge label="?" description={description} /> : null}
+      </span>
       <ThemedSelect
         value={currentValue}
         options={options}

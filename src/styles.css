@@ -825,6 +825,18 @@ input::placeholder {
   font-weight: 550;
 }
 
+.field-label-with-help {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.field-label-with-help .tooltip-badge {
+  min-height: 20px;
+  padding: 1px 6px;
+  font-size: 10px;
+}
+
 .field:focus-within > span {
   color: var(--text-strong);
 }
@@ -869,6 +881,12 @@ input::placeholder {
   align-items: center;
   color: var(--text);
   font-size: 12px;
+}
+
+.inline-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .toggle input {

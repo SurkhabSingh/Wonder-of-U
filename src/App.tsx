@@ -1442,13 +1442,13 @@ function showSuccess(message: string) {
                                       )
                                     }
                                     disabled={
-                                      !settingsDraft.anki.fields.furigana ||
+                                      !settingsDraft.anki.fields.transcription ||
                                       busyAction === "addFurigana"
                                     }
                                   >
                                     Add furigana
                                     <span className="action-menu-meta">
-                                      {settingsDraft.anki.fields.furigana
+                                      {settingsDraft.anki.fields.transcription
                                         ? selectedFuriganaRecordings.length
                                         : "Map field"}
                                     </span>
@@ -1831,12 +1831,12 @@ function showSuccess(message: string) {
                                         }
                                         disabled={
                                           !canAddFuriganaToCard ||
-                                          !settingsDraft.anki.fields.furigana ||
+                                          !settingsDraft.anki.fields.transcription ||
                                           busyAction === "addFurigana"
                                         }
                                       >
                                         Add furigana
-                                        {!settingsDraft.anki.fields.furigana ? (
+                                        {!settingsDraft.anki.fields.transcription ? (
                                           <span className="action-menu-meta">
                                             Map field
                                           </span>
@@ -2505,7 +2505,13 @@ function showSuccess(message: string) {
 
                 <div className="settings-grid anki-grid">
                   <label className="field">
-                    <span>Deck</span>
+                    <span className="field-label-with-help">
+                      <span>Deck</span>
+                      <TooltipBadge
+                        label="?"
+                        description="Cards are created in this Anki deck when you use the default Push action. Push to another deck overrides this only for that action."
+                      />
+                    </span>
                     <ThemedSelect
                       value={settingsDraft.anki.deckName}
                       options={[
@@ -2536,7 +2542,13 @@ function showSuccess(message: string) {
                   </label>
 
                   <label className="field">
-                    <span>Note type</span>
+                    <span className="field-label-with-help">
+                      <span>Note type</span>
+                      <TooltipBadge
+                        label="?"
+                        description="This controls which Anki fields are available below. If you change the note type, the field mapping is reset because each note type has different fields."
+                      />
+                    </span>
                     <ThemedSelect
                       value={settingsDraft.anki.noteType}
                       options={[
@@ -2579,21 +2591,16 @@ function showSuccess(message: string) {
 
                   <AnkiFieldSelect
                     field="transcription"
-                    label="Transcript field"
+                    label="Expression / transcript field"
+                    description="Receives the transcript during push. When furigana is enabled or added later, this same field is replaced with hover-only ruby HTML, like a Yomitan expression field."
                     currentValue={settingsDraft.anki.fields.transcription}
                     fieldOptions={displayedAnkiCatalog.fields}
                     onChange={updateAnkiField}
                   />
                   <AnkiFieldSelect
-                    field="furigana"
-                    label="Furigana field"
-                    currentValue={settingsDraft.anki.fields.furigana}
-                    fieldOptions={displayedAnkiCatalog.fields}
-                    onChange={updateAnkiField}
-                  />
-                  <AnkiFieldSelect
                     field="audio"
-                    label="Audio field"
+                    label="Replay audio field"
+                    description="Receives the [sound:...] tag. The replay icon only appears on card sides that render this field. If it disappears after revealing the answer, the Back template must include the front side or this audio field."
                     currentValue={settingsDraft.anki.fields.audio}
                     fieldOptions={displayedAnkiCatalog.fields}
                     onChange={updateAnkiField}
@@ -2601,6 +2608,7 @@ function showSuccess(message: string) {
                   <AnkiFieldSelect
                     field="translation"
                     label="Translation field"
+                    description="Optional translated text. Leave unmapped if you do not want translations written to Anki."
                     currentValue={settingsDraft.anki.fields.translation}
                     fieldOptions={displayedAnkiCatalog.fields}
                     onChange={updateAnkiField}
@@ -2608,6 +2616,7 @@ function showSuccess(message: string) {
                   <AnkiFieldSelect
                     field="sourcePath"
                     label="Source path field"
+                    description="Optional local audio path for your own tracking. This is not required for playback after Anki copies the media."
                     currentValue={settingsDraft.anki.fields.sourcePath}
                     fieldOptions={displayedAnkiCatalog.fields}
                     onChange={updateAnkiField}
@@ -2615,6 +2624,7 @@ function showSuccess(message: string) {
                   <AnkiFieldSelect
                     field="createdAt"
                     label="Created-at field"
+                    description="Optional recording timestamp in milliseconds. Leave unmapped unless your note type has a tracking field for it."
                     currentValue={settingsDraft.anki.fields.createdAt}
                     fieldOptions={displayedAnkiCatalog.fields}
                     onChange={updateAnkiField}
@@ -2622,12 +2632,40 @@ function showSuccess(message: string) {
                 </div>
 
                 <div className="update-card">
-                  <strong>Recommended Basic-card mapping: Audio -&gt; Front, Transcript/Furigana -&gt; Back.</strong>
+                  <label className="toggle inline-toggle">
+                    <input
+                      type="checkbox"
+                      checked={
+                        settingsDraft.features.autoAddFuriganaAfterAnkiPush
+                      }
+                      onChange={(event) =>
+                        updateSettings({
+                          features: {
+                            autoAddFuriganaAfterAnkiPush:
+                              event.currentTarget.checked,
+                          },
+                        })
+                      }
+                    />
+                    <span>
+                      Automatically add furigana when pushing Japanese cards
+                    </span>
+                  </label>
                   <p className="microcopy">
-                    Push first to create the card with the recording on the
-                    front. Then use Add furigana to update the mapped furigana
-                    field with hover-to-show ruby text from the Wonder of U
-                    Anki add-on.
+                    Requires the Wonder of U Anki add-on to be running. If the
+                    add-on is unavailable, Wonder of U still pushes the card and
+                    warns that furigana was skipped. Furigana is written onto
+                    the expression/transcript field itself.
+                  </p>
+                </div>
+
+                <div className="update-card">
+                  <strong>Recommended mapping: Expression / transcript -&gt; Expression or Back, Replay audio -&gt; Audio or Front.</strong>
+                  <p className="microcopy">
+                    Furigana is applied directly to the expression/transcript
+                    field, not a separate field. The Anki replay icon only
+                    shows if the audio field is visible in the current card side
+                    template.
                   </p>
                 </div>
               </article>

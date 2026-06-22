@@ -146,6 +146,8 @@ struct FeatureSettings {
     delete_local_audio_after_anki_push: bool,
     #[serde(default)]
     allow_mp3_conversion: bool,
+    #[serde(default)]
+    auto_add_furigana_after_anki_push: bool,
 }
 
 impl Default for FeatureSettings {
@@ -154,6 +156,7 @@ impl Default for FeatureSettings {
             transcription: true,
             delete_local_audio_after_anki_push: false,
             allow_mp3_conversion: false,
+            auto_add_furigana_after_anki_push: false,
         }
     }
 }
@@ -922,6 +925,7 @@ fn normalize_settings<R: Runtime>(
                 .features
                 .delete_local_audio_after_anki_push,
             allow_mp3_conversion: settings.features.allow_mp3_conversion,
+            auto_add_furigana_after_anki_push: settings.features.auto_add_furigana_after_anki_push,
         },
         theme: theme.into(),
         launch_at_login: settings.launch_at_login,
@@ -1955,6 +1959,33 @@ fn anki_note_exists(note_id: i64) -> Result<bool, String> {
     }))
 }
 
+fn anki_note_field_value(note_id: i64, field_name: &str) -> Result<Option<String>, String> {
+    let result = anki_connect_request(
+        "notesInfo",
+        serde_json::json!({
+            "notes": [note_id]
+        }),
+    )?;
+
+    let Some(note) = result.as_array().and_then(|notes| {
+        notes.iter().find(|note| {
+            note.get("noteId")
+                .and_then(|value| value.as_i64())
+                .is_some_and(|candidate| candidate == note_id)
+        })
+    }) else {
+        return Ok(None);
+    };
+
+    Ok(note
+        .get("fields")
+        .and_then(|fields| fields.as_object())
+        .and_then(|fields| fields.get(field_name))
+        .and_then(|field| field.get("value"))
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string))
+}
+
 fn clear_recording_anki_reference<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
@@ -2272,6 +2303,7 @@ fn push_single_recording_to_anki<R: Runtime>(
     app: &AppHandle<R>,
     recording: &RecentRecording,
     settings: &AnkiSettings,
+    auto_add_furigana_after_push: bool,
 ) -> Result<AnkiPushOutcome, String> {
     if settings.deck_name.is_empty() {
         return Err("Choose an Anki deck before pushing recordings.".into());
@@ -2308,12 +2340,11 @@ fn push_single_recording_to_anki<R: Runtime>(
         settings.fields.transcription.clone(),
         serde_json::Value::String(html_escape(&transcript)),
     );
-    if !settings.fields.audio.is_empty() {
-        fields.insert(
-            settings.fields.audio.clone(),
-            serde_json::Value::String(format!("[sound:{media_file_name}]")),
-        );
-    }
+    prepend_anki_field_value(
+        &mut fields,
+        &settings.fields.audio,
+        format!("[sound:{media_file_name}]"),
+    );
     if !settings.fields.source_path.is_empty() {
         fields.insert(
             settings.fields.source_path.clone(),
@@ -2336,6 +2367,18 @@ fn push_single_recording_to_anki<R: Runtime>(
             }
         }
     }
+
+    let furigana_message = if auto_add_furigana_after_push {
+        maybe_insert_automatic_furigana_field(
+            recording,
+            settings,
+            &transcript,
+            &media_file_name,
+            &mut fields,
+        )
+    } else {
+        None
+    };
 
     let note_id = anki_connect_request(
         "addNote",
@@ -2369,8 +2412,113 @@ fn push_single_recording_to_anki<R: Runtime>(
 
     Ok(AnkiPushOutcome {
         note_id,
-        furigana_message: None,
+        furigana_message,
     })
+}
+
+fn maybe_insert_automatic_furigana_field(
+    recording: &RecentRecording,
+    settings: &AnkiSettings,
+    transcript: &str,
+    media_file_name: &str,
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    if !recording_transcript_supports_furigana(recording, transcript) {
+        return None;
+    }
+
+    match request_furigana_html(transcript) {
+        Ok(furigana_html) => {
+            let target_field = settings.fields.transcription.as_str();
+            let existing_value = fields.get(target_field).and_then(|value| value.as_str());
+            let fallback_sound_tag =
+                if !settings.fields.audio.is_empty() && settings.fields.audio == target_field {
+                    Some(format!("[sound:{media_file_name}]"))
+                } else {
+                    None
+                };
+            let furigana_html = preserve_anki_sound_tags(
+                existing_value,
+                &furigana_html,
+                fallback_sound_tag.as_deref(),
+            );
+            fields.insert(
+                target_field.to_string(),
+                serde_json::Value::String(furigana_html),
+            );
+            Some("Furigana was added automatically.".into())
+        }
+        Err(error) => Some(format!("Furigana was skipped because {error}")),
+    }
+}
+
+fn prepend_anki_field_value(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    field_name: &str,
+    value: String,
+) {
+    if field_name.is_empty() {
+        return;
+    }
+
+    let next_value = fields
+        .get(field_name)
+        .and_then(|existing| existing.as_str())
+        .map(|existing| join_anki_field_parts(&value, existing))
+        .unwrap_or(value);
+    fields.insert(
+        field_name.to_string(),
+        serde_json::Value::String(next_value),
+    );
+}
+
+fn join_anki_field_parts(first: &str, second: &str) -> String {
+    let first = first.trim();
+    let second = second.trim();
+    match (first.is_empty(), second.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => second.to_string(),
+        (false, true) => first.to_string(),
+        (false, false) => format!("{first}<br>{second}"),
+    }
+}
+
+fn preserve_anki_sound_tags(
+    existing_value: Option<&str>,
+    new_value: &str,
+    fallback_sound_tag: Option<&str>,
+) -> String {
+    let mut sound_tags = existing_value
+        .map(extract_anki_sound_tags)
+        .unwrap_or_default();
+
+    if let Some(fallback_sound_tag) = fallback_sound_tag {
+        if !new_value.contains(fallback_sound_tag)
+            && !sound_tags.iter().any(|tag| tag == fallback_sound_tag)
+        {
+            sound_tags.push(fallback_sound_tag.to_string());
+        }
+    }
+
+    let sound_prefix = sound_tags.join(" ");
+    join_anki_field_parts(&sound_prefix, new_value)
+}
+
+fn extract_anki_sound_tags(value: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut remaining = value;
+    while let Some(start) = remaining.find("[sound:") {
+        let candidate = &remaining[start..];
+        let Some(end) = candidate.find(']') else {
+            break;
+        };
+        let tag = candidate[..=end].to_string();
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+        remaining = &candidate[end + 1..];
+    }
+    tags
 }
 
 fn recording_pushed_to_anki_target(recording: &RecentRecording, settings: &AnkiSettings) -> bool {
@@ -2637,7 +2785,7 @@ fn push_recordings_to_anki_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
 ) -> Result<RecordingBatchResult, String> {
-    let (settings, delete_local_audio_after_push) = {
+    let (settings, delete_local_audio_after_push, auto_add_furigana_after_push) = {
         let persisted_state = app.state::<SharedPersistedState>();
         let persisted = persisted_state
             .0
@@ -2649,6 +2797,10 @@ fn push_recordings_to_anki_inner<R: Runtime>(
                 .settings
                 .features
                 .delete_local_audio_after_anki_push,
+            persisted
+                .settings
+                .features
+                .auto_add_furigana_after_anki_push,
         )
     };
     push_recordings_to_anki_with_settings_inner(
@@ -2656,6 +2808,7 @@ fn push_recordings_to_anki_inner<R: Runtime>(
         file_paths,
         settings,
         delete_local_audio_after_push,
+        auto_add_furigana_after_push,
     )
 }
 
@@ -2669,7 +2822,7 @@ fn push_recordings_to_anki_deck_inner<R: Runtime>(
         return Err("Choose an Anki deck before pushing recordings.".into());
     }
 
-    let (mut settings, delete_local_audio_after_push) = {
+    let (mut settings, delete_local_audio_after_push, auto_add_furigana_after_push) = {
         let persisted_state = app.state::<SharedPersistedState>();
         let persisted = persisted_state
             .0
@@ -2681,6 +2834,10 @@ fn push_recordings_to_anki_deck_inner<R: Runtime>(
                 .settings
                 .features
                 .delete_local_audio_after_anki_push,
+            persisted
+                .settings
+                .features
+                .auto_add_furigana_after_anki_push,
         )
     };
     settings.deck_name = deck_name;
@@ -2689,6 +2846,7 @@ fn push_recordings_to_anki_deck_inner<R: Runtime>(
         file_paths,
         settings,
         delete_local_audio_after_push,
+        auto_add_furigana_after_push,
     )
 }
 
@@ -2697,6 +2855,7 @@ fn push_recordings_to_anki_with_settings_inner<R: Runtime>(
     file_paths: Vec<String>,
     settings: AnkiSettings,
     delete_local_audio_after_push: bool,
+    auto_add_furigana_after_push: bool,
 ) -> Result<RecordingBatchResult, String> {
     let recordings = selected_recordings(app, file_paths)?;
     let mut items = Vec::new();
@@ -2749,7 +2908,12 @@ fn push_recordings_to_anki_with_settings_inner<R: Runtime>(
             continue;
         }
 
-        match push_single_recording_to_anki(app, &recording, &settings) {
+        match push_single_recording_to_anki(
+            app,
+            &recording,
+            &settings,
+            auto_add_furigana_after_push,
+        ) {
             Ok(outcome) => {
                 let note_id = outcome.note_id;
                 let mut message = format!("Created Anki note {note_id}.");
@@ -2817,8 +2981,10 @@ fn add_furigana_to_anki_inner<R: Runtime>(
         persisted.settings.anki.clone()
     };
 
-    if settings.fields.furigana.is_empty() {
-        return Err("Map an Anki field for furigana before updating existing cards.".into());
+    if settings.fields.transcription.is_empty() {
+        return Err(
+            "Map the expression/transcript Anki field before updating existing cards.".into(),
+        );
     }
 
     let recordings = selected_recordings(app, file_paths)?;
@@ -2941,10 +3107,33 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
     }
     let furigana_html = request_furigana_html(&transcript)
         .map_err(|error| (file_path.clone(), Some(note_id), error))?;
+    let target_field = settings.fields.transcription.as_str();
+    let existing_furigana_field_value =
+        anki_note_field_value(note_id, target_field).map_err(|error| {
+            (
+                file_path.clone(),
+                Some(note_id),
+                format!(
+                    "Could not read the existing expression field before adding furigana: {error}"
+                ),
+            )
+        })?;
+    let media_file_name = anki_media_file_name(&PathBuf::from(&recording.file_path));
+    let fallback_sound_tag =
+        if !settings.fields.audio.is_empty() && settings.fields.audio == target_field {
+            Some(format!("[sound:{media_file_name}]"))
+        } else {
+            None
+        };
+    let furigana_html = preserve_anki_sound_tags(
+        existing_furigana_field_value.as_deref(),
+        &furigana_html,
+        fallback_sound_tag.as_deref(),
+    );
 
     let mut fields = serde_json::Map::new();
     fields.insert(
-        settings.fields.furigana.clone(),
+        target_field.to_string(),
         serde_json::Value::String(furigana_html),
     );
     anki_connect_request(
@@ -5152,9 +5341,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_theme_preference, recording_pushed_to_anki_target,
-        recording_transcript_supports_furigana, sanitize_recording_name, unique_wav_path,
-        AnkiSettings, PersistedData, RecentRecording,
+        join_anki_field_parts, normalize_theme_preference, preserve_anki_sound_tags,
+        recording_pushed_to_anki_target, recording_transcript_supports_furigana,
+        sanitize_recording_name, unique_wav_path, AnkiSettings, PersistedData, RecentRecording,
     };
     use std::path::Path;
 
@@ -5282,5 +5471,44 @@ mod tests {
             &recording,
             "plain text"
         ));
+    }
+
+    #[test]
+    fn anki_field_parts_join_without_erasing_audio() {
+        assert_eq!(
+            join_anki_field_parts("[sound:sample.wav]", "transcript"),
+            "[sound:sample.wav]<br>transcript"
+        );
+        assert_eq!(join_anki_field_parts("", "transcript"), "transcript");
+        assert_eq!(
+            join_anki_field_parts("[sound:sample.wav]", ""),
+            "[sound:sample.wav]"
+        );
+    }
+
+    #[test]
+    fn furigana_replacement_preserves_sound_tags() {
+        let result = preserve_anki_sound_tags(
+            Some("[sound:sample.wav]<br>old text"),
+            "<ruby>text<rt>reading</rt></ruby>",
+            None,
+        );
+        assert_eq!(
+            result,
+            "[sound:sample.wav]<br><ruby>text<rt>reading</rt></ruby>"
+        );
+    }
+
+    #[test]
+    fn furigana_replacement_uses_fallback_sound_tag() {
+        let result = preserve_anki_sound_tags(
+            Some("old text"),
+            "<ruby>text<rt>reading</rt></ruby>",
+            Some("[sound:sample.wav]"),
+        );
+        assert_eq!(
+            result,
+            "[sound:sample.wav]<br><ruby>text<rt>reading</rt></ruby>"
+        );
     }
 }
