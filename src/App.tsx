@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import * as TabsPrimitive from "@radix-ui/react-tabs";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
+import { PageSidebar } from "./components/layout/PageSidebar";
+import { RecordingFilterTabs } from "./components/recordings/RecordingFilterTabs";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { ThemedSelect } from "./components/ui/ThemedSelect";
 import { TooltipBadge, TooltipWrap } from "./components/ui/Tooltip";
@@ -34,6 +34,12 @@ import {
   transcriptLanguageLabel,
   whisperStatusLabel,
 } from "./lib/helpers";
+import {
+  activePageLabel,
+  createRecordingFilterTabs,
+  createSetupPages,
+  createWorkflowPages,
+} from "./lib/navigation";
 import type {
   AnkiCatalog,
   AnkiFieldMapping,
@@ -541,25 +547,13 @@ function showSuccess(message: string) {
       recording.transcriptPath !== null &&
       pathHasExtension(recording.filePath, "wav"),
   );
-  const recordingFilterTabs: Array<{
-    id: RecordingFilter;
-    label: string;
-    count: number;
-  }> = [
-    { id: "all", label: "All", count: bootstrap.recentRecordings.length },
-    {
-      id: "needsTranscription",
-      label: "Needs transcript",
-      count: untranscribedRecordings.length,
-    },
-    { id: "needsAnki", label: "Needs Anki", count: pushableRecordings.length },
-    {
-      id: "needsTranslation",
-      label: "Needs translation",
-      count: untranslatedRecordings.length,
-    },
-    { id: "complete", label: "Complete", count: completeRecordings.length },
-  ];
+  const recordingFilterTabs = createRecordingFilterTabs({
+    allCount: bootstrap.recentRecordings.length,
+    untranscribedCount: untranscribedRecordings.length,
+    pushableCount: pushableRecordings.length,
+    untranslatedCount: untranslatedRecordings.length,
+    completeCount: completeRecordings.length,
+  });
   const displayedAnkiCatalog = mergeSavedAnkiSettingsIntoCatalog(ankiCatalog);
   const configuredAnkiDeckLabel =
     settingsDraft.anki.deckName.trim() || "No deck selected";
@@ -575,40 +569,18 @@ function showSuccess(message: string) {
     selectedTranscribedRecordings.filter((recording) =>
       recordingPushableToDeck(recording, deckName),
     );
-  const workflowPages: Array<{ id: AppPage; label: string; description: string }> = [
-    { id: "recorder", label: "Recorder", description: "Capture system audio" },
-    {
-      id: "recordings",
-      label: "Saved Recordings",
-      description: `${bootstrap.recentRecordings.length} local item${
-        bootstrap.recentRecordings.length === 1 ? "" : "s"
-      }`,
-    },
-  ];
-  const setupPages: Array<{ id: AppPage; label: string; description: string }> = [
-    { id: "preferences", label: "App Preferences", description: "Theme and folders" },
-    {
-      id: "whisper",
-      label: "Whisper Status",
-      description: whisperStatusLabel(bootstrap.whisperDetection.status),
-    },
-    { id: "runtime", label: "Whisper CLI", description: activeRuntimeVersion },
-    { id: "model", label: "Whisper Model", description: selectedModel.label },
-    {
-      id: "storage",
-      label: "MP3 Compression",
-      description:
-        bootstrap.ffmpegDetection.status === "ready" ? "FFmpeg ready" : "FFmpeg missing",
-    },
-    {
-      id: "anki",
-      label: "Anki Mapping",
-      description: displayedAnkiCatalog.status === "ready" ? "Connected" : "Saved mapping",
-    },
-  ];
-  const activePageLabel =
-    [...workflowPages, ...setupPages].find((page) => page.id === activePage)?.label ??
-    "Recorder";
+  const workflowPages = createWorkflowPages(bootstrap.recentRecordings.length);
+  const setupPages = createSetupPages({
+    whisperStatus: whisperStatusLabel(bootstrap.whisperDetection.status),
+    runtimeVersion: activeRuntimeVersion,
+    modelLabel: selectedModel.label,
+    ffmpegReady: bootstrap.ffmpegDetection.status === "ready",
+    ankiReady: displayedAnkiCatalog.status === "ready",
+  });
+  const currentPageLabel = activePageLabel(activePage, [
+    ...workflowPages,
+    ...setupPages,
+  ]);
 
   useEffect(() => {
     if (useBatchActionsOnly) {
@@ -1329,61 +1301,13 @@ function showSuccess(message: string) {
 
       <section className="workspace">
         <section className="app-layout">
-          <aside className="page-sidebar" aria-label="Application sections">
-            <div className="sidebar-title">
-              <p className="panel-kicker">Wonder of U</p>
-              <strong>{activePageLabel}</strong>
-            </div>
-            <AccordionPrimitive.Root
-              type="multiple"
-              defaultValue={["workflow", "setup"]}
-              className="page-accordion"
-            >
-              <AccordionPrimitive.Item value="workflow" className="page-accordion-item">
-                <AccordionPrimitive.Header>
-                  <AccordionPrimitive.Trigger className="page-accordion-trigger">
-                    Workflow
-                    <span aria-hidden="true">⌄</span>
-                  </AccordionPrimitive.Trigger>
-                </AccordionPrimitive.Header>
-                <AccordionPrimitive.Content className="page-accordion-content">
-                  {workflowPages.map((page) => (
-                    <button
-                      key={page.id}
-                      type="button"
-                      className={`page-link ${activePage === page.id ? "active" : ""}`}
-                      onClick={() => setActivePage(page.id)}
-                    >
-                      <span>{page.label}</span>
-                      <small>{page.description}</small>
-                    </button>
-                  ))}
-                </AccordionPrimitive.Content>
-              </AccordionPrimitive.Item>
-
-              <AccordionPrimitive.Item value="setup" className="page-accordion-item">
-                <AccordionPrimitive.Header>
-                  <AccordionPrimitive.Trigger className="page-accordion-trigger">
-                    Setup
-                    <span aria-hidden="true">⌄</span>
-                  </AccordionPrimitive.Trigger>
-                </AccordionPrimitive.Header>
-                <AccordionPrimitive.Content className="page-accordion-content">
-                  {setupPages.map((page) => (
-                    <button
-                      key={page.id}
-                      type="button"
-                      className={`page-link ${activePage === page.id ? "active" : ""}`}
-                      onClick={() => setActivePage(page.id)}
-                    >
-                      <span>{page.label}</span>
-                      <small>{page.description}</small>
-                    </button>
-                  ))}
-                </AccordionPrimitive.Content>
-              </AccordionPrimitive.Item>
-            </AccordionPrimitive.Root>
-          </aside>
+          <PageSidebar
+            activePage={activePage}
+            activePageLabel={currentPageLabel}
+            workflowPages={workflowPages}
+            setupPages={setupPages}
+            onPageSelect={setActivePage}
+          />
 
           <section className="content-column">
           {activePage === "recorder" ? (
@@ -1468,29 +1392,11 @@ function showSuccess(message: string) {
 
                 {bootstrap.recentRecordings.length > 0 ? (
                   <>
-                    <TabsPrimitive.Root
+                    <RecordingFilterTabs
                       value={recordingFilter}
-                      onValueChange={(value) =>
-                        setRecordingFilter(value as RecordingFilter)
-                      }
-                      className="recording-filter-root"
-                    >
-                    <TabsPrimitive.List
-                      className="recording-filter-tabs"
-                      aria-label="Saved recording filters"
-                    >
-                      {recordingFilterTabs.map((tab) => (
-                        <TabsPrimitive.Trigger
-                          key={tab.id}
-                          value={tab.id}
-                          className="recording-filter-tab"
-                        >
-                          <span>{tab.label}</span>
-                          <strong>{tab.count}</strong>
-                        </TabsPrimitive.Trigger>
-                      ))}
-                    </TabsPrimitive.List>
-                    </TabsPrimitive.Root>
+                      tabs={recordingFilterTabs}
+                      onChange={setRecordingFilter}
+                    />
 
                     <div
                       className={`recording-toolbar ${
