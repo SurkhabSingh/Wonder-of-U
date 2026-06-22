@@ -6,6 +6,7 @@ import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { PageSidebar } from "./components/layout/PageSidebar";
+import { RecorderPage } from "./components/recorder/RecorderPage";
 import { RecordingFilterTabs } from "./components/recordings/RecordingFilterTabs";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { ThemedSelect } from "./components/ui/ThemedSelect";
@@ -1311,69 +1312,19 @@ function showSuccess(message: string) {
 
           <section className="content-column">
           {activePage === "recorder" ? (
-            <div className="recorder-view">
-              <article className="panel panel-primary">
-                <header className="panel-header">
-                  <div>
-                    <p className="panel-kicker">Recorder</p>
-                    <h2>System Audio</h2>
-                  </div>
-                  <div className="panel-actions">
-                    <TooltipBadge
-                      label="Shortcuts"
-                      description={hotkeyTooltip}
-                    />
-                  </div>
-                </header>
-
-                <div className="recorder-topline">
-                  <div className="timer-block">
-                    <span className="hint-label">Elapsed</span>
-                    <strong>{formatDuration(elapsedRecordingMs)}</strong>
-                  </div>
-                  <div className="status-stack" title={bootstrap.shell.statusText}>
-                    <span className="hint-label">Status</span>
-                    <strong>
-                      {bootstrap.shell.phase === "idle"
-                        ? "Ready"
-                        : bootstrap.shell.phase === "recording"
-                          ? "Recording"
-                          : bootstrap.shell.phase === "saving"
-                            ? "Saving"
-                            : bootstrap.shell.phase === "transcribing"
-                              ? "Transcribing"
-                              : bootstrap.shell.statusText}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="action-row">
-                  <button
-                    type="button"
-                    onClick={() => void startRecording()}
-                    disabled={recorderBusy}
-                  >
-                    Start Recording
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => void stopRecording()}
-                    disabled={!isRecording || busyAction === "stop"}
-                  >
-                    Stop Recording
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => void hideToTray()}
-                    disabled={busyAction !== null}
-                  >
-                    Hide To Tray
-                  </button>
-                </div>
-              </article>
-            </div>
+            <RecorderPage
+              elapsedMs={elapsedRecordingMs}
+              phase={bootstrap.shell.phase}
+              statusText={bootstrap.shell.statusText}
+              hotkeyTooltip={hotkeyTooltip}
+              recorderBusy={recorderBusy}
+              isRecording={isRecording}
+              stopBusy={busyAction === "stop"}
+              anyBusy={busyAction !== null}
+              onStartRecording={() => void startRecording()}
+              onStopRecording={() => void stopRecording()}
+              onHideToTray={() => void hideToTray()}
+            />
           ) : null}
 
           {activePage === "recordings" ? (
