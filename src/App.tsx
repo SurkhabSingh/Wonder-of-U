@@ -7,8 +7,10 @@ import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
+import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { ThemedSelect } from "./components/ui/ThemedSelect";
 import { TooltipBadge, TooltipWrap } from "./components/ui/Tooltip";
+import { UpdateResultCard } from "./components/ui/UpdateResultCard";
 import {
   APP_SNAPSHOT_EVENT,
   DEFAULT_ANKI_CATALOG,
@@ -1267,24 +1269,6 @@ function showSuccess(message: string) {
     );
   }
 
-  function renderUpdateResult(result: WhisperAssetUpdateResult | null) {
-    if (!result) {
-      return null;
-    }
-
-    return (
-      <div className={`update-card ${result.status}`}>
-        <strong>{result.message}</strong>
-        {result.currentVersion || result.latestVersion ? (
-          <p className="microcopy">
-            Current: {result.currentVersion ?? "Unknown"}{" "}
-            {result.latestVersion ? `| Latest: ${result.latestVersion}` : ""}
-          </p>
-        ) : null}
-      </div>
-    );
-  }
-
   function renderAnkiFieldSelect(field: keyof AnkiFieldMapping, label: string) {
     const currentValue = settingsDraft.anki.fields[field];
     const fieldOptions = displayedAnkiCatalog.fields;
@@ -1337,16 +1321,10 @@ function showSuccess(message: string) {
       ) : null}
 
       {showBusyOverlay ? (
-        <section className="busy-overlay" role="status" aria-live="polite">
-          <div className="busy-panel">
-            <div className="busy-spinner" aria-hidden="true" />
-            <div>
-              <p className="panel-kicker">Working</p>
-              <strong>{busyOverlayLabel}</strong>
-              <p className="microcopy">{bootstrap.shell.statusText}</p>
-            </div>
-          </div>
-        </section>
+        <BusyOverlay
+          label={busyOverlayLabel}
+          statusText={bootstrap.shell.statusText}
+        />
       ) : null}
 
       <section className="workspace">
@@ -2466,7 +2444,7 @@ function showSuccess(message: string) {
                             </div>
                           ) : null}
                         </div>
-                        {renderUpdateResult(runtimeUpdateResult)}
+                        <UpdateResultCard result={runtimeUpdateResult} />
                         {runtimeUpdateVersion ? (
                           <div className="action-row compact-actions">
                             <button
@@ -2620,7 +2598,7 @@ function showSuccess(message: string) {
                           </div>
                         ) : null}
                       </div>
-                      {renderUpdateResult(modelUpdateResult)}
+                      <UpdateResultCard result={modelUpdateResult} />
                     </div>
                   ) : (
                     <div className="action-row inline-actions">
