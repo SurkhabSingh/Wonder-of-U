@@ -27,7 +27,6 @@ use tauri::{
 #[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use tauri_plugin_notification::NotificationExt;
 use transcription::{
     run_whisper_transcription, verify_whisper_cli, verify_whisper_model,
     WhisperTranscriptionRequest,
@@ -1044,10 +1043,6 @@ fn append_structured_log(path: &Path, level: &str, event: &str, details: serde_j
 fn log_event<R: Runtime>(app: &AppHandle<R>, level: &str, event: &str, details: serde_json::Value) {
     let path = app.state::<AppPathsState>().inner().log_file.clone();
     append_structured_log(&path, level, event, details);
-}
-
-fn show_native_notification<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str) {
-    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 fn http_client() -> Result<reqwest::blocking::Client, String> {
@@ -4063,12 +4058,6 @@ fn start_recording_inner<R: Runtime>(
         shell.last_transcript_path = None;
         shell.transition_count += 1;
     })?;
-    show_native_notification(
-        app,
-        "Recording started",
-        &format!("Capturing system audio as {}.", display_name),
-    );
-
     Ok(())
 }
 
@@ -4780,14 +4769,6 @@ fn finalize_recording_pipeline<R: Runtime>(
                                     recent_recording.transcript_path.clone();
                                 shell.transition_count += 1;
                             })?;
-                            show_native_notification(
-                                &app,
-                                "Recording finished",
-                                &format!(
-                                    "Saved {} and its transcript.",
-                                    recent_recording.file_name
-                                ),
-                            );
                             return Ok(());
                         }
                         Err(error) => {
@@ -4813,11 +4794,6 @@ fn finalize_recording_pipeline<R: Runtime>(
                                 shell.last_transcript_path = None;
                                 shell.transition_count += 1;
                             })?;
-                            show_native_notification(
-                                &app,
-                                "Recording finished",
-                                &format!("Saved {}.", recent_recording.file_name),
-                            );
                             return Ok(());
                         }
                     }
@@ -4836,11 +4812,6 @@ fn finalize_recording_pipeline<R: Runtime>(
                     shell.last_transcript_path = None;
                     shell.transition_count += 1;
                 })?;
-                show_native_notification(
-                    &app,
-                    "Recording finished",
-                    &format!("Saved {}.", recent_recording.file_name),
-                );
                 return Ok(());
             }
 
@@ -4854,11 +4825,6 @@ fn finalize_recording_pipeline<R: Runtime>(
                 shell.last_transcript_path = None;
                 shell.transition_count += 1;
             })?;
-            show_native_notification(
-                &app,
-                "Recording finished",
-                &format!("Saved {}.", recent_recording.file_name),
-            );
         }
         Err(error) => {
             log_event(
@@ -5119,7 +5085,6 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let paths = build_app_paths(&app_handle)?;
