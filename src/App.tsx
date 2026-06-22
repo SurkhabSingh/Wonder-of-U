@@ -8,6 +8,8 @@ import { Toaster, toast } from "sonner";
 import { PageSidebar } from "./components/layout/PageSidebar";
 import { RecorderPage } from "./components/recorder/RecorderPage";
 import { RecordingFilterTabs } from "./components/recordings/RecordingFilterTabs";
+import { AnkiFieldSelect } from "./components/settings/AnkiFieldSelect";
+import { DownloadProgressCard } from "./components/settings/DownloadProgressCard";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { ThemedSelect } from "./components/ui/ThemedSelect";
 import { TooltipBadge, TooltipWrap } from "./components/ui/Tooltip";
@@ -25,7 +27,6 @@ import {
   fileNameFromPath,
   formatBytes,
   formatDuration,
-  formatProgressBytes,
   formatTimestamp,
 } from "./lib/format";
 import {
@@ -54,7 +55,6 @@ import type {
   RecentRecording,
   RecordingBatchResult,
   RecordingFilter,
-  SelectOption,
   ThemePreference,
   WhisperAssetUpdateResult,
   WhisperSettings,
@@ -1173,108 +1173,14 @@ function showSuccess(message: string) {
     }
   }
 
-  function renderDownloadBlock(kind: "runtime" | "model" | "ffmpeg") {
-    if (bootstrap.modelDownload.kind !== kind) {
-      return null;
-    }
-
-    if (
-      bootstrap.modelDownload.status === "idle" &&
-      bootstrap.modelDownload.targetPath === null
-    ) {
-      return null;
-    }
-
-    return (
-      <div className="download-card">
-        <div className="progress-track" aria-hidden="true">
-          <div
-            className="progress-fill"
-            style={{
-              width: `${Math.max(
-                0,
-                Math.min(100, bootstrap.modelDownload.progressPercent ?? 0),
-              )}%`,
-            }}
-          />
-        </div>
-        <p className="microcopy">
-          {bootstrap.modelDownload.message}{" "}
-          {formatProgressBytes(
-            bootstrap.modelDownload.downloadedBytes,
-            bootstrap.modelDownload.totalBytes,
-          )}
-          {bootstrap.modelDownload.progressPercent !== null
-            ? ` (${bootstrap.modelDownload.progressPercent.toFixed(1)}%)`
-            : ""}
-        </p>
-        {bootstrap.modelDownload.targetPath ? (
-          <p className="path-copy" title={bootstrap.modelDownload.targetPath}>
-            {fileNameFromPath(bootstrap.modelDownload.targetPath)}
-          </p>
-        ) : null}
-        {downloadIsActive ? (
-          <div className="action-row compact-actions">
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => void toggleDownloadPause()}
-              disabled={
-                bootstrap.modelDownload.status === "starting" ||
-                bootstrap.modelDownload.status === "cancelling"
-              }
-            >
-              {bootstrap.modelDownload.status === "paused"
-                ? "Resume Download"
-                : "Pause Download"}
-            </button>
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => void cancelDownload()}
-              disabled={bootstrap.modelDownload.status === "cancelling"}
-            >
-              Cancel Download
-            </button>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  function renderAnkiFieldSelect(field: keyof AnkiFieldMapping, label: string) {
-    const currentValue = settingsDraft.anki.fields[field];
-    const fieldOptions = displayedAnkiCatalog.fields;
-    const options: SelectOption[] = [
-      { value: "", label: "Not mapped" },
-      ...(currentValue && !fieldOptions.includes(currentValue)
-        ? [{ value: currentValue, label: currentValue }]
-        : []),
-      ...fieldOptions.map((fieldName) => ({
-        value: fieldName,
-        label: fieldName,
-      })),
-    ];
-
-    return (
-      <label className="field">
-        <span>{label}</span>
-        <ThemedSelect
-          value={currentValue}
-          options={options}
-          placeholder="Not mapped"
-          onChange={(nextValue) =>
-            updateSettings({
-              anki: {
-                fields: {
-                  [field]: nextValue,
-                },
-              },
-            })
-          }
-        />
-      </label>
-    );
+  function updateAnkiField(field: keyof AnkiFieldMapping, value: string) {
+    updateSettings({
+      anki: {
+        fields: {
+          [field]: value,
+        },
+      },
+    });
   }
 
   return (
@@ -2332,7 +2238,13 @@ function showSuccess(message: string) {
                         </button>
                       </div>
                     )}
-                    {renderDownloadBlock("runtime")}
+                    <DownloadProgressCard
+                      snapshot={bootstrap.modelDownload}
+                      kind="runtime"
+                      downloadIsActive={downloadIsActive}
+                      onTogglePause={() => void toggleDownloadPause()}
+                      onCancel={() => void cancelDownload()}
+                    />
                   </div>
                 </article>
 
@@ -2469,7 +2381,13 @@ function showSuccess(message: string) {
                       </button>
                     </div>
                   )}
-                  {renderDownloadBlock("model")}
+                  <DownloadProgressCard
+                    snapshot={bootstrap.modelDownload}
+                    kind="model"
+                    downloadIsActive={downloadIsActive}
+                    onTogglePause={() => void toggleDownloadPause()}
+                    onCancel={() => void cancelDownload()}
+                  />
                 </div>
                 </article>
 
@@ -2533,7 +2451,13 @@ function showSuccess(message: string) {
                       </button>
                     </div>
                   ) : null}
-                  {renderDownloadBlock("ffmpeg")}
+                  <DownloadProgressCard
+                    snapshot={bootstrap.modelDownload}
+                    kind="ffmpeg"
+                    downloadIsActive={downloadIsActive}
+                    onTogglePause={() => void toggleDownloadPause()}
+                    onCancel={() => void cancelDownload()}
+                  />
                 </article>
               </div>
 
@@ -2653,12 +2577,48 @@ function showSuccess(message: string) {
                     />
                   </label>
 
-                  {renderAnkiFieldSelect("transcription", "Transcript field")}
-                  {renderAnkiFieldSelect("furigana", "Furigana field")}
-                  {renderAnkiFieldSelect("audio", "Audio field")}
-                  {renderAnkiFieldSelect("translation", "Translation field")}
-                  {renderAnkiFieldSelect("sourcePath", "Source path field")}
-                  {renderAnkiFieldSelect("createdAt", "Created-at field")}
+                  <AnkiFieldSelect
+                    field="transcription"
+                    label="Transcript field"
+                    currentValue={settingsDraft.anki.fields.transcription}
+                    fieldOptions={displayedAnkiCatalog.fields}
+                    onChange={updateAnkiField}
+                  />
+                  <AnkiFieldSelect
+                    field="furigana"
+                    label="Furigana field"
+                    currentValue={settingsDraft.anki.fields.furigana}
+                    fieldOptions={displayedAnkiCatalog.fields}
+                    onChange={updateAnkiField}
+                  />
+                  <AnkiFieldSelect
+                    field="audio"
+                    label="Audio field"
+                    currentValue={settingsDraft.anki.fields.audio}
+                    fieldOptions={displayedAnkiCatalog.fields}
+                    onChange={updateAnkiField}
+                  />
+                  <AnkiFieldSelect
+                    field="translation"
+                    label="Translation field"
+                    currentValue={settingsDraft.anki.fields.translation}
+                    fieldOptions={displayedAnkiCatalog.fields}
+                    onChange={updateAnkiField}
+                  />
+                  <AnkiFieldSelect
+                    field="sourcePath"
+                    label="Source path field"
+                    currentValue={settingsDraft.anki.fields.sourcePath}
+                    fieldOptions={displayedAnkiCatalog.fields}
+                    onChange={updateAnkiField}
+                  />
+                  <AnkiFieldSelect
+                    field="createdAt"
+                    label="Created-at field"
+                    currentValue={settingsDraft.anki.fields.createdAt}
+                    fieldOptions={displayedAnkiCatalog.fields}
+                    onChange={updateAnkiField}
+                  />
                 </div>
 
                 <div className="update-card">
