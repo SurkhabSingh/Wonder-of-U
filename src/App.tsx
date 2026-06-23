@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { PageSidebar } from "./components/layout/PageSidebar";
@@ -9,12 +8,11 @@ import { SavedRecordingsPage } from "./components/recordings/SavedRecordingsPage
 import { SettingsPages } from "./components/settings/SettingsPages";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import {
-  APP_SNAPSHOT_EVENT,
   DEFAULT_ANKI_CATALOG,
-  DEFAULT_BOOTSTRAP,
   MODEL_OPTIONS,
   RECOMMENDED_RUNTIME_VERSION,
 } from "./constants";
+import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
@@ -27,32 +25,28 @@ import {
 } from "./lib/navigation";
 import type {
   AnkiCatalog,
-  AnkiFieldMapping,
-  AppBootstrap,
   AppPage,
-  AppSettings,
-  AutosaveState,
   BusyAction,
-  AnkiSettings,
-  FeatureSettings,
   WhisperAssetUpdateResult,
-  WhisperSettings,
 } from "./types";
 
 function App() {
-  const [bootstrap, setBootstrap] = useState<AppBootstrap>(DEFAULT_BOOTSTRAP);
-  const [settingsDraft, setSettingsDraft] = useState<AppSettings>(
-    DEFAULT_BOOTSTRAP.settings,
-  );
+  const {
+    applyBootstrap,
+    autosaveMessage,
+    autosaveState,
+    bootstrap,
+    loadError,
+    persistSettingsIfNeeded,
+    setBootstrap,
+    setLoadError,
+    settingsDraft,
+    updateSettings,
+  } = useAppBootstrap();
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() =>
     window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
   );
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
-  const [autosaveState, setAutosaveState] = useState<AutosaveState>("idle");
-  const [autosaveMessage, setAutosaveMessage] = useState(
-    "Changes save automatically.",
-  );
-  const [loadError, setLoadError] = useState("");
   const [clockMs, setClockMs] = useState(() => Date.now());
   const [activePage, setActivePage] = useState<AppPage>("recorder");
   const [runtimeUpdateResult, setRuntimeUpdateResult] =
@@ -62,30 +56,9 @@ function App() {
   const [ankiCatalog, setAnkiCatalog] =
     useState<AnkiCatalog>(DEFAULT_ANKI_CATALOG);
   const [recordingActionMessage, setRecordingActionMessage] = useState("");
-  const settingsDirtyRef = useRef(false);
-  const currentDraftKeyRef = useRef("");
   const ankiAutoRefreshInFlightRef = useRef(false);
-  const recordingToastStateRef = useRef({
-    phase: DEFAULT_BOOTSTRAP.shell.phase,
-    transitionCount: DEFAULT_BOOTSTRAP.shell.transitionCount,
-  });
-
-  const settingsDraftKey = useMemo(
-    () => JSON.stringify(settingsDraft),
-    [settingsDraft],
-  );
-  const savedSettingsKey = useMemo(
-    () => JSON.stringify(bootstrap.settings),
-    [bootstrap.settings],
-  );
-  const settingsDirty = settingsDraftKey !== savedSettingsKey;
   const resolvedTheme =
     settingsDraft.theme === "system" ? systemTheme : settingsDraft.theme;
-
-  useEffect(() => {
-    settingsDirtyRef.current = settingsDirty;
-    currentDraftKeyRef.current = settingsDraftKey;
-  }, [settingsDirty, settingsDraftKey]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -106,17 +79,6 @@ function App() {
     document.documentElement.style.colorScheme = resolvedTheme;
   }, [resolvedTheme]);
 
-  function applyBootstrap(
-    nextBootstrap: AppBootstrap,
-    options?: { preserveDraft?: boolean },
-  ) {
-    setBootstrap(nextBootstrap);
-    if (!options?.preserveDraft) {
-      setSettingsDraft(nextBootstrap.settings);
-    }
-    setLoadError("");
-  }
-
   function showWarning(message: string) {
     toast.warning(message, { duration: 5000 });
   }
@@ -124,111 +86,6 @@ function App() {
   function showSuccess(message: string) {
     toast.success(message, { duration: 3500 });
   }
-
-  function syncRecordingToastState(
-    nextBootstrap: AppBootstrap,
-    options?: { notify?: boolean },
-  ) {
-    const previous = recordingToastStateRef.current;
-    const next = {
-      phase: nextBootstrap.shell.phase,
-      transitionCount: nextBootstrap.shell.transitionCount,
-    };
-
-    recordingToastStateRef.current = next;
-
-    if (
-      !options?.notify ||
-      (previous.phase === next.phase &&
-        previous.transitionCount === next.transitionCount)
-    ) {
-      return;
-    }
-
-    const previousPhase = previous.phase;
-    const nextPhase = next.phase;
-    const recordingName =
-      nextBootstrap.shell.currentRecordingName?.trim() || "Recording";
-
-    if (nextPhase === "recording" && previousPhase !== "recording") {
-      toast.success("Recording started", {
-        description: recordingName,
-        duration: 2500,
-      });
-      return;
-    }
-
-    if (nextPhase === "saving" && previousPhase === "recording") {
-      toast("Recording stopped", {
-        description: "Saving and processing the audio.",
-        duration: 2500,
-      });
-      return;
-    }
-
-    if (
-      nextPhase === "idle" &&
-      (previousPhase === "saving" ||
-        previousPhase === "transcribing" ||
-        previousPhase === "recording")
-    ) {
-      toast.success("Recording saved", {
-        description: nextBootstrap.shell.statusText,
-        duration: 3500,
-      });
-      return;
-    }
-
-    if (nextPhase === "error" && previousPhase !== "error") {
-      toast.error("Recording failed", {
-        description: nextBootstrap.shell.statusText,
-        duration: 5000,
-      });
-    }
-  }
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadBootstrap() {
-      try {
-        const nextBootstrap = await invoke<AppBootstrap>("get_app_bootstrap");
-        if (!mounted) {
-          return;
-        }
-
-        applyBootstrap(nextBootstrap);
-        syncRecordingToastState(nextBootstrap);
-        setAutosaveState("idle");
-        setAutosaveMessage("Changes save automatically.");
-      } catch (error) {
-        if (!mounted) {
-          return;
-        }
-
-        setLoadError(
-          error instanceof Error
-            ? error.message
-            : "The Wonder of U desktop state could not be loaded.",
-        );
-      }
-    }
-
-    void loadBootstrap();
-
-    const unlistenPromise = listen<AppBootstrap>(APP_SNAPSHOT_EVENT, (event) => {
-      syncRecordingToastState(event.payload, { notify: true });
-      setBootstrap(event.payload);
-      if (!settingsDirtyRef.current) {
-        setSettingsDraft(event.payload.settings);
-      }
-    });
-
-    return () => {
-      mounted = false;
-      void unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, []);
 
   useEffect(() => {
     if (
@@ -249,44 +106,6 @@ function App() {
       window.clearInterval(timer);
     };
   }, [bootstrap.shell.phase, bootstrap.shell.startedAtMs]);
-
-  useEffect(() => {
-    if (!settingsDirty) {
-      if (autosaveState !== "error") {
-        setAutosaveState("idle");
-        setAutosaveMessage("Changes save automatically.");
-      }
-      return;
-    }
-
-    const draftKeyAtSchedule = settingsDraftKey;
-    const timer = window.setTimeout(async () => {
-      try {
-        setAutosaveState("saving");
-        setAutosaveMessage("Saving changes...");
-        const nextBootstrap = await invoke<AppBootstrap>("save_settings", {
-          settings: settingsDraft,
-        });
-        const preserveDraft = currentDraftKeyRef.current !== draftKeyAtSchedule;
-        applyBootstrap(nextBootstrap, { preserveDraft });
-        if (!preserveDraft) {
-          setAutosaveState("idle");
-          setAutosaveMessage("All changes saved.");
-        }
-      } catch (error) {
-        setAutosaveState("error");
-        setAutosaveMessage(
-          error instanceof Error
-            ? error.message
-            : "The updated settings could not be saved.",
-        );
-      }
-    }, 320);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [settingsDraft, settingsDraftKey, settingsDirty]);
 
   useEffect(() => {
     setRuntimeUpdateResult(null);
@@ -457,72 +276,6 @@ function App() {
     ...workflowPages,
     ...setupPages,
   ]);
-
-  function updateSettings(
-    update: Partial<Omit<AppSettings, "features" | "whisper" | "anki">> & {
-      features?: Partial<FeatureSettings>;
-      whisper?: Partial<WhisperSettings>;
-      anki?: Partial<Omit<AnkiSettings, "fields">> & {
-        fields?: Partial<AnkiFieldMapping>;
-      };
-    },
-  ) {
-    setSettingsDraft((current) => {
-      const nextFeatures: FeatureSettings = {
-        ...current.features,
-        ...(update.features ?? {}),
-      };
-      const nextWhisper: WhisperSettings = {
-        ...current.whisper,
-        ...(update.whisper ?? {}),
-      };
-      const nextAnki: AnkiSettings = {
-        ...current.anki,
-        ...(update.anki ?? {}),
-        fields: {
-          ...current.anki.fields,
-          ...(update.anki?.fields ?? {}),
-        },
-      };
-
-      return {
-        ...current,
-        ...update,
-        whisper: nextWhisper,
-        anki: nextAnki,
-        features: nextFeatures,
-      };
-    });
-  }
-
-  async function persistSettingsIfNeeded() {
-    if (!settingsDirty) {
-      return;
-    }
-
-    try {
-      const draftKeyAtSave = currentDraftKeyRef.current;
-      setAutosaveState("saving");
-      setAutosaveMessage("Saving changes...");
-      const nextBootstrap = await invoke<AppBootstrap>("save_settings", {
-        settings: settingsDraft,
-      });
-      const preserveDraft = currentDraftKeyRef.current !== draftKeyAtSave;
-      applyBootstrap(nextBootstrap, { preserveDraft });
-      if (!preserveDraft) {
-        setAutosaveState("idle");
-        setAutosaveMessage("All changes saved.");
-      }
-    } catch (error) {
-      setAutosaveState("error");
-      setAutosaveMessage(
-        error instanceof Error
-          ? error.message
-          : "The updated settings could not be saved.",
-      );
-      throw error;
-    }
-  }
 
   const {
     browseForDirectory,
