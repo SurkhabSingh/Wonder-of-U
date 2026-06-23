@@ -16,6 +16,7 @@ import {
   MODEL_OPTIONS,
   RECOMMENDED_RUNTIME_VERSION,
 } from "./constants";
+import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { normalizeSelection, whisperStatusLabel } from "./lib/helpers";
 import {
@@ -33,7 +34,6 @@ import type {
   BusyAction,
   AnkiSettings,
   FeatureSettings,
-  RecordingBatchResult,
   WhisperAssetUpdateResult,
   WhisperSettings,
 } from "./types";
@@ -184,69 +184,6 @@ function App() {
         duration: 5000,
       });
     }
-  }
-
-  function formatBatchToastMessage(
-    action: "transcribe" | "translate" | "delete" | "anki" | "furigana" | "convert",
-    result: RecordingBatchResult,
-  ): string {
-    const successCount = result.items.filter((item) => item.status === "success").length;
-    const skippedCount = result.items.filter((item) => item.status === "skipped").length;
-    const failedItems = result.items.filter((item) => item.status === "failed");
-    const failedCount = failedItems.length;
-    const firstFailure = failedItems[0]?.message;
-    const furiganaSkippedCount = result.items.filter((item) =>
-      item.message.toLowerCase().includes("furigana was skipped"),
-    ).length;
-
-    if (action === "anki") {
-      if (failedCount > 0 && successCount === 0) {
-        return firstFailure
-          ? `No cards were pushed to Anki. ${firstFailure}`
-          : "No cards were pushed to Anki.";
-      }
-      if (failedCount > 0) {
-        return `${successCount} card${successCount === 1 ? "" : "s"} pushed to Anki. ${failedCount} failed: ${firstFailure ?? "check the saved recordings list."}`;
-      }
-      if (successCount === 0 && skippedCount > 0) {
-        return `${skippedCount} card${skippedCount === 1 ? " is" : "s are"} already in the selected Anki deck.`;
-      }
-      const baseMessage = `${successCount} card${successCount === 1 ? "" : "s"} pushed to Anki.`;
-      return furiganaSkippedCount > 0
-        ? `${baseMessage} Furigana was skipped for ${furiganaSkippedCount} because the Anki Lookup add-on was unavailable.`
-        : baseMessage;
-    }
-
-    if (action === "furigana") {
-      if (failedCount > 0 && successCount === 0) {
-        return firstFailure
-          ? `No Anki cards were updated with furigana. ${firstFailure}`
-          : "No Anki cards were updated with furigana.";
-      }
-      if (failedCount > 0) {
-        return `${successCount} Anki card${successCount === 1 ? "" : "s"} updated with furigana. ${failedCount} failed: ${firstFailure ?? "check the saved recordings list."}`;
-      }
-      return `${successCount} Anki card${successCount === 1 ? "" : "s"} updated with furigana.`;
-    }
-
-    if (action === "convert") {
-      if (failedCount > 0 && successCount === 0) {
-        return firstFailure ?? "No recordings were converted to MP3.";
-      }
-      if (failedCount > 0) {
-        return `${successCount} recording${successCount === 1 ? "" : "s"} converted to MP3. ${failedCount} failed.`;
-      }
-      if (successCount === 0 && skippedCount > 0) {
-        return `${skippedCount} recording${skippedCount === 1 ? " was" : "s were"} skipped. Only transcribed WAV recordings can be converted.`;
-      }
-      return `${successCount} recording${successCount === 1 ? "" : "s"} converted to MP3.`;
-    }
-
-    if (failedCount > 0 && successCount === 0) {
-      return firstFailure ?? result.message;
-    }
-
-    return result.message;
   }
 
   useEffect(() => {
@@ -872,225 +809,24 @@ function App() {
     }
   }
 
-  async function playRecording(filePath: string) {
-    try {
-      setBusyAction("playRecording");
-      await invoke("play_recording", { filePath });
-    } catch (error) {
-      setLoadError(
-        error instanceof Error ? error.message : "The audio file could not be played.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function deleteRecording(filePath: string) {
-    const confirmed = window.confirm(
-      "Delete this saved recording from Wonder of U? This removes the local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.",
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      setBusyAction("deleteRecording");
-      const nextBootstrap = await invoke<AppBootstrap>("delete_recording", {
-        filePath,
-      });
-      applyBootstrap(nextBootstrap);
-      setRecordingActionMessage("Recording deleted.");
-      showSuccess("Recording deleted.");
-    } catch (error) {
-      setLoadError(
-        error instanceof Error ? error.message : "The recording could not be deleted.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function deleteRecordings(filePaths: string[]) {
-    if (filePaths.length === 0) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Delete ${filePaths.length} selected recording${
-        filePaths.length === 1 ? "" : "s"
-      } from Wonder of U? This removes local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      setBusyAction("deleteRecording");
-      const result = await invoke<RecordingBatchResult>("delete_recordings", {
-        filePaths,
-      });
-      applyBootstrap(result.bootstrap);
-      setRecordingActionMessage(result.message);
-      showSuccess(result.message);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The selected recordings could not be deleted.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function pushRecordingsToAnki(filePaths: string[], deckName?: string) {
-    try {
-      setBusyAction("pushAnki");
-      await persistSettingsIfNeeded();
-      const targetDeck = deckName?.trim();
-      const result = await invoke<RecordingBatchResult>(
-        targetDeck ? "push_recordings_to_anki_deck" : "push_recordings_to_anki",
-        targetDeck ? { filePaths, deckName: targetDeck } : { filePaths },
-      );
-      applyBootstrap(result.bootstrap);
-      const message = formatBatchToastMessage("anki", result);
-      setRecordingActionMessage(message);
-      if (
-        result.status === "unavailable" ||
-        result.status === "partial" ||
-        message.toLowerCase().includes("anki is currently offline") ||
-        message.toLowerCase().includes("no cards were pushed") ||
-        message.toLowerCase().includes("furigana was skipped")
-      ) {
-        showWarning(message);
-      } else {
-        showSuccess(message);
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "The recordings could not be pushed to Anki.";
-      if (message.toLowerCase().includes("anki")) {
-        showWarning(message);
-      }
-      setLoadError(
-        message,
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function addFuriganaToAnki(filePaths: string[]) {
-    try {
-      setBusyAction("addFurigana");
-      await persistSettingsIfNeeded();
-      const result = await invoke<RecordingBatchResult>("add_furigana_to_anki", {
-        filePaths,
-      });
-      applyBootstrap(result.bootstrap);
-      const message = formatBatchToastMessage("furigana", result);
-      setRecordingActionMessage(message);
-      if (result.status === "unavailable" || result.status === "partial") {
-        showWarning(message);
-      } else {
-        showSuccess(message);
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Furigana could not be added to Anki cards.";
-      if (
-        message.toLowerCase().includes("anki") ||
-        message.toLowerCase().includes("furigana")
-      ) {
-        showWarning(message);
-      }
-      setLoadError(message);
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function transcribeRecordings(filePaths: string[]) {
-    try {
-      setBusyAction("transcribeRecording");
-      await persistSettingsIfNeeded();
-      const result = await invoke<RecordingBatchResult>("transcribe_recordings", {
-        filePaths,
-      });
-      applyBootstrap(result.bootstrap);
-      const message = formatBatchToastMessage("transcribe", result);
-      setRecordingActionMessage(message);
-      showSuccess(message);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The recordings could not be transcribed.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function translateRecordings(filePaths: string[]) {
-    try {
-      setBusyAction("translateRecording");
-      const result = await invoke<RecordingBatchResult>("translate_recordings", {
-        filePaths,
-      });
-      applyBootstrap(result.bootstrap);
-      const message = formatBatchToastMessage("translate", result);
-      setRecordingActionMessage(message);
-      showSuccess(message);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The translation request could not be completed.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function convertRecordingsToMp3(filePaths: string[]) {
-    const confirmed = window.confirm(
-      `Convert ${filePaths.length} recording${
-        filePaths.length === 1 ? "" : "s"
-      } to MP3? Wonder of U will keep the transcript/history, create MP3 files, and remove the original local WAV files after conversion succeeds. Existing Anki cards are not affected.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      setBusyAction("convertMp3");
-      const result = await invoke<RecordingBatchResult>("convert_recordings_to_mp3", {
-        filePaths,
-      });
-      applyBootstrap(result.bootstrap);
-      const message = formatBatchToastMessage("convert", result);
-      setRecordingActionMessage(message);
-      if (result.status === "partial") {
-        showWarning(message);
-      } else {
-        showSuccess(message);
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "The selected recordings could not be converted to MP3.";
-      showWarning(message);
-      setLoadError(message);
-    } finally {
-      setBusyAction(null);
-    }
-  }
+  const {
+    addFuriganaToAnki,
+    convertRecordingsToMp3,
+    deleteRecording,
+    deleteRecordings,
+    playRecording,
+    pushRecordingsToAnki,
+    transcribeRecordings,
+    translateRecordings,
+  } = useRecordingActions({
+    applyBootstrap,
+    persistSettingsIfNeeded,
+    setBusyAction,
+    setLoadError,
+    setRecordingActionMessage,
+    showSuccess,
+    showWarning,
+  });
 
   function updateAnkiField(field: keyof AnkiFieldMapping, value: string) {
     updateSettings({

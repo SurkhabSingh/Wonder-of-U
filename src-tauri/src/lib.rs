@@ -4848,6 +4848,17 @@ fn finalize_recording_pipeline<R: Runtime>(
 }
 
 fn stop_recording_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    {
+        let shell_state = app.state::<SharedShellState>();
+        let shell = shell_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the shell state.".to_string())?;
+        if shell.phase == "saving" || shell.phase == "transcribing" {
+            return Err("The previous recording is still being finalized.".into());
+        }
+    }
+
     let active = {
         let recorder_state = app.state::<RecorderState>();
         let mut recorder = recorder_state
@@ -4876,6 +4887,14 @@ fn stop_recording_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                     "recording.finalize_failed",
                     serde_json::json!({ "message": error }),
                 );
+                let _ = update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "error".into();
+                    shell.status_text = error;
+                    shell.started_at_ms = None;
+                    shell.current_recording_name = None;
+                    shell.last_transcript_path = None;
+                    shell.transition_count += 1;
+                });
             }
         })
         .map_err(|error| error.to_string())?;

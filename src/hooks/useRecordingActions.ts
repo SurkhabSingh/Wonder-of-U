@@ -1,0 +1,302 @@
+import { useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { formatBatchToastMessage } from "../lib/recordingBatchMessages";
+import type { AppBootstrap, BusyAction, RecordingBatchResult } from "../types";
+
+type UseRecordingActionsOptions = {
+  applyBootstrap: (nextBootstrap: AppBootstrap) => void;
+  persistSettingsIfNeeded: () => Promise<void>;
+  setBusyAction: (busyAction: BusyAction) => void;
+  setLoadError: (message: string) => void;
+  setRecordingActionMessage: (message: string) => void;
+  showSuccess: (message: string) => void;
+  showWarning: (message: string) => void;
+};
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+export function useRecordingActions({
+  applyBootstrap,
+  persistSettingsIfNeeded,
+  setBusyAction,
+  setLoadError,
+  setRecordingActionMessage,
+  showSuccess,
+  showWarning,
+}: UseRecordingActionsOptions) {
+  const playRecording = useCallback(
+    async (filePath: string) => {
+      try {
+        setBusyAction("playRecording");
+        await invoke("play_recording", { filePath });
+      } catch (error) {
+        setLoadError(errorMessage(error, "The audio file could not be played."));
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [setBusyAction, setLoadError],
+  );
+
+  const deleteRecording = useCallback(
+    async (filePath: string) => {
+      const confirmed = window.confirm(
+        "Delete this saved recording from Wonder of U? This removes the local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.",
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        setBusyAction("deleteRecording");
+        const nextBootstrap = await invoke<AppBootstrap>("delete_recording", {
+          filePath,
+        });
+        applyBootstrap(nextBootstrap);
+        setRecordingActionMessage("Recording deleted.");
+        showSuccess("Recording deleted.");
+      } catch (error) {
+        setLoadError(errorMessage(error, "The recording could not be deleted."));
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [applyBootstrap, setBusyAction, setLoadError, setRecordingActionMessage, showSuccess],
+  );
+
+  const deleteRecordings = useCallback(
+    async (filePaths: string[]) => {
+      if (filePaths.length === 0) {
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Delete ${filePaths.length} selected recording${
+          filePaths.length === 1 ? "" : "s"
+        } from Wonder of U? This removes local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        setBusyAction("deleteRecording");
+        const result = await invoke<RecordingBatchResult>("delete_recordings", {
+          filePaths,
+        });
+        applyBootstrap(result.bootstrap);
+        setRecordingActionMessage(result.message);
+        showSuccess(result.message);
+      } catch (error) {
+        setLoadError(
+          errorMessage(error, "The selected recordings could not be deleted."),
+        );
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [applyBootstrap, setBusyAction, setLoadError, setRecordingActionMessage, showSuccess],
+  );
+
+  const pushRecordingsToAnki = useCallback(
+    async (filePaths: string[], deckName?: string) => {
+      try {
+        setBusyAction("pushAnki");
+        await persistSettingsIfNeeded();
+        const targetDeck = deckName?.trim();
+        const result = await invoke<RecordingBatchResult>(
+          targetDeck ? "push_recordings_to_anki_deck" : "push_recordings_to_anki",
+          targetDeck ? { filePaths, deckName: targetDeck } : { filePaths },
+        );
+        applyBootstrap(result.bootstrap);
+        const message = formatBatchToastMessage("anki", result);
+        setRecordingActionMessage(message);
+        if (
+          result.status === "unavailable" ||
+          result.status === "partial" ||
+          message.toLowerCase().includes("anki is currently offline") ||
+          message.toLowerCase().includes("no cards were pushed") ||
+          message.toLowerCase().includes("furigana was skipped")
+        ) {
+          showWarning(message);
+        } else {
+          showSuccess(message);
+        }
+      } catch (error) {
+        const message = errorMessage(
+          error,
+          "The recordings could not be pushed to Anki.",
+        );
+        if (message.toLowerCase().includes("anki")) {
+          showWarning(message);
+        }
+        setLoadError(message);
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [
+      applyBootstrap,
+      persistSettingsIfNeeded,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+      showSuccess,
+      showWarning,
+    ],
+  );
+
+  const addFuriganaToAnki = useCallback(
+    async (filePaths: string[]) => {
+      try {
+        setBusyAction("addFurigana");
+        await persistSettingsIfNeeded();
+        const result = await invoke<RecordingBatchResult>("add_furigana_to_anki", {
+          filePaths,
+        });
+        applyBootstrap(result.bootstrap);
+        const message = formatBatchToastMessage("furigana", result);
+        setRecordingActionMessage(message);
+        if (result.status === "unavailable" || result.status === "partial") {
+          showWarning(message);
+        } else {
+          showSuccess(message);
+        }
+      } catch (error) {
+        const message = errorMessage(
+          error,
+          "Furigana could not be added to Anki cards.",
+        );
+        if (
+          message.toLowerCase().includes("anki") ||
+          message.toLowerCase().includes("furigana")
+        ) {
+          showWarning(message);
+        }
+        setLoadError(message);
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [
+      applyBootstrap,
+      persistSettingsIfNeeded,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+      showSuccess,
+      showWarning,
+    ],
+  );
+
+  const transcribeRecordings = useCallback(
+    async (filePaths: string[]) => {
+      try {
+        setBusyAction("transcribeRecording");
+        await persistSettingsIfNeeded();
+        const result = await invoke<RecordingBatchResult>("transcribe_recordings", {
+          filePaths,
+        });
+        applyBootstrap(result.bootstrap);
+        const message = formatBatchToastMessage("transcribe", result);
+        setRecordingActionMessage(message);
+        showSuccess(message);
+      } catch (error) {
+        setLoadError(
+          errorMessage(error, "The recordings could not be transcribed."),
+        );
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [
+      applyBootstrap,
+      persistSettingsIfNeeded,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+      showSuccess,
+    ],
+  );
+
+  const translateRecordings = useCallback(
+    async (filePaths: string[]) => {
+      try {
+        setBusyAction("translateRecording");
+        const result = await invoke<RecordingBatchResult>("translate_recordings", {
+          filePaths,
+        });
+        applyBootstrap(result.bootstrap);
+        const message = formatBatchToastMessage("translate", result);
+        setRecordingActionMessage(message);
+        showSuccess(message);
+      } catch (error) {
+        setLoadError(
+          errorMessage(error, "The translation request could not be completed."),
+        );
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [applyBootstrap, setBusyAction, setLoadError, setRecordingActionMessage, showSuccess],
+  );
+
+  const convertRecordingsToMp3 = useCallback(
+    async (filePaths: string[]) => {
+      const confirmed = window.confirm(
+        `Convert ${filePaths.length} recording${
+          filePaths.length === 1 ? "" : "s"
+        } to MP3? Wonder of U will keep the transcript/history, create MP3 files, and remove the original local WAV files after conversion succeeds. Existing Anki cards are not affected.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        setBusyAction("convertMp3");
+        const result = await invoke<RecordingBatchResult>(
+          "convert_recordings_to_mp3",
+          { filePaths },
+        );
+        applyBootstrap(result.bootstrap);
+        const message = formatBatchToastMessage("convert", result);
+        setRecordingActionMessage(message);
+        if (result.status === "partial") {
+          showWarning(message);
+        } else {
+          showSuccess(message);
+        }
+      } catch (error) {
+        const message = errorMessage(
+          error,
+          "The selected recordings could not be converted to MP3.",
+        );
+        showWarning(message);
+        setLoadError(message);
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [
+      applyBootstrap,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+      showSuccess,
+      showWarning,
+    ],
+  );
+
+  return {
+    addFuriganaToAnki,
+    convertRecordingsToMp3,
+    deleteRecording,
+    deleteRecordings,
+    playRecording,
+    pushRecordingsToAnki,
+    transcribeRecordings,
+    translateRecordings,
+  };
+}
