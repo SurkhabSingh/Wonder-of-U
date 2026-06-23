@@ -16,15 +16,10 @@ import {
   MODEL_OPTIONS,
   RECOMMENDED_RUNTIME_VERSION,
 } from "./constants";
-import {
-  normalizeSelection,
-  pathHasExtension,
-  recordingSupportsFurigana,
-  whisperStatusLabel,
-} from "./lib/helpers";
+import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
+import { normalizeSelection, whisperStatusLabel } from "./lib/helpers";
 import {
   activePageLabel,
-  createRecordingFilterTabs,
   createSetupPages,
   createWorkflowPages,
 } from "./lib/navigation";
@@ -38,9 +33,7 @@ import type {
   BusyAction,
   AnkiSettings,
   FeatureSettings,
-  RecentRecording,
   RecordingBatchResult,
-  RecordingFilter,
   WhisperAssetUpdateResult,
   WhisperSettings,
 } from "./types";
@@ -68,11 +61,6 @@ function App() {
   const [ankiCatalog, setAnkiCatalog] =
     useState<AnkiCatalog>(DEFAULT_ANKI_CATALOG);
   const [recordingActionMessage, setRecordingActionMessage] = useState("");
-  const [selectedRecordings, setSelectedRecordings] = useState<string[]>([]);
-  const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
-  const [openRecordingMenuPath, setOpenRecordingMenuPath] = useState<string | null>(
-    null,
-  );
   const settingsDirtyRef = useRef(false);
   const currentDraftKeyRef = useRef("");
   const ankiAutoRefreshInFlightRef = useRef(false);
@@ -132,7 +120,7 @@ function App() {
     toast.warning(message, { duration: 5000 });
   }
 
-function showSuccess(message: string) {
+  function showSuccess(message: string) {
     toast.success(message, { duration: 3500 });
   }
 
@@ -196,31 +184,6 @@ function showSuccess(message: string) {
         duration: 5000,
       });
     }
-  }
-
-  function mergeSavedAnkiSettingsIntoCatalog(catalog: AnkiCatalog): AnkiCatalog {
-    const savedFields = Object.values(settingsDraft.anki.fields).filter(Boolean);
-    return {
-      ...catalog,
-      decks: Array.from(
-        new Set([
-          ...(settingsDraft.anki.deckName ? [settingsDraft.anki.deckName] : []),
-          ...catalog.decks,
-        ]),
-      ),
-      noteTypes: Array.from(
-        new Set([
-          ...(settingsDraft.anki.noteType ? [settingsDraft.anki.noteType] : []),
-          ...catalog.noteTypes,
-        ]),
-      ),
-      fields: Array.from(new Set([...savedFields, ...catalog.fields])),
-      message:
-        catalog.status === "idle" &&
-        (settingsDraft.anki.deckName || settingsDraft.anki.noteType)
-          ? "Using your saved Anki mapping. Refresh only if you changed decks, note types, or fields in Anki."
-          : catalog.message,
-    };
   }
 
   function formatBatchToastMessage(
@@ -348,16 +311,6 @@ function showSuccess(message: string) {
       window.clearInterval(timer);
     };
   }, [bootstrap.shell.phase, bootstrap.shell.startedAtMs]);
-
-  useEffect(() => {
-    setSelectedRecordings((current) =>
-      current.filter((filePath) =>
-        bootstrap.recentRecordings.some(
-          (recording) => recording.filePath === filePath,
-        ),
-      ),
-    );
-  }, [bootstrap.recentRecordings]);
 
   useEffect(() => {
     if (!settingsDirty) {
@@ -521,104 +474,39 @@ function showSuccess(message: string) {
     (bootstrap.whisperDetection.modelManaged
       ? bootstrap.whisperDetection.modelPath ?? ""
       : "");
-  const selectedRecordingSet = new Set(selectedRecordings);
-  const transcribedRecordings = bootstrap.recentRecordings.filter(
-    (recording) => recording.transcriptPath,
-  );
-  const untranscribedRecordings = bootstrap.recentRecordings.filter(
-    (recording) => !recording.transcriptPath,
-  );
-  const recordingPushedToDeck = (recording: RecentRecording, deckName: string) =>
-    recording.ankiNoteId !== null &&
-    recording.ankiDeckName !== null &&
-    recording.ankiDeckName === deckName;
-  const recordingPushableToDeck = (recording: RecentRecording, deckName: string) =>
-    deckName.trim().length > 0 &&
-    Boolean(recording.transcriptPath) &&
-    !recording.audioDeleted &&
-    !recordingPushedToDeck(recording, deckName);
-  const recordingPushedToCurrentAnkiDeck = (recording: RecentRecording) =>
-    recordingPushedToDeck(recording, settingsDraft.anki.deckName);
-  const pushableRecordings = transcribedRecordings.filter(
-    (recording) =>
-      !recording.audioDeleted && !recordingPushedToCurrentAnkiDeck(recording),
-  );
-  const untranslatedRecordings = transcribedRecordings.filter(
-    (recording) => recording.translationPath === null,
-  );
-  const completeRecordings = bootstrap.recentRecordings.filter(
-    (recording) =>
-      Boolean(recording.transcriptPath) &&
-      recordingPushedToCurrentAnkiDeck(recording) &&
-      recording.translationPath !== null,
-  );
-  const visibleRecordings =
-    recordingFilter === "needsTranscription"
-      ? untranscribedRecordings
-      : recordingFilter === "needsAnki"
-        ? pushableRecordings
-        : recordingFilter === "needsTranslation"
-          ? untranslatedRecordings
-          : recordingFilter === "complete"
-            ? completeRecordings
-            : bootstrap.recentRecordings;
-  const visibleSelectedRecordings = visibleRecordings.filter((recording) =>
-    selectedRecordingSet.has(recording.filePath),
-  );
-  const visibleSelectedPaths = visibleSelectedRecordings.map(
-    (recording) => recording.filePath,
-  );
-  const useBatchActionsOnly = visibleSelectedPaths.length > 1;
-  const selectedTranscribedRecordings = visibleSelectedRecordings.filter(
-    (recording) => recording.transcriptPath,
-  );
-  const selectedPushableRecordings = selectedTranscribedRecordings.filter(
-    (recording) => recordingPushableToDeck(recording, settingsDraft.anki.deckName),
-  );
-  const selectedUntranscribedRecordings = visibleSelectedRecordings.filter(
-    (recording) => !recording.transcriptPath,
-  );
-  const selectedUntranslatedRecordings = selectedTranscribedRecordings.filter(
-    (recording) => recording.translationPath === null,
-  );
-  const selectedFuriganaRecordings = selectedTranscribedRecordings.filter(
-    (recording) =>
-      recording.ankiNoteId !== null && recordingSupportsFurigana(recording),
-  );
-  const convertibleRecordings = bootstrap.recentRecordings.filter(
-    (recording) =>
-      !recording.audioDeleted &&
-      recording.transcriptPath !== null &&
-      pathHasExtension(recording.filePath, "wav"),
-  );
-  const selectedConvertibleRecordings = visibleSelectedRecordings.filter(
-    (recording) =>
-      !recording.audioDeleted &&
-      recording.transcriptPath !== null &&
-      pathHasExtension(recording.filePath, "wav"),
-  );
-  const recordingFilterTabs = createRecordingFilterTabs({
-    allCount: bootstrap.recentRecordings.length,
-    untranscribedCount: untranscribedRecordings.length,
-    pushableCount: pushableRecordings.length,
-    untranslatedCount: untranslatedRecordings.length,
-    completeCount: completeRecordings.length,
+  const {
+    availableAnkiDecks,
+    configuredAnkiDeckLabel,
+    configuredDeckMenuOptions,
+    convertibleRecordings,
+    clearRecordingSelection,
+    displayedAnkiCatalog,
+    openRecordingMenuPath,
+    pushableRecordings,
+    recordingFilter,
+    recordingFilterTabs,
+    recordingPushedToCurrentAnkiDeck,
+    recordingPushedToDeck,
+    selectedConvertibleRecordings,
+    selectedFuriganaRecordings,
+    selectedPushableRecordings,
+    selectedRecordings,
+    selectedRecordingsPushableToDeck,
+    selectedTranscribedRecordings,
+    selectedUntranslatedRecordings,
+    selectedUntranscribedRecordings,
+    setOpenRecordingMenuPath,
+    setRecordingFilter,
+    toggleRecordingSelection,
+    untranslatedRecordings,
+    untranscribedRecordings,
+    visibleRecordings,
+    visibleSelectedPaths,
+  } = useRecordingLibrary({
+    ankiCatalog,
+    ankiSettings: settingsDraft.anki,
+    recentRecordings: bootstrap.recentRecordings,
   });
-  const displayedAnkiCatalog = mergeSavedAnkiSettingsIntoCatalog(ankiCatalog);
-  const configuredAnkiDeckLabel =
-    settingsDraft.anki.deckName.trim() || "No deck selected";
-  const availableAnkiDecks = displayedAnkiCatalog.decks.filter(
-    (deck) => deck.trim().length > 0,
-  );
-  const configuredDeckMenuOptions = availableAnkiDecks.length > 0
-    ? availableAnkiDecks
-    : settingsDraft.anki.deckName
-      ? [settingsDraft.anki.deckName]
-      : [];
-  const selectedRecordingsPushableToDeck = (deckName: string) =>
-    selectedTranscribedRecordings.filter((recording) =>
-      recordingPushableToDeck(recording, deckName),
-    );
   const workflowPages = createWorkflowPages(bootstrap.recentRecordings.length);
   const setupPages = createSetupPages({
     whisperStatus: whisperStatusLabel(bootstrap.whisperDetection.status),
@@ -631,12 +519,6 @@ function showSuccess(message: string) {
     ...workflowPages,
     ...setupPages,
   ]);
-
-  useEffect(() => {
-    if (useBatchActionsOnly) {
-      setOpenRecordingMenuPath(null);
-    }
-  }, [useBatchActionsOnly]);
 
   function updateSettings(
     update: Partial<Omit<AppSettings, "features" | "whisper" | "anki">> & {
@@ -958,18 +840,6 @@ function showSuccess(message: string) {
     } finally {
       setBusyAction(null);
     }
-  }
-
-  function toggleRecordingSelection(filePath: string) {
-    setSelectedRecordings((current) =>
-      current.includes(filePath)
-        ? current.filter((selectedPath) => selectedPath !== filePath)
-        : [...current, filePath],
-    );
-  }
-
-  function clearRecordingSelection() {
-    setSelectedRecordings([]);
   }
 
   async function refreshAnkiCatalog(
