@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { PageSidebar } from "./components/layout/PageSidebar";
@@ -18,7 +17,9 @@ import {
 } from "./constants";
 import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
-import { normalizeSelection, whisperStatusLabel } from "./lib/helpers";
+import { useRecorderActions } from "./hooks/useRecorderActions";
+import { useSetupActions } from "./hooks/useSetupActions";
+import { whisperStatusLabel } from "./lib/helpers";
 import {
   activePageLabel,
   createSetupPages,
@@ -523,261 +524,39 @@ function App() {
     }
   }
 
-  async function startRecording() {
-    try {
-      setBusyAction("start");
-      setBootstrap((current) => ({
-        ...current,
-        shell: {
-          ...current.shell,
-          phase: "recording",
-          statusText: "Starting system audio capture...",
-          startedAtMs: Date.now(),
-          currentRecordingName: "Starting recording",
-          lastOutputPath: null,
-          lastTranscriptPath: null,
-          transitionCount: current.shell.transitionCount + 1,
-        },
-      }));
-      await persistSettingsIfNeeded();
-      const nextBootstrap = await invoke<AppBootstrap>("start_recording", {
-        requestedName: null,
-      });
-      applyBootstrap(nextBootstrap);
-    } catch (error) {
-      try {
-        applyBootstrap(await invoke<AppBootstrap>("get_app_bootstrap"));
-      } catch {
-        // Keep the original startup error visible if recovery snapshot loading fails.
-      }
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "Recording could not be started.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
+  const {
+    browseForDirectory,
+    browseForFile,
+    cancelDownload,
+    checkModelUpdate,
+    checkRuntimeUpdate,
+    downloadRecommendedFfmpeg,
+    downloadRecommendedModel,
+    downloadRecommendedRuntime,
+    downloadRuntimeVersion,
+    toggleDownloadPause,
+    updateAnkiField,
+  } = useSetupActions({
+    applyBootstrap,
+    persistSettingsIfNeeded,
+    resolvedCliPath,
+    resolvedModelPath,
+    setActivePage,
+    setBusyAction,
+    setLoadError,
+    setModelUpdateResult,
+    setRuntimeUpdateResult,
+    settingsDraft,
+    updateSettings,
+  });
 
-  async function stopRecording() {
-    try {
-      setBusyAction("stop");
-      const nextBootstrap = await invoke<AppBootstrap>("stop_recording");
-      applyBootstrap(nextBootstrap);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "Recording could not be stopped.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function hideToTray() {
-    try {
-      setBusyAction("hide");
-      await invoke("hide_main_window");
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The window could not be hidden to the tray.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function downloadRuntimeVersion(runtimeVersion: string) {
-    try {
-      setBusyAction("downloadRuntime");
-      setRuntimeUpdateResult(null);
-      await persistSettingsIfNeeded();
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "download_whisper_runtime_version",
-        { runtimeVersion },
-      );
-      applyBootstrap(nextBootstrap);
-      setActivePage("runtime");
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The selected Whisper runtime could not be prepared.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function downloadRecommendedRuntime() {
-    await downloadRuntimeVersion(RECOMMENDED_RUNTIME_VERSION);
-  }
-
-  async function downloadRecommendedFfmpeg() {
-    try {
-      setBusyAction("downloadFfmpeg");
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "download_recommended_ffmpeg",
-      );
-      applyBootstrap(nextBootstrap);
-      setActivePage("storage");
-    } catch (error) {
-      setLoadError(
-        error instanceof Error ? error.message : "FFmpeg could not be prepared.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function downloadRecommendedModel() {
-    try {
-      setBusyAction("downloadModel");
-      setModelUpdateResult(null);
-      await persistSettingsIfNeeded();
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "download_recommended_whisper_model",
-      );
-      applyBootstrap(nextBootstrap);
-      setActivePage("model");
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The recommended Whisper model could not be prepared.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function checkRuntimeUpdate() {
-    try {
-      setBusyAction("checkRuntimeUpdate");
-      await persistSettingsIfNeeded();
-      const result = await invoke<WhisperAssetUpdateResult>(
-        "check_whisper_runtime_update",
-      );
-      setRuntimeUpdateResult(result);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The runtime update check could not be completed.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function checkModelUpdate() {
-    try {
-      setBusyAction("checkModelUpdate");
-      await persistSettingsIfNeeded();
-      const result = await invoke<WhisperAssetUpdateResult>(
-        "check_whisper_model_update",
-      );
-      setModelUpdateResult(result);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The model update check could not be completed.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function toggleDownloadPause() {
-    try {
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "toggle_whisper_model_download_pause",
-      );
-      applyBootstrap(nextBootstrap);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The active download could not be paused or resumed.",
-      );
-    }
-  }
-
-  async function cancelDownload() {
-    try {
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "cancel_whisper_model_download",
-      );
-      applyBootstrap(nextBootstrap);
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The active download could not be cancelled.",
-      );
-    }
-  }
-
-  async function browseForDirectory(field: "outputDirectory" | "assetDirectory") {
-    try {
-      setBusyAction("browse");
-      const selection = normalizeSelection(
-        await open({
-          directory: true,
-          multiple: false,
-          defaultPath: settingsDraft[field] || undefined,
-        }),
-      );
-
-      if (!selection) {
-        return;
-      }
-
-      updateSettings({ [field]: selection });
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The folder chooser could not be opened.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function browseForFile(field: "cliPath" | "modelPath") {
-    try {
-      setBusyAction("browse");
-      const defaultPath =
-        field === "cliPath" ? resolvedCliPath : resolvedModelPath;
-      const selection = normalizeSelection(
-        await open({
-          directory: false,
-          multiple: false,
-          defaultPath: defaultPath || undefined,
-        }),
-      );
-
-      if (!selection) {
-        return;
-      }
-
-      updateSettings({ whisper: { [field]: selection } });
-    } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? error.message
-          : "The file chooser could not be opened.",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
+  const { hideToTray, startRecording, stopRecording } = useRecorderActions({
+    applyBootstrap,
+    persistSettingsIfNeeded,
+    setBootstrap,
+    setBusyAction,
+    setLoadError,
+  });
 
   async function refreshAnkiCatalog(
     noteType?: string,
@@ -827,16 +606,6 @@ function App() {
     showSuccess,
     showWarning,
   });
-
-  function updateAnkiField(field: keyof AnkiFieldMapping, value: string) {
-    updateSettings({
-      anki: {
-        fields: {
-          [field]: value,
-        },
-      },
-    });
-  }
 
   return (
     <main className="app-shell">

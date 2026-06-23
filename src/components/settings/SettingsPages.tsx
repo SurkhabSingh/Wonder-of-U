@@ -105,6 +105,10 @@ export function SettingsPages({
   const selectedLanguageKnown = LANGUAGE_OPTIONS.some(
     (option) => option.code === selectedLanguageCode,
   );
+  const manualModelOverride = settingsDraft.whisper.modelPath.trim().length > 0;
+  const runtimeDisplayLabel = manualRuntimeOverride
+    ? "Manual override"
+    : activeRuntimeVersion;
 
   return (
     <div className="settings-scroll settings-page-single">
@@ -294,7 +298,7 @@ export function SettingsPages({
               <span className="hint-label">Runtime</span>
               <strong>
                 {bootstrap.whisperDetection.cliReady
-                  ? `Ready (${activeRuntimeVersion})`
+                  ? `Ready (${runtimeDisplayLabel})`
                   : "Missing"}
               </strong>
             </div>
@@ -325,7 +329,36 @@ export function SettingsPages({
             />
           </header>
 
-          {installedRuntimeVersions.length > 0 ? (
+          {manualRuntimeOverride ? (
+            <div
+              className="meta-list compact-meta-list"
+              title={settingsDraft.whisper.cliPath}
+            >
+              <div>
+                <span className="hint-label">Active runtime</span>
+                <strong>Manual override</strong>
+                <p className="microcopy">
+                  The manual whisper-cli path is being used. Clear it to switch
+                  back to app-managed versions.
+                </p>
+                <div className="action-row compact-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() =>
+                      onUpdateSettings({
+                        whisper: {
+                          cliPath: "",
+                        },
+                      })
+                    }
+                  >
+                    Automatic runtime selection
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : installedRuntimeVersions.length > 0 ? (
             <label className="field runtime-version-field">
               <span>Active runtime</span>
               <ThemedSelect
@@ -343,12 +376,7 @@ export function SettingsPages({
                     },
                   })
                 }
-                disabled={manualRuntimeOverride}
-                title={
-                  manualRuntimeOverride
-                    ? "Clear the manual runtime override to use app-managed versions."
-                    : "Choose any installed app-managed Whisper runtime."
-                }
+                title="Choose any installed app-managed Whisper runtime."
               />
             </label>
           ) : null}
@@ -360,7 +388,7 @@ export function SettingsPages({
               <div className="input-with-action">
                 <input
                   type="text"
-                  value={resolvedCliPath}
+                  value={settingsDraft.whisper.cliPath}
                   onChange={(event) =>
                     onUpdateSettings({
                       whisper: {
@@ -368,7 +396,7 @@ export function SettingsPages({
                       },
                     })
                   }
-                  placeholder="whisper-cli path"
+                  placeholder={resolvedCliPath || "whisper-cli path"}
                 />
                 <button
                   type="button"
@@ -387,18 +415,16 @@ export function SettingsPages({
               <div className="installed-card">
                 <div className="installed-row">
                   <strong>Runtime ready</strong>
-                  {bootstrap.whisperDetection.cliManaged ? (
-                    <div className="action-row inline-actions">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => void onCheckRuntimeUpdate()}
-                        disabled={busyAction === "checkRuntimeUpdate"}
-                      >
-                        Check for Updates
-                      </button>
-                    </div>
-                  ) : null}
+                  <div className="action-row inline-actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void onCheckRuntimeUpdate()}
+                      disabled={busyAction === "checkRuntimeUpdate"}
+                    >
+                      Check for Updates
+                    </button>
+                  </div>
                 </div>
                 <UpdateResultCard result={runtimeUpdateResult} />
                 {runtimeUpdateVersion ? (
@@ -463,6 +489,12 @@ export function SettingsPages({
                     },
                   })
                 }
+                disabled={manualModelOverride}
+                title={
+                  manualModelOverride
+                    ? "Clear the manual model override to use app-managed models."
+                    : "Choose the app-managed Whisper model."
+                }
               />
             </label>
 
@@ -496,11 +528,24 @@ export function SettingsPages({
             </label>
           </div>
 
-          <div className="model-summary" title={selectedModel.description}>
-            <strong>{selectedModel.label}</strong>
-            <span>
+          <div
+            className="model-summary"
+            title={
+              manualModelOverride
+                ? settingsDraft.whisper.modelPath
+                : selectedModel.description
+            }
+          >
+            <strong>
+              {manualModelOverride ? "Manual model override" : selectedModel.label}
+            </strong>
+            {manualModelOverride ? (
+              <span>The manual GGML model path is being used.</span>
+            ) : (
+              <span>
               {selectedModel.diskSize} Â· {selectedModel.memoryUsage} RAM
-            </span>
+              </span>
+            )}
           </div>
 
           <details className="disclosure">
@@ -510,7 +555,7 @@ export function SettingsPages({
               <div className="input-with-action">
                 <input
                   type="text"
-                  value={resolvedModelPath}
+                  value={settingsDraft.whisper.modelPath}
                   onChange={(event) =>
                     onUpdateSettings({
                       whisper: {
@@ -518,7 +563,7 @@ export function SettingsPages({
                       },
                     })
                   }
-                  placeholder="GGML model path"
+                  placeholder={resolvedModelPath || "GGML model path"}
                 />
                 <button
                   type="button"

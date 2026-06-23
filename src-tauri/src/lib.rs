@@ -1580,22 +1580,37 @@ fn check_whisper_runtime_update_inner<R: Runtime>(
         })
         .ok_or_else(|| "Could not read the latest whisper.cpp release tag.".to_string())?;
 
-    let current_version = detection.runtime_version;
-    let update_available = latest_tag != current_version;
+    let current_version = sanitize_runtime_version(&detection.runtime_version);
+    let latest_version = sanitize_runtime_version(&latest_tag);
+    let latest_installed = detection
+        .available_runtime_versions
+        .iter()
+        .any(|version| sanitize_runtime_version(version) == latest_version);
+    let update_available = latest_version != current_version;
     Ok(WhisperAssetUpdateResult {
         kind: "runtime".into(),
-        status: if update_available {
-            "available".into()
-        } else {
+        status: if !update_available {
             "current".into()
-        },
-        message: if update_available {
-            format!("A newer whisper.cpp runtime is available: {}.", latest_tag)
+        } else if latest_installed {
+            "installed".into()
         } else {
+            "available".into()
+        },
+        message: if !update_available {
             "Your app-managed Whisper runtime is up to date.".into()
+        } else if latest_installed {
+            format!(
+                "Whisper runtime {} is already downloaded. Select it from Active runtime to use it.",
+                latest_version
+            )
+        } else {
+            format!(
+                "A newer whisper.cpp runtime is available: {}.",
+                latest_version
+            )
         },
         current_version: Some(current_version),
-        latest_version: Some(latest_tag),
+        latest_version: Some(latest_version),
     })
 }
 
