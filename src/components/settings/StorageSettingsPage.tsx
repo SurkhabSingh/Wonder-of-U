@@ -1,0 +1,83 @@
+import { fileNameFromPath } from "../../lib/format";
+import type { AppBootstrap, AppPage, BusyAction } from "../../types";
+import { TooltipBadge } from "../ui/Tooltip";
+import { DownloadProgressCard } from "./DownloadProgressCard";
+
+export function StorageSettingsPage({
+  activePage,
+  bootstrap,
+  busyAction,
+  downloadIsActive,
+  onCancelDownload,
+  onDownloadRecommendedFfmpeg,
+  onToggleDownloadPause,
+}: {
+  activePage: AppPage;
+  bootstrap: AppBootstrap;
+  busyAction: BusyAction;
+  downloadIsActive: boolean;
+  onCancelDownload: () => void | Promise<void>;
+  onDownloadRecommendedFfmpeg: () => void | Promise<void>;
+  onToggleDownloadPause: () => void | Promise<void>;
+}) {
+  return (
+    <article
+      className="panel settings-card settings-card-wide"
+      hidden={activePage !== "storage"}
+    >
+      <header className="panel-header">
+        <div>
+          <p className="panel-kicker">Storage</p>
+          <h2>MP3 Compression</h2>
+        </div>
+        <TooltipBadge
+          label={bootstrap.ffmpegDetection.status === "ready" ? "Ready" : "Missing"}
+          description={bootstrap.ffmpegDetection.message}
+        />
+      </header>
+
+      <div
+        className={`update-card ${
+          bootstrap.ffmpegDetection.status === "ready" ? "current" : "available"
+        }`}
+      >
+        <strong>{bootstrap.ffmpegDetection.message}</strong>
+        <p className="microcopy">
+          Wonder of U keeps WAV audio for transcription because that is the safest
+          input path for Whisper. After a transcript exists, you can convert
+          individual recordings, selected recordings, or all available WAV
+          recordings to MP3 from Saved Recordings. If a card was already pushed to
+          Anki, converting the local file later will not break that existing Anki
+          card because Anki keeps its own copied media file. The Convert to MP3
+          action stays hidden until you enable manual MP3 conversion in App
+          Preferences.
+        </p>
+        {bootstrap.ffmpegDetection.executablePath ? (
+          <p className="path-copy" title={bootstrap.ffmpegDetection.executablePath}>
+            {fileNameFromPath(bootstrap.ffmpegDetection.executablePath)}
+          </p>
+        ) : null}
+      </div>
+
+      {bootstrap.ffmpegDetection.status !== "ready" ? (
+        <div className="action-row inline-actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onDownloadRecommendedFfmpeg()}
+            disabled={downloadIsActive || busyAction === "downloadFfmpeg"}
+          >
+            Download FFmpeg
+          </button>
+        </div>
+      ) : null}
+      <DownloadProgressCard
+        snapshot={bootstrap.modelDownload}
+        kind="ffmpeg"
+        downloadIsActive={downloadIsActive}
+        onTogglePause={() => void onToggleDownloadPause()}
+        onCancel={() => void onCancelDownload()}
+      />
+    </article>
+  );
+}
