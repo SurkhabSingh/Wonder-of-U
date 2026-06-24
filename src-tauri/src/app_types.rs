@@ -394,21 +394,6 @@ pub(crate) struct RecordingBatchResult {
     pub(crate) bootstrap: AppBootstrap,
 }
 
-pub(crate) struct AnkiPushOutcome {
-    pub(crate) note_id: i64,
-    pub(crate) furigana_message: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct FuriganaBridgeResponse {
-    pub(crate) ok: bool,
-    #[serde(default)]
-    pub(crate) furigana_html: Option<String>,
-    #[serde(default)]
-    pub(crate) error: Option<String>,
-}
-
 #[derive(Clone)]
 pub(crate) struct AppPathsState {
     pub(crate) data_dir: PathBuf,
