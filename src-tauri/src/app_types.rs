@@ -1,0 +1,440 @@
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc, Condvar, Mutex},
+    thread::JoinHandle,
+};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    recording::RecordingCaptureResult, RECOMMENDED_WHISPER_RUNTIME_VERSION, SHOW_SHORTCUT,
+    START_SHORTCUT, STOP_SHORTCUT,
+};
+
+#[derive(Copy, Clone)]
+pub(crate) struct WhisperModelSpec {
+    pub(crate) id: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) file_name: &'static str,
+    pub(crate) download_url: &'static str,
+}
+
+#[derive(Default)]
+pub(crate) struct StartupVisibility {
+    pub(crate) initialized: AtomicBool,
+    pub(crate) page_loaded: AtomicBool,
+    pub(crate) resolved: AtomicBool,
+    pub(crate) start_minimized: AtomicBool,
+}
+
+pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
+    WhisperModelSpec {
+        id: "tiny",
+        label: "Tiny",
+        file_name: "ggml-tiny.bin",
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+    },
+    WhisperModelSpec {
+        id: "base",
+        label: "Base",
+        file_name: "ggml-base.bin",
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+    },
+    WhisperModelSpec {
+        id: "small",
+        label: "Small",
+        file_name: "ggml-small.bin",
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+    },
+    WhisperModelSpec {
+        id: "medium",
+        label: "Medium",
+        file_name: "ggml-medium.bin",
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+    },
+    WhisperModelSpec {
+        id: "large-v3",
+        label: "Large v3",
+        file_name: "ggml-large-v3.bin",
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+    },
+];
+
+pub(crate) fn default_whisper_model_id() -> &'static str {
+    "small"
+}
+
+pub(crate) fn default_whisper_model_choice() -> String {
+    default_whisper_model_id().to_string()
+}
+
+pub(crate) fn default_whisper_runtime_version() -> String {
+    RECOMMENDED_WHISPER_RUNTIME_VERSION.to_string()
+}
+
+pub(crate) fn whisper_model_spec(model_id: &str) -> &'static WhisperModelSpec {
+    WHISPER_MODEL_SPECS
+        .iter()
+        .find(|spec| spec.id == model_id)
+        .unwrap_or(&WHISPER_MODEL_SPECS[2])
+}
+
+pub(crate) fn default_theme_preference() -> String {
+    "system".into()
+}
+
+#[derive(Copy, Clone)]
+pub(crate) enum HotkeyAction {
+    Start,
+    Stop,
+    ShowWindow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FeatureSettings {
+    pub(crate) transcription: bool,
+    #[serde(default)]
+    pub(crate) delete_local_audio_after_anki_push: bool,
+    #[serde(default)]
+    pub(crate) allow_mp3_conversion: bool,
+    #[serde(default)]
+    pub(crate) auto_add_furigana_after_anki_push: bool,
+}
+
+impl Default for FeatureSettings {
+    fn default() -> Self {
+        Self {
+            transcription: true,
+            delete_local_audio_after_anki_push: false,
+            allow_mp3_conversion: false,
+            auto_add_furigana_after_anki_push: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnkiFieldMapping {
+    pub(crate) transcription: String,
+    #[serde(default)]
+    pub(crate) furigana: String,
+    pub(crate) audio: String,
+    pub(crate) translation: String,
+    pub(crate) source_path: String,
+    pub(crate) created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnkiSettings {
+    pub(crate) deck_name: String,
+    pub(crate) note_type: String,
+    #[serde(default)]
+    pub(crate) fields: AnkiFieldMapping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WhisperSettings {
+    pub(crate) cli_path: String,
+    pub(crate) model_path: String,
+    #[serde(default = "default_whisper_runtime_version")]
+    pub(crate) runtime_version: String,
+    #[serde(default = "default_whisper_model_choice")]
+    pub(crate) model_choice: String,
+    pub(crate) language: String,
+}
+
+impl Default for WhisperSettings {
+    fn default() -> Self {
+        Self {
+            cli_path: String::new(),
+            model_path: String::new(),
+            runtime_version: default_whisper_runtime_version(),
+            model_choice: default_whisper_model_id().into(),
+            language: "auto".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AppSettings {
+    pub(crate) output_directory: String,
+    pub(crate) asset_directory: String,
+    #[serde(default)]
+    pub(crate) whisper: WhisperSettings,
+    #[serde(default)]
+    pub(crate) anki: AnkiSettings,
+    #[serde(default)]
+    pub(crate) features: FeatureSettings,
+    #[serde(default = "default_theme_preference")]
+    pub(crate) theme: String,
+    #[serde(default)]
+    pub(crate) launch_at_login: bool,
+    #[serde(default)]
+    pub(crate) start_minimized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecentRecording {
+    pub(crate) file_name: String,
+    pub(crate) file_path: String,
+    #[serde(default)]
+    pub(crate) transcript_path: Option<String>,
+    #[serde(default)]
+    pub(crate) transcript_language: Option<String>,
+    #[serde(default)]
+    pub(crate) translation_path: Option<String>,
+    #[serde(default)]
+    pub(crate) anki_note_id: Option<i64>,
+    #[serde(default)]
+    pub(crate) anki_deck_name: Option<String>,
+    #[serde(default)]
+    pub(crate) anki_note_type: Option<String>,
+    #[serde(default)]
+    pub(crate) audio_deleted: bool,
+    pub(crate) duration_ms: u64,
+    pub(crate) bytes_written: u64,
+    pub(crate) created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PersistedData {
+    pub(crate) settings: AppSettings,
+    pub(crate) recent_recordings: Vec<RecentRecording>,
+    pub(crate) untitled_counter: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HotkeyBindings {
+    pub(crate) start: String,
+    pub(crate) stop: String,
+    pub(crate) show_window: String,
+}
+
+impl Default for HotkeyBindings {
+    fn default() -> Self {
+        Self {
+            start: START_SHORTCUT.to_string(),
+            stop: STOP_SHORTCUT.to_string(),
+            show_window: SHOW_SHORTCUT.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ShellSnapshot {
+    pub(crate) phase: String,
+    pub(crate) status_text: String,
+    pub(crate) last_shortcut: Option<String>,
+    pub(crate) transition_count: u32,
+    pub(crate) hotkeys: HotkeyBindings,
+    pub(crate) started_at_ms: Option<u64>,
+    pub(crate) current_recording_name: Option<String>,
+    pub(crate) last_output_path: Option<String>,
+    pub(crate) last_transcript_path: Option<String>,
+}
+
+impl Default for ShellSnapshot {
+    fn default() -> Self {
+        Self {
+            phase: "idle".into(),
+            status_text: "Tray shell is ready. Press Ctrl+Alt+R to start recording system audio."
+                .into(),
+            last_shortcut: None,
+            transition_count: 0,
+            hotkeys: HotkeyBindings::default(),
+            started_at_ms: None,
+            current_recording_name: None,
+            last_output_path: None,
+            last_transcript_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AppBootstrap {
+    pub(crate) shell: ShellSnapshot,
+    pub(crate) settings: AppSettings,
+    pub(crate) recent_recordings: Vec<RecentRecording>,
+    pub(crate) whisper_detection: WhisperDetection,
+    pub(crate) ffmpeg_detection: FfmpegDetection,
+    pub(crate) model_download: ModelDownloadSnapshot,
+    pub(crate) log_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WhisperDetection {
+    pub(crate) status: String,
+    pub(crate) executable_path: Option<String>,
+    pub(crate) model_path: Option<String>,
+    pub(crate) source: Option<String>,
+    pub(crate) model_source: Option<String>,
+    pub(crate) runtime_version: String,
+    pub(crate) available_runtime_versions: Vec<String>,
+    pub(crate) cli_ready: bool,
+    pub(crate) model_ready: bool,
+    pub(crate) cli_managed: bool,
+    pub(crate) model_managed: bool,
+    pub(crate) message: String,
+}
+
+impl Default for WhisperDetection {
+    fn default() -> Self {
+        Self {
+            status: "notFound".into(),
+            executable_path: None,
+            model_path: None,
+            source: None,
+            model_source: None,
+            runtime_version: default_whisper_runtime_version(),
+            available_runtime_versions: Vec::new(),
+            cli_ready: false,
+            model_ready: false,
+            cli_managed: false,
+            model_managed: false,
+            message:
+                "Add or download whisper-cli and a Whisper model to enable offline transcription."
+                    .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FfmpegDetection {
+    pub(crate) status: String,
+    pub(crate) executable_path: Option<String>,
+    pub(crate) managed: bool,
+    pub(crate) message: String,
+}
+
+impl Default for FfmpegDetection {
+    fn default() -> Self {
+        Self {
+            status: "notFound".into(),
+            executable_path: None,
+            managed: false,
+            message: "Install app-managed FFmpeg to manually convert transcribed WAV recordings into MP3."
+                .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WhisperAssetUpdateResult {
+    pub(crate) kind: String,
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) current_version: Option<String>,
+    pub(crate) latest_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ModelDownloadSnapshot {
+    pub(crate) kind: Option<String>,
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) downloaded_bytes: u64,
+    pub(crate) total_bytes: Option<u64>,
+    pub(crate) progress_percent: Option<f64>,
+    pub(crate) target_path: Option<String>,
+}
+
+impl Default for ModelDownloadSnapshot {
+    fn default() -> Self {
+        Self {
+            kind: None,
+            status: "idle".into(),
+            message: "No download in progress.".into(),
+            downloaded_bytes: 0,
+            total_bytes: None,
+            progress_percent: None,
+            target_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnkiCatalog {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) version: Option<i64>,
+    pub(crate) decks: Vec<String>,
+    pub(crate) note_types: Vec<String>,
+    pub(crate) fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecordingActionItem {
+    pub(crate) file_path: String,
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) note_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecordingBatchResult {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) items: Vec<RecordingActionItem>,
+    pub(crate) bootstrap: AppBootstrap,
+}
+
+pub(crate) struct AnkiPushOutcome {
+    pub(crate) note_id: i64,
+    pub(crate) furigana_message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FuriganaBridgeResponse {
+    pub(crate) ok: bool,
+    #[serde(default)]
+    pub(crate) furigana_html: Option<String>,
+    #[serde(default)]
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AppPathsState {
+    pub(crate) data_dir: PathBuf,
+    pub(crate) state_file: PathBuf,
+    pub(crate) log_file: PathBuf,
+    pub(crate) assets_dir: PathBuf,
+}
+
+pub(crate) struct SharedShellState(pub(crate) Mutex<ShellSnapshot>);
+pub(crate) struct SharedPersistedState(pub(crate) Mutex<PersistedData>);
+pub(crate) struct WhisperDetectionState(pub(crate) Mutex<WhisperDetection>);
+pub(crate) struct ModelDownloadState(pub(crate) Mutex<ModelDownloadSnapshot>);
+pub(crate) struct ModelDownloadControlState {
+    pub(crate) control: Mutex<ModelDownloadControl>,
+    pub(crate) condvar: Condvar,
+}
+pub(crate) struct RecorderState(pub(crate) Mutex<Option<ActiveRecording>>);
+
+#[derive(Default)]
+pub(crate) struct ModelDownloadControl {
+    pub(crate) active: bool,
+    pub(crate) paused: bool,
+    pub(crate) cancel_requested: bool,
+}
+
+pub(crate) struct ActiveRecording {
+    pub(crate) stop_signal: Arc<AtomicBool>,
+    pub(crate) worker: JoinHandle<Result<RecordingCaptureResult, String>>,
+}
