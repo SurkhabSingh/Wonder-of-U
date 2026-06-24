@@ -6,13 +6,13 @@ use std::{
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
-    all_managed_model_paths,
     app_types::{
         default_theme_preference, whisper_model_spec, AnkiFieldMapping, AnkiSettings,
         AppPathsState, AppSettings, FeatureSettings, PersistedData, RecentRecording,
         WhisperSettings,
     },
-    collect_managed_whisper_cli_candidates, RECENT_RECORDINGS_LIMIT,
+    runtime_assets::{all_managed_model_paths, collect_managed_whisper_cli_candidates},
+    RECENT_RECORDINGS_LIMIT,
 };
 
 pub(crate) fn build_app_paths<R: Runtime>(
