@@ -13,6 +13,11 @@ export function SavedRecordingsPage({
   visibleRecordings,
   recordingFilter,
   recordingFilterTabs,
+  recordingPage,
+  recordingPageCount,
+  recordingPageStart,
+  recordingPageEnd,
+  filteredRecordingsCount,
   selectedRecordings,
   visibleSelectedPaths,
   configuredAnkiDeckLabel,
@@ -37,6 +42,7 @@ export function SavedRecordingsPage({
   recordingPushedToDeck,
   recordingPushedToCurrentAnkiDeck,
   onFilterChange,
+  onPageChange,
   onDefaultDeckChange,
   onRefreshAnki,
   onToggleSelection,
@@ -56,6 +62,11 @@ export function SavedRecordingsPage({
   visibleRecordings: RecentRecording[];
   recordingFilter: RecordingFilter;
   recordingFilterTabs: RecordingFilterTab[];
+  recordingPage: number;
+  recordingPageCount: number;
+  recordingPageStart: number;
+  recordingPageEnd: number;
+  filteredRecordingsCount: number;
   selectedRecordings: string[];
   visibleSelectedPaths: string[];
   configuredAnkiDeckLabel: string;
@@ -80,6 +91,7 @@ export function SavedRecordingsPage({
   recordingPushedToDeck: (recording: RecentRecording, deckName: string) => boolean;
   recordingPushedToCurrentAnkiDeck: (recording: RecentRecording) => boolean;
   onFilterChange: (filter: RecordingFilter) => void;
+  onPageChange: (page: number) => void;
   onDefaultDeckChange: (deckName: string) => void;
   onRefreshAnki: () => void | Promise<void>;
   onToggleSelection: (filePath: string) => void;
@@ -115,7 +127,7 @@ export function SavedRecordingsPage({
           <SavedRecordingsToolbar
             recordingFilter={recordingFilter}
             recordingFilterTabs={recordingFilterTabs}
-            visibleRecordingsCount={visibleRecordings.length}
+            visibleRecordingsCount={filteredRecordingsCount}
             visibleSelectedPaths={visibleSelectedPaths}
             configuredAnkiDeckLabel={configuredAnkiDeckLabel}
             configuredDeckMenuOptions={configuredDeckMenuOptions}
@@ -181,6 +193,35 @@ export function SavedRecordingsPage({
             ))}
           </div>
         )}
+
+        {filteredRecordingsCount > 0 ? (
+          <nav className="recording-pagination" aria-label="Saved recordings pages">
+            <span className="recording-page-summary">
+              {recordingPageStart}-{recordingPageEnd} of {filteredRecordingsCount}
+            </span>
+            <div className="recording-page-actions">
+              <button
+                type="button"
+                className="secondary compact"
+                disabled={recordingPage <= 1}
+                onClick={() => onPageChange(recordingPage - 1)}
+              >
+                Previous
+              </button>
+              <span className="recording-page-number">
+                Page {recordingPage} of {recordingPageCount}
+              </span>
+              <button
+                type="button"
+                className="secondary compact"
+                disabled={recordingPage >= recordingPageCount}
+                onClick={() => onPageChange(recordingPage + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </nav>
+        ) : null}
       </article>
     </div>
   );

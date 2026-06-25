@@ -86,6 +86,11 @@ function App() {
     pushableRecordings,
     recordingFilter,
     recordingFilterTabs,
+    recordingPage,
+    recordingPageCount,
+    recordingPageEnd,
+    recordingPageStart,
+    filteredRecordingsCount,
     recordingPushedToCurrentAnkiDeck,
     recordingPushedToDeck,
     selectedConvertibleRecordings,
@@ -98,6 +103,7 @@ function App() {
     selectedUntranscribedRecordings,
     setOpenRecordingMenuPath,
     setRecordingFilter,
+    setRecordingPage,
     toggleRecordingSelection,
     untranslatedRecordings,
     untranscribedRecordings,
@@ -244,6 +250,11 @@ function App() {
               visibleRecordings={visibleRecordings}
               recordingFilter={recordingFilter}
               recordingFilterTabs={recordingFilterTabs}
+              recordingPage={recordingPage}
+              recordingPageCount={recordingPageCount}
+              recordingPageStart={recordingPageStart}
+              recordingPageEnd={recordingPageEnd}
+              filteredRecordingsCount={filteredRecordingsCount}
               selectedRecordings={selectedRecordings}
               visibleSelectedPaths={visibleSelectedPaths}
               configuredAnkiDeckLabel={configuredAnkiDeckLabel}
@@ -268,6 +279,7 @@ function App() {
               recordingPushedToDeck={recordingPushedToDeck}
               recordingPushedToCurrentAnkiDeck={recordingPushedToCurrentAnkiDeck}
               onFilterChange={setRecordingFilter}
+              onPageChange={setRecordingPage}
               onDefaultDeckChange={(deck) =>
                 updateSettings({
                   anki: {

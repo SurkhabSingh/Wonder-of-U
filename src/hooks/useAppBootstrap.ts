@@ -33,6 +33,9 @@ export function useAppBootstrap() {
   const [loadError, setLoadError] = useState("");
   const settingsDirtyRef = useRef(false);
   const currentDraftKeyRef = useRef("");
+  const latestTransitionCountRef = useRef(
+    DEFAULT_BOOTSTRAP.shell.transitionCount,
+  );
   const recordingToastStateRef = useRef({
     phase: DEFAULT_BOOTSTRAP.shell.phase,
     transitionCount: DEFAULT_BOOTSTRAP.shell.transitionCount,
@@ -55,11 +58,21 @@ export function useAppBootstrap() {
 
   const applyBootstrap = useCallback(
     (nextBootstrap: AppBootstrap, options?: { preserveDraft?: boolean }) => {
+      if (
+        nextBootstrap.shell.transitionCount <
+        latestTransitionCountRef.current
+      ) {
+        return false;
+      }
+
+      latestTransitionCountRef.current =
+        nextBootstrap.shell.transitionCount;
       setBootstrap(nextBootstrap);
       if (!options?.preserveDraft) {
         setSettingsDraft(nextBootstrap.settings);
       }
       setLoadError("");
+      return true;
     },
     [],
   );
@@ -156,10 +169,11 @@ export function useAppBootstrap() {
     void loadBootstrap();
 
     const unlistenPromise = listen<AppBootstrap>(APP_SNAPSHOT_EVENT, (event) => {
-      syncRecordingToastState(event.payload, { notify: true });
-      setBootstrap(event.payload);
-      if (!settingsDirtyRef.current) {
-        setSettingsDraft(event.payload.settings);
+      const accepted = applyBootstrap(event.payload, {
+        preserveDraft: settingsDirtyRef.current,
+      });
+      if (accepted) {
+        syncRecordingToastState(event.payload, { notify: true });
       }
     });
 

@@ -16,8 +16,9 @@ use crate::{
         AnkiCatalog, AnkiSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
     },
-    build_app_bootstrap, emit_app_snapshot, log_event, selected_recordings,
-    update_recent_recording, update_shell_snapshot,
+    build_app_bootstrap, emit_app_snapshot, log_event,
+    recording_library::{selected_recordings, update_recent_recording},
+    update_shell_snapshot,
 };
 
 const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);

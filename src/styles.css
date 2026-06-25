@@ -1061,6 +1061,34 @@ input::placeholder {
   padding-right: 4px;
 }
 
+.recording-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.recording-page-summary,
+.recording-page-number {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.recording-page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.recording-page-actions .compact {
+  min-height: 30px;
+  padding: 5px 10px;
+}
+
 .recording-actions {
   position: relative;
   justify-content: flex-end;

@@ -14,6 +14,8 @@ type UseRecordingLibraryOptions = {
   recentRecordings: RecentRecording[];
 };
 
+const RECORDINGS_PER_PAGE = 8;
+
 function mergeSavedAnkiSettingsIntoCatalog(
   catalog: AnkiCatalog,
   ankiSettings: AnkiSettings,
@@ -49,6 +51,7 @@ export function useRecordingLibrary({
 }: UseRecordingLibraryOptions) {
   const [selectedRecordings, setSelectedRecordings] = useState<string[]>([]);
   const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
+  const [recordingPage, setRecordingPage] = useState(1);
   const [openRecordingMenuPath, setOpenRecordingMenuPath] = useState<string | null>(
     null,
   );
@@ -119,7 +122,7 @@ export function useRecordingLibrary({
     [recentRecordings, recordingPushedToCurrentAnkiDeck],
   );
 
-  const visibleRecordings = useMemo(() => {
+  const filteredRecordings = useMemo(() => {
     if (recordingFilter === "needsTranscription") {
       return untranscribedRecordings;
     }
@@ -146,6 +149,26 @@ export function useRecordingLibrary({
     untranscribedRecordings,
   ]);
 
+  const recordingPageCount = Math.max(
+    1,
+    Math.ceil(filteredRecordings.length / RECORDINGS_PER_PAGE),
+  );
+  const recordingPageStart =
+    filteredRecordings.length === 0
+      ? 0
+      : (recordingPage - 1) * RECORDINGS_PER_PAGE + 1;
+  const recordingPageEnd = Math.min(
+    recordingPage * RECORDINGS_PER_PAGE,
+    filteredRecordings.length,
+  );
+  const visibleRecordings = useMemo(() => {
+    const startIndex = (recordingPage - 1) * RECORDINGS_PER_PAGE;
+    return filteredRecordings.slice(
+      startIndex,
+      startIndex + RECORDINGS_PER_PAGE,
+    );
+  }, [filteredRecordings, recordingPage]);
+
   const selectedRecordingSet = useMemo(
     () => new Set(selectedRecordings),
     [selectedRecordings],
@@ -153,10 +176,10 @@ export function useRecordingLibrary({
 
   const visibleSelectedRecordings = useMemo(
     () =>
-      visibleRecordings.filter((recording) =>
+      filteredRecordings.filter((recording) =>
         selectedRecordingSet.has(recording.filePath),
       ),
-    [selectedRecordingSet, visibleRecordings],
+    [filteredRecordings, selectedRecordingSet],
   );
 
   const visibleSelectedPaths = useMemo(
@@ -276,11 +299,25 @@ export function useRecordingLibrary({
     setSelectedRecordings([]);
   }, []);
 
+  const changeRecordingFilter = useCallback((filter: RecordingFilter) => {
+    setRecordingFilter(filter);
+    setRecordingPage(1);
+    setOpenRecordingMenuPath(null);
+  }, []);
+
   useEffect(() => {
     if (useBatchActionsOnly) {
       setOpenRecordingMenuPath(null);
     }
   }, [useBatchActionsOnly]);
+
+  useEffect(() => {
+    setRecordingPage((current) => Math.min(current, recordingPageCount));
+  }, [recordingPageCount]);
+
+  useEffect(() => {
+    setOpenRecordingMenuPath(null);
+  }, [recordingPage]);
 
   useEffect(() => {
     setSelectedRecordings((current) =>
@@ -302,6 +339,11 @@ export function useRecordingLibrary({
     pushableRecordings,
     recordingFilter,
     recordingFilterTabs,
+    recordingPage,
+    recordingPageCount,
+    recordingPageEnd,
+    recordingPageStart,
+    filteredRecordingsCount: filteredRecordings.length,
     recordingPushedToCurrentAnkiDeck,
     recordingPushedToDeck,
     selectedConvertibleRecordings,
@@ -313,7 +355,8 @@ export function useRecordingLibrary({
     selectedUntranslatedRecordings,
     selectedUntranscribedRecordings,
     setOpenRecordingMenuPath,
-    setRecordingFilter,
+    setRecordingFilter: changeRecordingFilter,
+    setRecordingPage,
     toggleRecordingSelection,
     transcribedRecordings,
     untranslatedRecordings,
