@@ -2,6 +2,7 @@ mod anki;
 mod app_state;
 mod app_types;
 mod asset_downloads;
+mod desktop_shell;
 mod recording;
 mod recording_library;
 mod recording_session;
@@ -12,6 +13,11 @@ use anki::*;
 use app_state::*;
 use app_types::*;
 use asset_downloads::*;
+use desktop_shell::{
+    acquire_single_instance_or_exit, configure_desktop_shell,
+    hide_main_window as hide_main_window_inner, mark_main_page_loaded,
+    show_main_window as show_main_window_inner, StartupVisibility,
+};
 use recording_library::*;
 use recording_session::{start_recording_inner, stop_recording_inner};
 use runtime_assets::*;
@@ -20,35 +26,14 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::Path,
-    sync::{atomic::Ordering, Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    webview::PageLoadEvent,
-    AppHandle, Emitter, Manager, Runtime, WindowEvent,
-};
+use tauri::{webview::PageLoadEvent, AppHandle, Emitter, Manager, Runtime};
 #[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE},
-    System::Threading::CreateMutexW,
-    UI::WindowsAndMessaging::{
-        FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-    },
-};
-const START_SHORTCUT: &str = "Ctrl+Alt+R";
-const STOP_SHORTCUT: &str = "Ctrl+Alt+S";
-const SHOW_SHORTCUT: &str = "Ctrl+Alt+W";
-const APP_TITLE: &str = "Wonder of U";
 const APP_SNAPSHOT_EVENT: &str = "app://snapshot-changed";
-const START_SHORTCUT_CANDIDATES: [&str; 3] = [START_SHORTCUT, "Ctrl+Alt+Shift+R", "Ctrl+Alt+F8"];
-const STOP_SHORTCUT_CANDIDATES: [&str; 3] = [STOP_SHORTCUT, "Ctrl+Alt+Shift+S", "Ctrl+Alt+F9"];
-const SHOW_SHORTCUT_CANDIDATES: [&str; 3] = [SHOW_SHORTCUT, "Ctrl+Alt+Shift+W", "Ctrl+Alt+F10"];
 const RECOMMENDED_WHISPER_RUNTIME_VERSION: &str = "v1.8.4";
 const RECOMMENDED_WHISPER_RUNTIME_FILE: &str = "whisper-bin-x64.zip";
 const RECOMMENDED_FFMPEG_RUNTIME_FILE: &str = "ffmpeg-master-latest-win64-gpl-shared.zip";
@@ -313,7 +298,7 @@ fn apply_launch_at_login_setting<R: Runtime>(
             }
         }
 
-        return match autostart_manager.is_enabled() {
+        match autostart_manager.is_enabled() {
             Ok(actual_state) => Ok(actual_state),
             Err(error) => {
                 let message = error.to_string();
@@ -323,7 +308,7 @@ fn apply_launch_at_login_setting<R: Runtime>(
                     Err(message)
                 }
             }
-        };
+        }
     }
 
     #[cfg(not(desktop))]
@@ -472,191 +457,9 @@ fn save_settings_inner<R: Runtime>(
     Ok(())
 }
 
-fn show_main_window_inner<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window("main") {
-        window.show()?;
-        window.unminimize()?;
-        window.set_focus()?;
-    }
-
-    Ok(())
-}
-
-fn hide_main_window_inner<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window("main") {
-        window.hide()?;
-    }
-
-    Ok(())
-}
-
-fn resolve_startup_visibility<R: Runtime>(
-    app: &AppHandle<R>,
-    startup_visibility: &StartupVisibility,
-) {
-    if !startup_visibility.initialized.load(Ordering::Acquire)
-        || !startup_visibility.page_loaded.load(Ordering::Acquire)
-        || startup_visibility.resolved.swap(true, Ordering::AcqRel)
-    {
-        return;
-    }
-
-    if !startup_visibility.start_minimized.load(Ordering::Acquire) {
-        let _ = show_main_window_inner(app);
-    }
-}
-
 fn setup_error(message: impl Into<String>) -> tauri::Error {
-    let boxed_error: Box<dyn std::error::Error> = Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        message.into(),
-    ));
+    let boxed_error: Box<dyn std::error::Error> = Box::new(std::io::Error::other(message.into()));
     tauri::Error::Setup(boxed_error.into())
-}
-
-#[cfg(target_os = "windows")]
-struct SingleInstanceGuard {
-    handle: HANDLE,
-}
-
-#[cfg(target_os = "windows")]
-impl Drop for SingleInstanceGuard {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe {
-                CloseHandle(self.handle);
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn wide_null(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-#[cfg(target_os = "windows")]
-fn current_launch_should_focus_existing_instance() -> bool {
-    !std::env::args().any(|argument| argument == "--autostart")
-}
-
-#[cfg(target_os = "windows")]
-fn focus_existing_instance_window() {
-    let window_title = wide_null(APP_TITLE);
-
-    unsafe {
-        let window = FindWindowW(std::ptr::null(), window_title.as_ptr());
-        if window.is_null() {
-            return;
-        }
-
-        if IsIconic(window) != 0 {
-            ShowWindow(window, SW_RESTORE);
-        } else {
-            ShowWindow(window, SW_SHOW);
-        }
-
-        SetForegroundWindow(window);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn acquire_single_instance_or_exit() -> Option<SingleInstanceGuard> {
-    let mutex_name = wide_null("Local\\com.wonderofu.desktop.single-instance");
-    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr()) };
-    if handle.is_null() {
-        return None;
-    }
-
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        if current_launch_should_focus_existing_instance() {
-            focus_existing_instance_window();
-        }
-
-        unsafe {
-            CloseHandle(handle);
-        }
-        std::process::exit(0);
-    }
-
-    Some(SingleInstanceGuard { handle })
-}
-
-#[cfg(not(target_os = "windows"))]
-fn acquire_single_instance_or_exit() {}
-
-fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcut: &str) {
-    let _ = update_shell_snapshot(app, |shell| {
-        shell.last_shortcut = Some(shortcut.to_string());
-    });
-
-    let action_result = match action {
-        HotkeyAction::Start => start_recording_inner(app, None),
-        HotkeyAction::Stop => stop_recording_inner(app),
-        HotkeyAction::ShowWindow => show_main_window_inner(app).map_err(|error| error.to_string()),
-    };
-
-    if let Err(error) = action_result {
-        log_event(
-            app,
-            "ERROR",
-            "hotkey.failed",
-            serde_json::json!({
-                "shortcut": shortcut,
-                "message": error
-            }),
-        );
-        let _ = update_shell_snapshot(app, |shell| {
-            shell.phase = "error".into();
-            shell.status_text = error.clone();
-            shell.started_at_ms = None;
-            shell.current_recording_name = None;
-        });
-    }
-}
-
-fn register_hotkey<R: Runtime>(
-    app: &AppHandle<R>,
-    action: HotkeyAction,
-    label: &str,
-    candidates: &[&'static str],
-) -> Result<(String, Option<String>), String> {
-    let global_shortcut = app.global_shortcut();
-    let mut last_error = None;
-
-    for candidate in candidates {
-        let registered_shortcut = *candidate;
-        match global_shortcut.on_shortcut(registered_shortcut, move |app, _shortcut, event| {
-            if event.state != ShortcutState::Pressed {
-                return;
-            }
-
-            handle_shortcut(app, action, registered_shortcut);
-        }) {
-            Ok(()) => {
-                let warning = if registered_shortcut == candidates[0] {
-                    None
-                } else {
-                    Some(format!(
-                        "{label} hotkey moved to {registered_shortcut} because {primary} was unavailable.",
-                        primary = candidates[0]
-                    ))
-                };
-
-                return Ok((registered_shortcut.to_string(), warning));
-            }
-            Err(error) => last_error = Some(error.to_string()),
-        }
-    }
-
-    Ok((
-        "Unavailable".into(),
-        Some(format!(
-            "{label} hotkey could not be registered. Tried: {}. {}",
-            candidates.join(", "),
-            last_error.unwrap_or_else(|| "The operating system rejected every candidate.".into())
-        )),
-    ))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -737,116 +540,10 @@ pub fn run() {
                 ));
             }
 
-            let show_item = MenuItem::with_id(app, "show", "Open Wonder of U", true, None::<&str>)?;
-            let hide_item = MenuItem::with_id(app, "hide", "Hide Window", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
+            configure_desktop_shell(app, &setup_visibility, startup_warnings)
+                .map_err(setup_error)?;
 
-            let mut tray_builder = TrayIconBuilder::new().tooltip(APP_TITLE).menu(&menu);
-            if let Some(icon) = app.default_window_icon().cloned() {
-                tray_builder = tray_builder.icon(icon);
-            }
-
-            tray_builder
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        let _ = show_main_window_inner(app);
-                    }
-                    "hide" => {
-                        let _ = hide_main_window_inner(app);
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let _ = show_main_window_inner(tray.app_handle());
-                    }
-                })
-                .build(app)?;
-
-            if let Some(window) = app.get_webview_window("main") {
-                let app_handle = app.handle().clone();
-                window.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = hide_main_window_inner(&app_handle);
-                    }
-                });
-            }
-
-            let (start_binding, start_warning) = register_hotkey(
-                &app.handle(),
-                HotkeyAction::Start,
-                "Start",
-                &START_SHORTCUT_CANDIDATES,
-            )
-            .map_err(setup_error)?;
-            let (stop_binding, stop_warning) = register_hotkey(
-                &app.handle(),
-                HotkeyAction::Stop,
-                "Stop",
-                &STOP_SHORTCUT_CANDIDATES,
-            )
-            .map_err(setup_error)?;
-            let (show_binding, show_warning) = register_hotkey(
-                &app.handle(),
-                HotkeyAction::ShowWindow,
-                "Show window",
-                &SHOW_SHORTCUT_CANDIDATES,
-            )
-            .map_err(setup_error)?;
-
-            let mut warnings = Vec::new();
-            if let Some(warning) = start_warning {
-                warnings.push(warning);
-            }
-            if let Some(warning) = stop_warning {
-                warnings.push(warning);
-            }
-            if let Some(warning) = show_warning {
-                warnings.push(warning);
-            }
-            warnings.extend(startup_warnings);
-
-            {
-                let shell_state = app.state::<SharedShellState>();
-                let mut shell = shell_state
-                    .0
-                    .lock()
-                    .map_err(|_| setup_error("Could not initialize shell state."))?;
-                shell.hotkeys.start = start_binding;
-                shell.hotkeys.stop = stop_binding;
-                shell.hotkeys.show_window = show_binding;
-                if !warnings.is_empty() {
-                    shell.status_text = format!(
-                        "Tray shell is ready with fallback hotkeys. {}",
-                        warnings.join(" ")
-                    );
-                }
-            }
-
-            let start_minimized = {
-                let persisted_state = app.state::<SharedPersistedState>();
-                let persisted = persisted_state
-                    .0
-                    .lock()
-                    .map_err(|_| setup_error("Could not read minimized startup preference."))?;
-                persisted.settings.start_minimized
-            };
-
-            setup_visibility
-                .start_minimized
-                .store(start_minimized, Ordering::Release);
-            setup_visibility.initialized.store(true, Ordering::Release);
-            resolve_startup_visibility(&app_handle, &setup_visibility);
-
-            emit_app_snapshot(&app.handle());
+            emit_app_snapshot(app.handle());
             Ok(())
         })
         .on_page_load(move |webview, payload| {
@@ -857,10 +554,7 @@ pub fn run() {
                 return;
             }
 
-            page_load_visibility
-                .page_loaded
-                .store(true, Ordering::Release);
-            resolve_startup_visibility(webview.window().app_handle(), &page_load_visibility);
+            mark_main_page_loaded(webview.window().app_handle(), &page_load_visibility);
         })
         .invoke_handler(tauri::generate_handler![
             get_app_bootstrap,

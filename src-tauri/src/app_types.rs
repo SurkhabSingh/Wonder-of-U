@@ -6,10 +6,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    recording::RecordingCaptureResult, RECOMMENDED_WHISPER_RUNTIME_VERSION, SHOW_SHORTCUT,
-    START_SHORTCUT, STOP_SHORTCUT,
-};
+use crate::{recording::RecordingCaptureResult, RECOMMENDED_WHISPER_RUNTIME_VERSION};
+
+pub(crate) const START_SHORTCUT: &str = "Ctrl+Alt+R";
+pub(crate) const STOP_SHORTCUT: &str = "Ctrl+Alt+S";
+pub(crate) const SHOW_SHORTCUT: &str = "Ctrl+Alt+W";
 
 #[derive(Copy, Clone)]
 pub(crate) struct WhisperModelSpec {
@@ -17,14 +18,6 @@ pub(crate) struct WhisperModelSpec {
     pub(crate) label: &'static str,
     pub(crate) file_name: &'static str,
     pub(crate) download_url: &'static str,
-}
-
-#[derive(Default)]
-pub(crate) struct StartupVisibility {
-    pub(crate) initialized: AtomicBool,
-    pub(crate) page_loaded: AtomicBool,
-    pub(crate) resolved: AtomicBool,
-    pub(crate) start_minimized: AtomicBool,
 }
 
 pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
@@ -81,13 +74,6 @@ pub(crate) fn whisper_model_spec(model_id: &str) -> &'static WhisperModelSpec {
 
 pub(crate) fn default_theme_preference() -> String {
     "system".into()
-}
-
-#[derive(Copy, Clone)]
-pub(crate) enum HotkeyAction {
-    Start,
-    Stop,
-    ShowWindow,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
