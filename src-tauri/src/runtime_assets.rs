@@ -10,12 +10,12 @@ use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
+    app_runtime::{emit_app_snapshot, log_event},
     app_state::sanitize_runtime_version,
     app_types::{
         whisper_model_spec, AppSettings, FfmpegDetection, SharedPersistedState,
         WhisperAssetUpdateResult, WhisperDetection, WhisperDetectionState, WHISPER_MODEL_SPECS,
     },
-    emit_app_snapshot, log_event,
     transcription::{verify_whisper_cli, verify_whisper_model},
 };
 

@@ -6,7 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{recording::RecordingCaptureResult, RECOMMENDED_WHISPER_RUNTIME_VERSION};
+use crate::{app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION, recording::RecordingCaptureResult};
 
 pub(crate) const START_SHORTCUT: &str = "Ctrl+Alt+R";
 pub(crate) const STOP_SHORTCUT: &str = "Ctrl+Alt+S";

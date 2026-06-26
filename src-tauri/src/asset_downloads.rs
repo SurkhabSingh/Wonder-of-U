@@ -8,20 +8,22 @@ use tauri::{AppHandle, Manager, Runtime};
 use zip::ZipArchive;
 
 use crate::{
+    app_config::{
+        RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL,
+        RECOMMENDED_WHISPER_RUNTIME_FILE, RECOMMENDED_WHISPER_RUNTIME_VERSION,
+    },
+    app_runtime::{emit_app_snapshot, log_event, update_shell_snapshot},
     app_state::{sanitize_runtime_version, write_persisted_data},
     app_types::{
         whisper_model_spec, ModelDownloadControlState, ModelDownloadSnapshot, ModelDownloadState,
         SharedPersistedState, SharedShellState,
     },
-    emit_app_snapshot, log_event,
     runtime_assets::{
         app_managed_runtime_directory, collect_managed_ffmpeg_candidates,
         collect_managed_whisper_cli_candidates, managed_ffmpeg_install_directory,
         refresh_whisper_detection_state, verify_ffmpeg_binary,
     },
     transcription::{verify_whisper_cli, verify_whisper_model},
-    update_shell_snapshot, RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL,
-    RECOMMENDED_WHISPER_RUNTIME_FILE, RECOMMENDED_WHISPER_RUNTIME_VERSION,
 };
 
 fn http_client() -> Result<reqwest::blocking::Client, String> {

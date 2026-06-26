@@ -20,12 +20,11 @@ use windows_sys::Win32::{
 };
 
 use crate::{
+    app_runtime::{log_event, update_shell_snapshot},
     app_types::{
         SharedPersistedState, SharedShellState, SHOW_SHORTCUT, START_SHORTCUT, STOP_SHORTCUT,
     },
-    log_event,
     recording_session::{start_recording_inner, stop_recording_inner},
-    update_shell_snapshot,
 };
 
 const APP_TITLE: &str = "Wonder of U";

@@ -10,6 +10,7 @@ use std::{
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
+    app_runtime::{ensure_directory_exists, log_event, now_ms, update_shell_snapshot},
     app_state::{
         derive_transcript_language_from_path, next_recording_stem, normalize_settings,
         unique_wav_path, write_persisted_data,
@@ -18,12 +19,10 @@ use crate::{
         ActiveRecording, AppPathsState, RecentRecording, RecorderState, SharedPersistedState,
         SharedShellState,
     },
-    ensure_directory_exists, log_event, now_ms,
     recording::capture_system_audio_loopback,
     recording_library::rename_recording_outputs_from_transcript,
     runtime_assets::refresh_whisper_detection_state,
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
-    update_shell_snapshot,
 };
 
 fn insert_recent_recording<R: Runtime>(

@@ -10,14 +10,13 @@ use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
+    app_runtime::{build_app_bootstrap, emit_app_snapshot, log_event, update_shell_snapshot},
     app_state::{
         derive_transcript_language_from_path, sanitize_recording_name, write_persisted_data,
     },
     app_types::{RecentRecording, RecordingActionItem, RecordingBatchResult, SharedPersistedState},
-    build_app_bootstrap, emit_app_snapshot, log_event,
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
-    update_shell_snapshot,
 };
 
 #[cfg(target_os = "windows")]

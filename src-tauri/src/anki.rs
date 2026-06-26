@@ -8,6 +8,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
+    app_runtime::{build_app_bootstrap, emit_app_snapshot, log_event, update_shell_snapshot},
     app_state::{
         is_japanese_transcript_language, sanitize_recording_name, transcript_looks_japanese,
         write_persisted_data,
@@ -16,9 +17,7 @@ use crate::{
         AnkiCatalog, AnkiSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
     },
-    build_app_bootstrap, emit_app_snapshot, log_event,
     recording_library::{selected_recordings, update_recent_recording},
-    update_shell_snapshot,
 };
 
 const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
