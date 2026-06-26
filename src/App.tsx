@@ -69,6 +69,7 @@ function App() {
     persistSettingsIfNeeded,
     setBusyAction,
     setLoadError,
+    showWarning,
   });
 
   const runtimeUpdateVersion =

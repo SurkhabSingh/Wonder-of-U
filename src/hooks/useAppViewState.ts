@@ -102,7 +102,6 @@ export function useAppViewState({
     busyAction === "pushAnki" ||
     busyAction === "addFurigana" ||
     busyAction === "deleteRecording" ||
-    busyAction === "loadAnki" ||
     busyAction === "convertMp3";
   const busyOverlayLabel = isTranscribing || busyAction === "transcribeRecording"
     ? "Transcribing saved audio..."
@@ -116,9 +115,7 @@ export function useAppViewState({
             ? "Deleting selected recordings..."
             : busyAction === "convertMp3"
               ? "Converting recordings to MP3..."
-              : busyAction === "loadAnki"
-                ? "Loading Anki card data..."
-                : isSaving
+              : isSaving
                   ? "Finalizing the recording..."
                   : "Working...";
   const downloadIsActive =

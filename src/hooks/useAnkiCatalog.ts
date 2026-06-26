@@ -8,6 +8,7 @@ type UseAnkiCatalogOptions = {
   persistSettingsIfNeeded: () => Promise<void>;
   setBusyAction: (busyAction: BusyAction) => void;
   setLoadError: (message: string) => void;
+  showWarning: (message: string) => void;
 };
 
 type RefreshAnkiCatalogOptions = {
@@ -21,6 +22,7 @@ export function useAnkiCatalog({
   persistSettingsIfNeeded,
   setBusyAction,
   setLoadError,
+  showWarning,
 }: UseAnkiCatalogOptions) {
   const [ankiCatalog, setAnkiCatalog] =
     useState<AnkiCatalog>(DEFAULT_ANKI_CATALOG);
@@ -42,6 +44,9 @@ export function useAnkiCatalog({
           noteType: (nextNoteType ?? noteType) || null,
         });
         setAnkiCatalog(catalog);
+        if (catalog.status === "offline" && !options?.suppressErrors) {
+          showWarning("Anki is offline currently.");
+        }
       } catch (error) {
         if (!options?.suppressErrors) {
           setLoadError(
@@ -56,7 +61,7 @@ export function useAnkiCatalog({
         }
       }
     },
-    [noteType, persistSettingsIfNeeded, setBusyAction, setLoadError],
+    [noteType, persistSettingsIfNeeded, setBusyAction, setLoadError, showWarning],
   );
 
   useEffect(() => {
