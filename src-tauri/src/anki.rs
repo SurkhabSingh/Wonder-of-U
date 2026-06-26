@@ -1,18 +1,30 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fs, path::PathBuf};
 
-use serde::Deserialize;
 use tauri::{AppHandle, Manager, Runtime};
 
+mod client;
+mod fields;
+mod furigana;
+
+#[cfg(test)]
+pub(crate) use self::fields::join_anki_field_parts;
+use self::{
+    client::{
+        anki_connect_request, anki_note_exists, anki_note_field_value, anki_offline_message,
+        json_string_array,
+    },
+    fields::{
+        anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
+    },
+    furigana::request_furigana_html,
+};
+pub(crate) use self::{
+    fields::{preserve_anki_sound_tags, recording_pushed_to_anki_target},
+    furigana::recording_transcript_supports_furigana,
+};
 use crate::{
     app_runtime::{build_app_bootstrap, emit_app_snapshot, log_event, update_shell_snapshot},
-    app_state::{
-        is_japanese_transcript_language, sanitize_recording_name, transcript_looks_japanese,
-        write_persisted_data,
-    },
+    app_state::write_persisted_data,
     app_types::{
         AnkiCatalog, AnkiSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
@@ -20,113 +32,9 @@ use crate::{
     recording_library::{selected_recordings, update_recent_recording},
 };
 
-const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
-const ANKI_LOOKUP_FURIGANA_URL: &str = "http://127.0.0.1:8766/furigana";
-const ANKI_LOOKUP_TIMEOUT: Duration = Duration::from_millis(2500);
-
 struct AnkiPushOutcome {
     note_id: i64,
     furigana_message: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FuriganaBridgeResponse {
-    ok: bool,
-    #[serde(default)]
-    furigana_html: Option<String>,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-fn anki_offline_message(error: &str) -> String {
-    format!(
-        "Anki is currently offline. Start Anki and make sure AnkiConnect is installed, then try again. {error}"
-    )
-}
-
-fn anki_connect_request(
-    action: &str,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(ANKI_CONNECT_TIMEOUT)
-        .build()
-        .map_err(|error| error.to_string())?;
-    let payload = serde_json::json!({
-        "action": action,
-        "version": 6,
-        "params": params
-    });
-
-    let response = client
-        .post("http://127.0.0.1:8765")
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(payload.to_string())
-        .send()
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    let response = response.text().map_err(|error| error.to_string())?;
-    let response =
-        serde_json::from_str::<serde_json::Value>(&response).map_err(|error| error.to_string())?;
-
-    if let Some(error) = response.get("error").and_then(|value| value.as_str()) {
-        if !error.is_empty() {
-            return Err(error.to_string());
-        }
-    }
-
-    Ok(response
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null))
-}
-
-fn anki_note_exists(note_id: i64) -> Result<bool, String> {
-    let result = anki_connect_request(
-        "notesInfo",
-        serde_json::json!({
-            "notes": [note_id]
-        }),
-    )?;
-
-    let Some(notes) = result.as_array() else {
-        return Ok(false);
-    };
-
-    Ok(notes.iter().any(|note| {
-        note.get("noteId")
-            .and_then(|value| value.as_i64())
-            .is_some_and(|candidate| candidate == note_id)
-    }))
-}
-
-fn anki_note_field_value(note_id: i64, field_name: &str) -> Result<Option<String>, String> {
-    let result = anki_connect_request(
-        "notesInfo",
-        serde_json::json!({
-            "notes": [note_id]
-        }),
-    )?;
-
-    let Some(note) = result.as_array().and_then(|notes| {
-        notes.iter().find(|note| {
-            note.get("noteId")
-                .and_then(|value| value.as_i64())
-                .is_some_and(|candidate| candidate == note_id)
-        })
-    }) else {
-        return Ok(None);
-    };
-
-    Ok(note
-        .get("fields")
-        .and_then(|fields| fields.as_object())
-        .and_then(|fields| fields.get(field_name))
-        .and_then(|field| field.get("value"))
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string))
 }
 
 fn clear_recording_anki_reference<R: Runtime>(
@@ -212,54 +120,6 @@ fn refresh_recent_anki_note_references<R: Runtime>(app: &AppHandle<R>) -> Result
     Ok(())
 }
 
-fn request_furigana_html(text: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(ANKI_LOOKUP_TIMEOUT)
-        .build()
-        .map_err(|error| error.to_string())?;
-
-    let response_text = client
-        .post(ANKI_LOOKUP_FURIGANA_URL)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::json!({ "text": text }).to_string())
-        .send()
-        .map_err(|error| {
-            format!(
-                "Anki Lookup add-on is not running or did not respond. Open Anki with the Wonder of U/Anki Lookup add-on installed, then try again. {error}"
-            )
-        })?
-        .error_for_status()
-        .map_err(|error| {
-            format!("Anki Lookup add-on rejected the furigana request. {error}")
-        })?
-        .text()
-        .map_err(|error| format!("Anki Lookup add-on response could not be read. {error}"))?;
-    let response = serde_json::from_str::<FuriganaBridgeResponse>(&response_text)
-        .map_err(|error| format!("Anki Lookup add-on returned invalid furigana data. {error}"))?;
-
-    if response.ok {
-        response
-            .furigana_html
-            .ok_or_else(|| "Anki Lookup add-on did not return furigana HTML.".to_string())
-    } else {
-        Err(response
-            .error
-            .unwrap_or_else(|| "Anki Lookup add-on could not create furigana.".into()))
-    }
-}
-
-fn json_string_array(value: serde_json::Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
 pub(crate) fn load_anki_catalog_inner<R: Runtime>(
     app: &AppHandle<R>,
     note_type: Option<String>,
@@ -341,60 +201,6 @@ fn delete_local_audio_after_anki_push<R: Runtime>(
         recording.audio_deleted = true;
         recording.bytes_written = 0;
     })
-}
-
-fn anki_media_file_name(path: &Path) -> String {
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(sanitize_recording_name)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "recording".into())
-        .replace(' ', "_");
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("wav");
-    format!("wonder_of_u_{stem}.{extension}")
-}
-
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\n', "<br>")
-}
-
-fn user_friendly_anki_error(error: &str, settings: &AnkiSettings) -> String {
-    let normalized = error.to_lowercase();
-    if normalized.contains("duplicate") {
-        return format!(
-            "This transcript already exists in the '{}' deck. Wonder of U did not create a duplicate card.",
-            settings.deck_name
-        );
-    }
-
-    if normalized.contains("model") && normalized.contains("not") && normalized.contains("found") {
-        return format!(
-            "Anki could not find the '{}' note type. Refresh Anki mapping and choose an available note type.",
-            settings.note_type
-        );
-    }
-
-    if normalized.contains("deck") && normalized.contains("not") && normalized.contains("found") {
-        return format!(
-            "Anki could not find the '{}' deck. Refresh Anki mapping and choose an available deck.",
-            settings.deck_name
-        );
-    }
-
-    if normalized.contains("field") {
-        return "Anki rejected one of the mapped fields. Refresh Anki mapping and check that every selected field still exists on the note type.".into();
-    }
-
-    format!("Anki could not create the card. {error}")
 }
 
 fn push_single_recording_to_anki<R: Runtime>(
@@ -548,84 +354,6 @@ fn maybe_insert_automatic_furigana_field(
         }
         Err(error) => Some(format!("Furigana was skipped because {error}")),
     }
-}
-
-fn prepend_anki_field_value(
-    fields: &mut serde_json::Map<String, serde_json::Value>,
-    field_name: &str,
-    value: String,
-) {
-    if field_name.is_empty() {
-        return;
-    }
-
-    let next_value = fields
-        .get(field_name)
-        .and_then(|existing| existing.as_str())
-        .map(|existing| join_anki_field_parts(&value, existing))
-        .unwrap_or(value);
-    fields.insert(
-        field_name.to_string(),
-        serde_json::Value::String(next_value),
-    );
-}
-
-pub(crate) fn join_anki_field_parts(first: &str, second: &str) -> String {
-    let first = first.trim();
-    let second = second.trim();
-    match (first.is_empty(), second.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => second.to_string(),
-        (false, true) => first.to_string(),
-        (false, false) => format!("{first}<br>{second}"),
-    }
-}
-
-pub(crate) fn preserve_anki_sound_tags(
-    existing_value: Option<&str>,
-    new_value: &str,
-    fallback_sound_tag: Option<&str>,
-) -> String {
-    let mut sound_tags = existing_value
-        .map(extract_anki_sound_tags)
-        .unwrap_or_default();
-
-    if let Some(fallback_sound_tag) = fallback_sound_tag {
-        if !new_value.contains(fallback_sound_tag)
-            && !sound_tags.iter().any(|tag| tag == fallback_sound_tag)
-        {
-            sound_tags.push(fallback_sound_tag.to_string());
-        }
-    }
-
-    let sound_prefix = sound_tags.join(" ");
-    join_anki_field_parts(&sound_prefix, new_value)
-}
-
-fn extract_anki_sound_tags(value: &str) -> Vec<String> {
-    let mut tags = Vec::new();
-    let mut remaining = value;
-    while let Some(start) = remaining.find("[sound:") {
-        let candidate = &remaining[start..];
-        let Some(end) = candidate.find(']') else {
-            break;
-        };
-        let tag = candidate[..=end].to_string();
-        if !tags.contains(&tag) {
-            tags.push(tag);
-        }
-        remaining = &candidate[end + 1..];
-    }
-    tags
-}
-
-pub(crate) fn recording_pushed_to_anki_target(
-    recording: &RecentRecording,
-    settings: &AnkiSettings,
-) -> bool {
-    recording.anki_note_id.is_some()
-        && recording.anki_deck_name.as_deref() == Some(settings.deck_name.as_str())
-        && recording.anki_note_type.as_deref() == Some(settings.note_type.as_str())
 }
 
 pub(crate) fn push_recordings_to_anki_inner<R: Runtime>(
@@ -1001,19 +729,4 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
     })?;
 
     Ok(note_id)
-}
-
-pub(crate) fn recording_transcript_supports_furigana(
-    recording: &RecentRecording,
-    transcript: &str,
-) -> bool {
-    if is_japanese_transcript_language(recording.transcript_language.as_deref()) {
-        return true;
-    }
-
-    if recording.transcript_language.is_some() {
-        return false;
-    }
-
-    transcript_looks_japanese(transcript)
 }
