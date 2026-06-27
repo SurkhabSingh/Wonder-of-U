@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
+const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
+const ANKI_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
+const ANKI_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) fn anki_offline_message(error: &str) -> String {
     format!(
@@ -12,8 +14,21 @@ pub(super) fn anki_connect_request(
     action: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    anki_connect_request_with_timeout(action, params, ANKI_REQUEST_TIMEOUT)
+}
+
+pub(super) fn anki_connect_health_check() -> Result<serde_json::Value, String> {
+    anki_connect_request_with_timeout("version", serde_json::json!({}), ANKI_HEALTH_CHECK_TIMEOUT)
+}
+
+fn anki_connect_request_with_timeout(
+    action: &str,
+    params: serde_json::Value,
+    request_timeout: Duration,
+) -> Result<serde_json::Value, String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(ANKI_CONNECT_TIMEOUT)
+        .connect_timeout(ANKI_CONNECT_TIMEOUT)
+        .timeout(request_timeout)
         .build()
         .map_err(|error| error.to_string())?;
     let payload = serde_json::json!({

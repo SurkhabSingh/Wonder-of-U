@@ -6,7 +6,9 @@ use crate::{
 };
 
 use super::{
-    client::{anki_connect_request, anki_offline_message, json_string_array},
+    client::{
+        anki_connect_health_check, anki_connect_request, anki_offline_message, json_string_array,
+    },
     references::refresh_recent_anki_note_references,
 };
 
@@ -24,7 +26,7 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
     };
     let selected_note_type = note_type.unwrap_or(configured_note_type).trim().to_string();
 
-    let version = match anki_connect_request("version", serde_json::json!({})) {
+    let version = match anki_connect_health_check() {
         Ok(value) => value.as_i64(),
         Err(error) => {
             return Ok(AnkiCatalog {
