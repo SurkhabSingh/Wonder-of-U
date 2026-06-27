@@ -20,6 +20,7 @@ use windows_sys::Win32::{
 };
 
 use crate::{
+    app_config::AUTOSTART_ARGUMENT,
     app_runtime::{log_event, update_shell_snapshot},
     app_types::{
         SharedPersistedState, SharedShellState, SHOW_SHORTCUT, START_SHORTCUT, STOP_SHORTCUT,
@@ -303,7 +304,7 @@ fn wide_null(value: &str) -> Vec<u16> {
 
 #[cfg(target_os = "windows")]
 fn current_launch_should_focus_existing_instance() -> bool {
-    !std::env::args().any(|argument| argument == "--autostart")
+    !std::env::args().any(|argument| argument == AUTOSTART_ARGUMENT)
 }
 
 #[cfg(target_os = "windows")]

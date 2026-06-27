@@ -1,22 +1,31 @@
 use std::{
     fs,
-    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
 use tauri::{AppHandle, Manager, Runtime};
-use zip::ZipArchive;
+
+mod control;
+mod transfer;
+
+pub(crate) use control::{
+    cancel_whisper_model_download_inner, toggle_whisper_model_download_pause_inner,
+};
+
+use transfer::{
+    download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
+    reset_model_download_control, update_model_download_snapshot,
+};
 
 use crate::{
     app_config::{
         RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL,
         RECOMMENDED_WHISPER_RUNTIME_FILE, RECOMMENDED_WHISPER_RUNTIME_VERSION,
     },
-    app_runtime::{emit_app_snapshot, log_event, update_shell_snapshot},
+    app_runtime::{log_event, update_shell_snapshot},
     app_state::{sanitize_runtime_version, write_persisted_data},
     app_types::{
-        whisper_model_spec, ModelDownloadControlState, ModelDownloadSnapshot, ModelDownloadState,
-        SharedPersistedState, SharedShellState,
+        whisper_model_spec, ModelDownloadControlState, SharedPersistedState, SharedShellState,
     },
     runtime_assets::{
         app_managed_runtime_directory, collect_managed_ffmpeg_candidates,
@@ -25,48 +34,6 @@ use crate::{
     },
     transcription::{verify_whisper_cli, verify_whisper_model},
 };
-
-fn http_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .user_agent("Wonder of U Desktop/0.1.0")
-        .build()
-        .map_err(|error| error.to_string())
-}
-
-fn update_model_download_snapshot<R: Runtime, F>(
-    app: &AppHandle<R>,
-    update: F,
-) -> Result<(), String>
-where
-    F: FnOnce(&mut ModelDownloadSnapshot),
-{
-    let download_state = app.state::<ModelDownloadState>();
-    let mut snapshot = download_state
-        .0
-        .lock()
-        .map_err(|_| "Could not update the model download state.".to_string())?;
-    update(&mut snapshot);
-    drop(snapshot);
-    emit_app_snapshot(app);
-    Ok(())
-}
-
-fn reset_model_download_control<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let control_state = app.state::<ModelDownloadControlState>();
-    let mut control = control_state
-        .control
-        .lock()
-        .map_err(|_| "Could not reset the model download control state.".to_string())?;
-    control.active = false;
-    control.paused = false;
-    control.cancel_requested = false;
-    control_state.condvar.notify_all();
-    Ok(())
-}
-
-fn ensure_directory_exists(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|error| error.to_string())
-}
 
 fn clear_managed_whisper_override<R: Runtime>(
     app: &AppHandle<R>,
@@ -212,159 +179,6 @@ fn find_existing_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> 
     collect_managed_ffmpeg_candidates(asset_directory)
         .into_iter()
         .find(|candidate| candidate.exists())
-}
-
-fn remove_directory_contents(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let entry_path = entry.path();
-        if entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_dir()
-        {
-            fs::remove_dir_all(&entry_path).map_err(|error| error.to_string())?;
-        } else {
-            fs::remove_file(&entry_path).map_err(|error| error.to_string())?;
-        }
-    }
-
-    Ok(())
-}
-
-fn extract_zip_archive_to_directory(
-    archive_path: &Path,
-    target_directory: &Path,
-) -> Result<(), String> {
-    ensure_directory_exists(target_directory)?;
-    remove_directory_contents(target_directory)?;
-
-    let archive_file = fs::File::open(archive_path).map_err(|error| error.to_string())?;
-    let mut archive = ZipArchive::new(archive_file).map_err(|error| error.to_string())?;
-
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let Some(relative_path) = entry.enclosed_name() else {
-            continue;
-        };
-
-        let output_path = target_directory.join(relative_path);
-        if entry.is_dir() {
-            ensure_directory_exists(&output_path)?;
-            continue;
-        }
-
-        if let Some(parent) = output_path.parent() {
-            ensure_directory_exists(parent)?;
-        }
-
-        let mut output_file = fs::File::create(&output_path).map_err(|error| error.to_string())?;
-        std::io::copy(&mut entry, &mut output_file).map_err(|error| error.to_string())?;
-    }
-
-    Ok(())
-}
-
-fn download_file_to_path_with_progress<R: Runtime>(
-    app: &AppHandle<R>,
-    url: &str,
-    target_path: &Path,
-    kind: &str,
-    label: &str,
-) -> Result<(), String> {
-    let client = http_client()?;
-    let mut response = client.get(url).send().map_err(|error| error.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("Download failed with status {}", response.status()));
-    }
-
-    let total_bytes = response.content_length();
-    let temp_path = target_path.with_extension("part");
-    let mut file = fs::File::create(&temp_path).map_err(|error| error.to_string())?;
-    let mut buffer = [0u8; 64 * 1024];
-    let mut downloaded_bytes = 0u64;
-
-    update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some(kind.to_string());
-        snapshot.status = "downloading".into();
-        snapshot.message = format!("Downloading {label}...");
-        snapshot.downloaded_bytes = 0;
-        snapshot.total_bytes = total_bytes;
-        snapshot.progress_percent = total_bytes.map(|_| 0.0);
-        snapshot.target_path = Some(target_path.display().to_string());
-    })?;
-
-    loop {
-        {
-            let control_state = app.state::<ModelDownloadControlState>();
-            let mut control = control_state
-                .control
-                .lock()
-                .map_err(|_| "Could not inspect the model download state.".to_string())?;
-
-            while control.active && control.paused && !control.cancel_requested {
-                drop(control);
-                update_model_download_snapshot(app, |snapshot| {
-                    snapshot.kind = Some(kind.to_string());
-                    snapshot.status = "paused".into();
-                    snapshot.message = format!("{label} download paused.");
-                })?;
-                control =
-                    control_state
-                        .condvar
-                        .wait(control_state.control.lock().map_err(|_| {
-                            "Could not resume the model download state.".to_string()
-                        })?)
-                        .map_err(|_| "Could not resume the model download state.".to_string())?;
-            }
-
-            if control.cancel_requested {
-                drop(control);
-                let _ = fs::remove_file(&temp_path);
-                update_model_download_snapshot(app, |snapshot| {
-                    snapshot.kind = Some(kind.to_string());
-                    snapshot.status = "cancelled".into();
-                    snapshot.message = format!("{label} download cancelled.");
-                })?;
-                reset_model_download_control(app)?;
-                return Err(format!("{label} download cancelled."));
-            }
-        }
-
-        let read_bytes = response
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
-        if read_bytes == 0 {
-            break;
-        }
-
-        file.write_all(&buffer[..read_bytes])
-            .map_err(|error| error.to_string())?;
-        downloaded_bytes = downloaded_bytes.saturating_add(read_bytes as u64);
-
-        update_model_download_snapshot(app, |snapshot| {
-            snapshot.kind = Some(kind.to_string());
-            snapshot.status = "downloading".into();
-            snapshot.message = format!("Downloading {label}...");
-            snapshot.downloaded_bytes = downloaded_bytes;
-            snapshot.total_bytes = total_bytes;
-            snapshot.progress_percent = total_bytes.map(|total| {
-                if total == 0 {
-                    0.0
-                } else {
-                    (downloaded_bytes as f64 / total as f64) * 100.0
-                }
-            });
-            snapshot.target_path = Some(target_path.display().to_string());
-        })?;
-    }
-
-    fs::rename(&temp_path, target_path).map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
@@ -843,96 +657,6 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
             }
         })
         .map_err(|error| error.to_string())?;
-
-    Ok(())
-}
-
-pub(crate) fn toggle_whisper_model_download_pause_inner<R: Runtime>(
-    app: &AppHandle<R>,
-) -> Result<(), String> {
-    let control_state = app.state::<ModelDownloadControlState>();
-    let mut control = control_state
-        .control
-        .lock()
-        .map_err(|_| "Could not inspect the model download control state.".to_string())?;
-
-    if !control.active {
-        return Err("There is no active model download to pause or resume.".into());
-    }
-
-    control.paused = !control.paused;
-    let is_paused = control.paused;
-    drop(control);
-    control_state.condvar.notify_all();
-
-    let download_label = {
-        let snapshot = app
-            .state::<ModelDownloadState>()
-            .0
-            .lock()
-            .map_err(|_| "Could not inspect the current download state.".to_string())?
-            .clone();
-        match snapshot.kind.as_deref() {
-            Some("runtime") => "Runtime",
-            Some("ffmpeg") => "FFmpeg",
-            _ => "Model",
-        }
-    };
-
-    let resumed_label = download_label.to_ascii_lowercase();
-
-    update_model_download_snapshot(app, |snapshot| {
-        snapshot.status = if is_paused {
-            "paused".into()
-        } else {
-            "downloading".into()
-        };
-        snapshot.message = if is_paused {
-            format!("{download_label} download paused.")
-        } else {
-            format!("Resuming the {resumed_label} download...")
-        };
-    })?;
-
-    Ok(())
-}
-
-pub(crate) fn cancel_whisper_model_download_inner<R: Runtime>(
-    app: &AppHandle<R>,
-) -> Result<(), String> {
-    let control_state = app.state::<ModelDownloadControlState>();
-    let mut control = control_state
-        .control
-        .lock()
-        .map_err(|_| "Could not inspect the model download control state.".to_string())?;
-
-    if !control.active {
-        return Err("There is no active model download to cancel.".into());
-    }
-
-    control.cancel_requested = true;
-    control.paused = false;
-    drop(control);
-    control_state.condvar.notify_all();
-
-    let download_label = {
-        let snapshot = app
-            .state::<ModelDownloadState>()
-            .0
-            .lock()
-            .map_err(|_| "Could not inspect the current download state.".to_string())?
-            .clone();
-        match snapshot.kind.as_deref() {
-            Some("runtime") => "runtime",
-            Some("ffmpeg") => "FFmpeg",
-            _ => "model",
-        }
-    };
-
-    update_model_download_snapshot(app, |snapshot| {
-        snapshot.status = "cancelling".into();
-        snapshot.message = format!("Cancelling the {download_label} download...");
-    })?;
 
     Ok(())
 }

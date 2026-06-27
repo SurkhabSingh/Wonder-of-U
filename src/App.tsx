@@ -69,6 +69,7 @@ function App() {
     persistSettingsIfNeeded,
     setBusyAction,
     setLoadError,
+    showSuccess,
     showWarning,
   });
 
@@ -288,7 +289,9 @@ function App() {
                   },
                 })
               }
-              onRefreshAnki={() => void refreshAnkiCatalog()}
+              onRefreshAnki={() =>
+                void refreshAnkiCatalog(undefined, { notifySuccess: true })
+              }
               onToggleSelection={toggleRecordingSelection}
               onClearSelection={clearRecordingSelection}
               onOpenRecordingMenuChange={setOpenRecordingMenuPath}

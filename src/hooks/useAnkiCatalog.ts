@@ -8,10 +8,12 @@ type UseAnkiCatalogOptions = {
   persistSettingsIfNeeded: () => Promise<void>;
   setBusyAction: (busyAction: BusyAction) => void;
   setLoadError: (message: string) => void;
+  showSuccess: (message: string) => void;
   showWarning: (message: string) => void;
 };
 
-type RefreshAnkiCatalogOptions = {
+export type RefreshAnkiCatalogOptions = {
+  notifySuccess?: boolean;
   silent?: boolean;
   skipPersist?: boolean;
   suppressErrors?: boolean;
@@ -22,6 +24,7 @@ export function useAnkiCatalog({
   persistSettingsIfNeeded,
   setBusyAction,
   setLoadError,
+  showSuccess,
   showWarning,
 }: UseAnkiCatalogOptions) {
   const [ankiCatalog, setAnkiCatalog] =
@@ -46,6 +49,8 @@ export function useAnkiCatalog({
         setAnkiCatalog(catalog);
         if (catalog.status === "offline" && !options?.suppressErrors) {
           showWarning("Anki is offline currently.");
+        } else if (catalog.status !== "offline" && options?.notifySuccess) {
+          showSuccess("Anki refreshed.");
         }
       } catch (error) {
         if (!options?.suppressErrors) {
@@ -61,7 +66,14 @@ export function useAnkiCatalog({
         }
       }
     },
-    [noteType, persistSettingsIfNeeded, setBusyAction, setLoadError, showWarning],
+    [
+      noteType,
+      persistSettingsIfNeeded,
+      setBusyAction,
+      setLoadError,
+      showSuccess,
+      showWarning,
+    ],
   );
 
   useEffect(() => {

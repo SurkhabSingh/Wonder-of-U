@@ -14,6 +14,7 @@ mod runtime_assets;
 mod settings;
 mod transcription;
 
+use app_config::AUTOSTART_ARGUMENT;
 use app_runtime::{emit_app_snapshot, setup_error};
 use app_setup::initialize_app_state;
 use commands::*;
@@ -36,7 +37,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(
             tauri_plugin_autostart::Builder::new()
-                .args(["--autostart"])
+                .arg(AUTOSTART_ARGUMENT)
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())

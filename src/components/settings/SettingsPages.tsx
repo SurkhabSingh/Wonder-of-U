@@ -8,6 +8,7 @@ import type {
   BusyAction,
   WhisperAssetUpdateResult,
 } from "../../types";
+import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
 import { AnkiMappingSettingsPage } from "./AnkiMappingSettingsPage";
 import { ModelSettingsPage } from "./ModelSettingsPage";
 import { PreferencesSettingsPage } from "./PreferencesSettingsPage";
@@ -82,7 +83,10 @@ export function SettingsPages({
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
   onCancelDownload: () => void | Promise<void>;
-  onRefreshAnkiCatalog: (noteType?: string) => void | Promise<void>;
+  onRefreshAnkiCatalog: (
+    noteType?: string,
+    options?: RefreshAnkiCatalogOptions,
+  ) => void | Promise<void>;
   onUpdateAnkiField: (field: keyof AnkiFieldMapping, value: string) => void;
 }) {
   if (activePage === "recorder" || activePage === "recordings") {

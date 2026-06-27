@@ -5,6 +5,7 @@ import type {
   AppSettings,
   BusyAction,
 } from "../../types";
+import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { TooltipBadge } from "../ui/Tooltip";
 import { AnkiFieldSelect } from "./AnkiFieldSelect";
@@ -22,7 +23,10 @@ export function AnkiMappingSettingsPage({
   activePage: AppPage;
   busyAction: BusyAction;
   displayedAnkiCatalog: AnkiCatalog;
-  onRefreshAnkiCatalog: (noteType?: string) => void | Promise<void>;
+  onRefreshAnkiCatalog: (
+    noteType?: string,
+    options?: RefreshAnkiCatalogOptions,
+  ) => void | Promise<void>;
   onUpdateAnkiField: (field: keyof AnkiFieldMapping, value: string) => void;
   onUpdateSettings: (update: SettingsUpdate) => void;
   settingsDraft: AppSettings;
@@ -45,7 +49,9 @@ export function AnkiMappingSettingsPage({
           <button
             type="button"
             className="secondary"
-            onClick={() => void onRefreshAnkiCatalog()}
+            onClick={() =>
+              void onRefreshAnkiCatalog(undefined, { notifySuccess: true })
+            }
             disabled={busyAction === "loadAnki"}
           >
             Refresh Anki

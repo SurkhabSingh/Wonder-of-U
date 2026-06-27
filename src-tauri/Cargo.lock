@@ -5400,6 +5400,7 @@ dependencies = [
  "tempfile",
  "wasapi",
  "windows-sys 0.61.2",
+ "winreg 0.10.1",
  "zip",
 ]
 
