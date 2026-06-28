@@ -71,6 +71,7 @@ export function RecordingCard({
   const canAddFuriganaToCard =
     Boolean(recording.transcriptPath) &&
     recording.ankiNoteId !== null &&
+    !recording.furiganaApplied &&
     recordingSupportsFurigana(recording);
   const languageLabel = transcriptLanguageLabel(recording.transcriptLanguage);
 
@@ -239,7 +240,8 @@ export function RecordingCard({
                       </DropdownMenuPrimitive.SubContent>
                     </DropdownMenuPrimitive.Portal>
                   </DropdownMenuPrimitive.Sub>
-                  {recordingSupportsFurigana(recording) ? (
+                  {recordingSupportsFurigana(recording) &&
+                  !recording.furiganaApplied ? (
                     <DropdownMenuPrimitive.Item
                       className="action-menu-item"
                       onSelect={() => void onAddFurigana([recording.filePath])}
@@ -273,7 +275,6 @@ export function RecordingCard({
                 <TooltipWrap description={MP3_CONVERSION_WARNING}>
                   <DropdownMenuPrimitive.Item
                     className="action-menu-item"
-                    title={MP3_CONVERSION_WARNING}
                     onSelect={() => void onConvertToMp3([recording.filePath])}
                     disabled={busyAction === "convertMp3"}
                   >

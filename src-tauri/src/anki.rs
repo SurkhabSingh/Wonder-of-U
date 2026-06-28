@@ -129,7 +129,7 @@ fn push_single_recording_to_anki<R: Runtime>(
         }
     }
 
-    let furigana_message = if auto_add_furigana_after_push {
+    let (furigana_message, furigana_applied) = if auto_add_furigana_after_push {
         maybe_insert_automatic_furigana_field(
             recording,
             settings,
@@ -138,7 +138,7 @@ fn push_single_recording_to_anki<R: Runtime>(
             &mut fields,
         )
     } else {
-        None
+        (None, false)
     };
 
     let note_id = anki_connect_request(
@@ -169,6 +169,7 @@ fn push_single_recording_to_anki<R: Runtime>(
         recording.anki_note_id = Some(note_id);
         recording.anki_deck_name = Some(settings.deck_name.clone());
         recording.anki_note_type = Some(settings.note_type.clone());
+        recording.furigana_applied = furigana_applied;
     })?;
 
     Ok(AnkiPushOutcome {
@@ -183,9 +184,9 @@ fn maybe_insert_automatic_furigana_field(
     transcript: &str,
     media_file_name: &str,
     fields: &mut serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
+) -> (Option<String>, bool) {
     if !recording_transcript_supports_furigana(recording, transcript) {
-        return None;
+        return (None, false);
     }
 
     match request_furigana_html(transcript) {
@@ -207,9 +208,9 @@ fn maybe_insert_automatic_furigana_field(
                 target_field.to_string(),
                 serde_json::Value::String(furigana_html),
             );
-            Some("Furigana was added automatically.".into())
+            (Some("Furigana was added automatically.".into()), true)
         }
-        Err(error) => Some(format!("Furigana was skipped because {error}")),
+        Err(error) => (Some(format!("Furigana was skipped because {error}")), false),
     }
 }
 

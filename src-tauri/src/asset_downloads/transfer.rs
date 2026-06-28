@@ -2,6 +2,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::Path,
+    time::Duration,
 };
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -15,6 +16,9 @@ use crate::{
 fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .user_agent("Wonder of U Desktop/0.1.0")
+        .connect_timeout(Duration::from_secs(15))
+        // Paused downloads intentionally keep the response open until the user resumes.
+        .timeout(None)
         .build()
         .map_err(|error| error.to_string())
 }

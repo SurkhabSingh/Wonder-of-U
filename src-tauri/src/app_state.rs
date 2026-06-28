@@ -174,6 +174,7 @@ fn recording_from_audio_path(audio_path: &Path) -> Option<RecentRecording> {
         anki_note_id: None,
         anki_deck_name: None,
         anki_note_type: None,
+        furigana_applied: false,
         audio_deleted: false,
         duration_ms: wav_duration_ms(audio_path).unwrap_or(0),
         bytes_written: metadata.len(),

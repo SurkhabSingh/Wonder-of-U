@@ -219,7 +219,9 @@ export function useRecordingLibrary({
     () =>
       selectedTranscribedRecordings.filter(
         (recording) =>
-          recording.ankiNoteId !== null && recordingSupportsFurigana(recording),
+          recording.ankiNoteId !== null &&
+          !recording.furiganaApplied &&
+          recordingSupportsFurigana(recording),
       ),
     [selectedTranscribedRecordings],
   );

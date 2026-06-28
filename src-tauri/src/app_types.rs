@@ -181,6 +181,8 @@ pub(crate) struct RecentRecording {
     #[serde(default)]
     pub(crate) anki_note_type: Option<String>,
     #[serde(default)]
+    pub(crate) furigana_applied: bool,
+    #[serde(default)]
     pub(crate) audio_deleted: bool,
     pub(crate) duration_ms: u64,
     pub(crate) bytes_written: u64,

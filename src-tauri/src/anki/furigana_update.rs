@@ -8,7 +8,7 @@ use crate::{
         AnkiSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
     },
-    recording_library::selected_recordings,
+    recording_library::{selected_recordings, update_recent_recording},
 };
 
 use super::{
@@ -200,6 +200,17 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
             file_path,
             Some(note_id),
             user_friendly_anki_error(&error, settings),
+        )
+    })?;
+
+    update_recent_recording(app, &recording.file_path, |recording| {
+        recording.furigana_applied = true;
+    })
+    .map_err(|error| {
+        (
+            recording.file_path.clone(),
+            Some(note_id),
+            format!("Furigana was added, but its local status could not be saved: {error}"),
         )
     })?;
 

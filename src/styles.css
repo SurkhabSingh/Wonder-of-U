@@ -718,7 +718,7 @@ input::placeholder {
 }
 
 .themed-tooltip-content {
-  z-index: 120;
+  z-index: 160;
   max-width: 280px;
   padding: 8px 10px;
   border: 1px solid var(--border-strong);

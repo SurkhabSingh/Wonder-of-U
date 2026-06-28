@@ -76,6 +76,7 @@ export type RecentRecording = {
   ankiNoteId: number | null;
   ankiDeckName: string | null;
   ankiNoteType: string | null;
+  furiganaApplied: boolean;
   audioDeleted: boolean;
   durationMs: number;
   bytesWritten: number;

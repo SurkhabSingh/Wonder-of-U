@@ -188,6 +188,7 @@ fn finalize_recording_pipeline<R: Runtime>(
                 anki_note_id: None,
                 anki_deck_name: None,
                 anki_note_type: None,
+                furigana_applied: false,
                 audio_deleted: false,
                 duration_ms: capture.duration_ms,
                 bytes_written: capture.bytes_written,

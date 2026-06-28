@@ -4,6 +4,11 @@ const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const ANKI_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
 const ANKI_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
+pub(super) struct AnkiNoteSnapshot {
+    pub(super) exists: bool,
+    pub(super) field_value: Option<String>,
+}
+
 pub(super) fn anki_offline_message(error: &str) -> String {
     format!(
         "Anki is currently offline. Start Anki and make sure AnkiConnect is installed, then try again. {error}"
@@ -62,28 +67,13 @@ fn anki_connect_request_with_timeout(
 }
 
 pub(super) fn anki_note_exists(note_id: i64) -> Result<bool, String> {
-    let result = anki_connect_request(
-        "notesInfo",
-        serde_json::json!({
-            "notes": [note_id]
-        }),
-    )?;
-
-    let Some(notes) = result.as_array() else {
-        return Ok(false);
-    };
-
-    Ok(notes.iter().any(|note| {
-        note.get("noteId")
-            .and_then(|value| value.as_i64())
-            .is_some_and(|candidate| candidate == note_id)
-    }))
+    Ok(anki_note_snapshot(note_id, None)?.exists)
 }
 
-pub(super) fn anki_note_field_value(
+pub(super) fn anki_note_snapshot(
     note_id: i64,
-    field_name: &str,
-) -> Result<Option<String>, String> {
+    field_name: Option<&str>,
+) -> Result<AnkiNoteSnapshot, String> {
     let result = anki_connect_request(
         "notesInfo",
         serde_json::json!({
@@ -98,16 +88,29 @@ pub(super) fn anki_note_field_value(
                 .is_some_and(|candidate| candidate == note_id)
         })
     }) else {
-        return Ok(None);
+        return Ok(AnkiNoteSnapshot {
+            exists: false,
+            field_value: None,
+        });
     };
 
-    Ok(note
-        .get("fields")
-        .and_then(|fields| fields.as_object())
-        .and_then(|fields| fields.get(field_name))
+    let field_value = field_name
+        .and_then(|field_name| note.get("fields")?.as_object()?.get(field_name))
         .and_then(|field| field.get("value"))
         .and_then(|value| value.as_str())
-        .map(ToString::to_string))
+        .map(ToString::to_string);
+
+    Ok(AnkiNoteSnapshot {
+        exists: true,
+        field_value,
+    })
+}
+
+pub(super) fn anki_note_field_value(
+    note_id: i64,
+    field_name: &str,
+) -> Result<Option<String>, String> {
+    Ok(anki_note_snapshot(note_id, Some(field_name))?.field_value)
 }
 
 pub(super) fn json_string_array(value: serde_json::Value) -> Vec<String> {
