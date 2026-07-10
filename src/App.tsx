@@ -115,6 +115,7 @@ function App() {
     ankiCatalog,
     ankiSettings: settingsDraft.anki,
     recentRecordings: bootstrap.recentRecordings,
+    transcriptionLanguage: settingsDraft.whisper.language,
   });
   const {
     activeRuntimeVersion,
@@ -262,7 +263,9 @@ function App() {
               configuredAnkiDeckLabel={configuredAnkiDeckLabel}
               configuredDeckMenuOptions={configuredDeckMenuOptions}
               currentDeckName={settingsDraft.anki.deckName}
+              currentNoteType={settingsDraft.anki.noteType}
               availableAnkiDecks={availableAnkiDecks}
+              transcriptionLanguage={settingsDraft.whisper.language}
               busyAction={busyAction}
               allowMp3Conversion={settingsDraft.features.allowMp3Conversion}
               expressionFieldMapped={Boolean(settingsDraft.anki.fields.transcription)}

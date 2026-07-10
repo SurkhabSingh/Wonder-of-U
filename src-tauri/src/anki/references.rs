@@ -16,35 +16,54 @@ fn field_contains_furigana(value: Option<&str>) -> bool {
     })
 }
 
-fn clear_recording_anki_reference<R: Runtime>(
-    app: &AppHandle<R>,
-    file_path: &str,
-) -> Result<(), String> {
-    update_recent_recording(app, file_path, |recording| {
+fn sync_latest_anki_reference(recording: &mut RecentRecording) {
+    if let Some(push) = recording.anki_pushes.last() {
+        recording.anki_note_id = Some(push.note_id);
+        recording.anki_deck_name = Some(push.deck_name.clone());
+        recording.anki_note_type = Some(push.note_type.clone());
+        recording.furigana_applied = push.furigana_applied;
+    } else {
         recording.anki_note_id = None;
         recording.anki_deck_name = None;
         recording.anki_note_type = None;
         recording.furigana_applied = false;
-    })
+    }
 }
 
 pub(super) fn refresh_recording_anki_reference<R: Runtime>(
     app: &AppHandle<R>,
     mut recording: RecentRecording,
 ) -> Result<RecentRecording, String> {
-    let Some(note_id) = recording.anki_note_id else {
-        return Ok(recording);
-    };
+    if recording.anki_pushes.is_empty() {
+        let Some(note_id) = recording.anki_note_id else {
+            return Ok(recording);
+        };
 
-    if anki_note_exists(note_id)? {
+        if anki_note_exists(note_id)? {
+            return Ok(recording);
+        }
+
+        update_recent_recording(app, &recording.file_path, sync_latest_anki_reference)?;
+        sync_latest_anki_reference(&mut recording);
         return Ok(recording);
     }
 
-    clear_recording_anki_reference(app, &recording.file_path)?;
-    recording.anki_note_id = None;
-    recording.anki_deck_name = None;
-    recording.anki_note_type = None;
-    recording.furigana_applied = false;
+    let mut remaining_pushes = Vec::with_capacity(recording.anki_pushes.len());
+    for push in &recording.anki_pushes {
+        if anki_note_exists(push.note_id)? {
+            remaining_pushes.push(push.clone());
+        }
+    }
+    if remaining_pushes.len() == recording.anki_pushes.len() {
+        return Ok(recording);
+    }
+
+    update_recent_recording(app, &recording.file_path, |recording| {
+        recording.anki_pushes = remaining_pushes.clone();
+        sync_latest_anki_reference(recording);
+    })?;
+    recording.anki_pushes = remaining_pushes;
+    sync_latest_anki_reference(&mut recording);
     Ok(recording)
 }
 
@@ -57,29 +76,26 @@ pub(super) fn refresh_recent_anki_note_references<R: Runtime>(
             .0
             .lock()
             .map_err(|_| "Could not inspect pushed Anki cards.".to_string())?;
-        let recordings = persisted
+        let pushes = persisted
             .recent_recordings
             .iter()
-            .filter_map(|recording| {
-                recording.anki_note_id.map(|note_id| {
+            .flat_map(|recording| {
+                recording.anki_pushes.iter().map(|push| {
                     (
                         recording.file_path.clone(),
-                        note_id,
-                        recording.furigana_applied,
+                        push.clone(),
+                        push.furigana_applied,
                     )
                 })
             })
             .collect::<Vec<_>>();
-        (
-            recordings,
-            persisted.settings.anki.fields.transcription.clone(),
-        )
+        (pushes, persisted.settings.anki.fields.transcription.clone())
     };
 
     let mut updates = Vec::new();
-    for (file_path, note_id, current_furigana_applied) in recordings_with_notes {
+    for (file_path, push, current_furigana_applied) in recordings_with_notes {
         let snapshot = anki_note_snapshot(
-            note_id,
+            push.note_id,
             (!target_field.is_empty()).then_some(target_field.as_str()),
         )?;
         let furigana_applied = if target_field.is_empty() {
@@ -89,7 +105,7 @@ pub(super) fn refresh_recent_anki_note_references<R: Runtime>(
         };
 
         if !snapshot.exists || furigana_applied != current_furigana_applied {
-            updates.push((file_path, snapshot.exists, furigana_applied));
+            updates.push((file_path, push, snapshot.exists, furigana_applied));
         }
     }
 
@@ -104,19 +120,25 @@ pub(super) fn refresh_recent_anki_note_references<R: Runtime>(
             .lock()
             .map_err(|_| "Could not update pushed Anki card status.".to_string())?;
         for recording in &mut persisted.recent_recordings {
-            if let Some((_, note_exists, furigana_applied)) = updates
+            for (_, push, note_exists, furigana_applied) in updates
                 .iter()
-                .find(|(file_path, _, _)| file_path == &recording.file_path)
+                .filter(|(file_path, _, _, _)| file_path == &recording.file_path)
             {
                 if *note_exists {
-                    recording.furigana_applied = *furigana_applied;
+                    if let Some(existing_push) = recording
+                        .anki_pushes
+                        .iter_mut()
+                        .find(|existing| existing.note_id == push.note_id)
+                    {
+                        existing_push.furigana_applied = *furigana_applied;
+                    }
                 } else {
-                    recording.anki_note_id = None;
-                    recording.anki_deck_name = None;
-                    recording.anki_note_type = None;
-                    recording.furigana_applied = false;
+                    recording
+                        .anki_pushes
+                        .retain(|existing| existing.note_id != push.note_id);
                 }
             }
+            sync_latest_anki_reference(recording);
         }
         persisted.clone()
     };

@@ -7,7 +7,10 @@ import {
 } from "../../lib/format";
 import {
   pathHasExtension,
+  recordingAnkiPushForTarget,
+  recordingHasTranscriptForLanguage,
   recordingSupportsFurigana,
+  recordingTranscriptLanguageLabels,
   transcriptLanguageLabel,
 } from "../../lib/helpers";
 import type { BusyAction, RecentRecording } from "../../types";
@@ -25,7 +28,9 @@ export function RecordingCard({
   busyAction,
   configuredAnkiDeckLabel,
   configuredDeckName,
+  configuredNoteType,
   availableAnkiDecks,
+  transcriptionLanguage,
   allowMp3Conversion,
   expressionFieldMapped,
   recordingPushedToDeck,
@@ -47,7 +52,9 @@ export function RecordingCard({
   busyAction: BusyAction;
   configuredAnkiDeckLabel: string;
   configuredDeckName: string;
+  configuredNoteType: string;
   availableAnkiDecks: string[];
+  transcriptionLanguage: string;
   allowMp3Conversion: boolean;
   expressionFieldMapped: boolean;
   recordingPushedToDeck: (recording: RecentRecording, deckName: string) => boolean;
@@ -62,18 +69,40 @@ export function RecordingCard({
   onConvertToMp3: RecordingAction;
   onDelete: SingleRecordingAction;
 }) {
+  const hasSelectedTranscript = recordingHasTranscriptForLanguage(
+    recording,
+    transcriptionLanguage,
+  );
+  const selectedAnkiPush = recordingAnkiPushForTarget(
+    recording,
+    transcriptionLanguage,
+    configuredDeckName,
+    configuredNoteType,
+  );
   const canPushToConfiguredDeck =
-    Boolean(recording.transcriptPath) &&
+    hasSelectedTranscript &&
     !recording.audioDeleted &&
     !recordingPushedToCurrentAnkiDeck(recording);
   const canPushToAnyDeck =
-    Boolean(recording.transcriptPath) && !recording.audioDeleted;
+    hasSelectedTranscript && !recording.audioDeleted;
   const canAddFuriganaToCard =
-    Boolean(recording.transcriptPath) &&
-    recording.ankiNoteId !== null &&
-    !recording.furiganaApplied &&
-    recordingSupportsFurigana(recording);
-  const languageLabel = transcriptLanguageLabel(recording.transcriptLanguage);
+    hasSelectedTranscript &&
+    selectedAnkiPush !== null &&
+    !selectedAnkiPush.furiganaApplied &&
+    recordingSupportsFurigana(recording, transcriptionLanguage);
+  const languageLabels = recordingTranscriptLanguageLabels(recording);
+  const selectedLanguageLabel =
+    transcriptLanguageLabel(transcriptionLanguage) ??
+    transcriptionLanguage.toUpperCase();
+  const ankiPushSummary = recording.ankiPushes
+    .map((push) => {
+      const language =
+        transcriptLanguageLabel(push.language) ?? push.language.toUpperCase();
+      return `${language}: ${push.deckName} / ${push.noteType}`;
+    })
+    .join("\n");
+  const hasAnyAnkiPush =
+    recording.ankiPushes.length > 0 || recording.ankiNoteId !== null;
 
   return (
     <article className="recording-item">
@@ -108,25 +137,39 @@ export function RecordingCard({
               ? "Audio + transcript"
               : "Audio only"}
         </span>
-        {recording.ankiNoteId !== null ? (
+        {hasAnyAnkiPush ? (
           <span
             className="recording-state success-state"
             title={
-              recording.ankiDeckName
+              ankiPushSummary ||
+              (recording.ankiDeckName
                 ? `Pushed to ${recording.ankiDeckName}${
                     recording.ankiNoteType ? ` / ${recording.ankiNoteType}` : ""
                   }`
-                : "Pushed to Anki"
+                : "Pushed to Anki")
             }
           >
-            {recording.ankiDeckName ? `Anki: ${recording.ankiDeckName}` : "In Anki"}
+            {selectedAnkiPush
+              ? `Anki: ${selectedAnkiPush.deckName} (${selectedLanguageLabel})`
+              : recording.ankiPushes.length > 0
+                ? `Anki: ${recording.ankiPushes.length} other language ${
+                    recording.ankiPushes.length === 1 ? "card" : "cards"
+                  }`
+                : recording.ankiDeckName
+                  ? `Anki: ${recording.ankiDeckName}`
+                  : "In Anki"}
           </span>
         ) : null}
         {recording.translationPath !== null ? (
           <span className="recording-state success-state">Translated</span>
         ) : null}
-        {languageLabel ? (
-          <span className="recording-state">{languageLabel}</span>
+        {languageLabels.length > 0 ? (
+          <span
+            className="recording-state"
+            title={`Transcribed languages: ${languageLabels.join(", ")}`}
+          >
+            Transcripts: {languageLabels.join(", ")}
+          </span>
         ) : null}
       </div>
       <div className="recording-actions">
@@ -167,16 +210,16 @@ export function RecordingCard({
               >
                 Play
               </DropdownMenuPrimitive.Item>
-              {!recording.transcriptPath ? (
+              {!hasSelectedTranscript ? (
                 <DropdownMenuPrimitive.Item
                   className="action-menu-item"
                   onSelect={() => void onTranscribe([recording.filePath])}
                   disabled={busyAction === "transcribeRecording"}
                 >
-                  Transcribe
+                  Transcribe in {selectedLanguageLabel}
                 </DropdownMenuPrimitive.Item>
               ) : null}
-              {recording.transcriptPath ? (
+              {hasSelectedTranscript ? (
                 <>
                   <DropdownMenuPrimitive.Separator className="action-menu-separator" />
                   <DropdownMenuPrimitive.Item
@@ -240,8 +283,8 @@ export function RecordingCard({
                       </DropdownMenuPrimitive.SubContent>
                     </DropdownMenuPrimitive.Portal>
                   </DropdownMenuPrimitive.Sub>
-                  {recordingSupportsFurigana(recording) &&
-                  !recording.furiganaApplied ? (
+                  {recordingSupportsFurigana(recording, transcriptionLanguage) &&
+                  !selectedAnkiPush?.furiganaApplied ? (
                     <DropdownMenuPrimitive.Item
                       className="action-menu-item"
                       onSelect={() => void onAddFurigana([recording.filePath])}

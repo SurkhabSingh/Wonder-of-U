@@ -5,7 +5,10 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     app_runtime::{log_event, update_shell_snapshot},
     app_state::{derive_transcript_language_from_path, write_persisted_data},
-    app_types::{ActiveRecording, RecentRecording, SharedPersistedState},
+    app_types::{
+        transcript_language_key, ActiveRecording, RecentRecording, RecordingTranscript,
+        SharedPersistedState,
+    },
     recording_library::rename_recording_outputs_from_transcript,
     runtime_assets::refresh_whisper_detection_state,
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
@@ -50,10 +53,12 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                 file_path: capture.output_path.display().to_string(),
                 transcript_path: None,
                 transcript_language: None,
+                transcripts: Vec::new(),
                 translation_path: None,
                 anki_note_id: None,
                 anki_deck_name: None,
                 anki_note_type: None,
+                anki_pushes: Vec::new(),
                 furigana_applied: false,
                 audio_deleted: false,
                 duration_ms: capture.duration_ms,
@@ -149,6 +154,11 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                                     &transcript_path,
                                     &settings.whisper.language,
                                 );
+                            recent_recording.transcripts.push(RecordingTranscript {
+                                language: transcript_language_key(&settings.whisper.language),
+                                file_path: transcript_path.display().to_string(),
+                                detected_language: recent_recording.transcript_language.clone(),
+                            });
                             recent_recording.bytes_written = fs::metadata(&audio_path)
                                 .map(|metadata| metadata.len())
                                 .unwrap_or(recent_recording.bytes_written);

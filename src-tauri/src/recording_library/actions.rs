@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{collections::HashSet, fs, path::PathBuf, process::Command};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -27,14 +27,24 @@ fn remove_recording_from_history(
 }
 
 fn delete_recording_files(recording: &RecentRecording) -> Result<(), String> {
-    for path in [
-        Some(recording.file_path.as_str()),
-        recording.transcript_path.as_deref(),
-        recording.translation_path.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
+    let mut paths = HashSet::new();
+    paths.extend(
+        [
+            Some(recording.file_path.as_str()),
+            recording.transcript_path.as_deref(),
+            recording.translation_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    paths.extend(
+        recording
+            .transcripts
+            .iter()
+            .map(|transcript| transcript.file_path.as_str()),
+    );
+
+    for path in paths {
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

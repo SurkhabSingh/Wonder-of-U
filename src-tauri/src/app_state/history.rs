@@ -5,7 +5,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::app_types::{PersistedData, RecentRecording};
+use crate::app_types::{
+    transcript_language_key, PersistedData, RecentRecording, RecordingAnkiPush, RecordingTranscript,
+};
 
 pub(crate) fn reconcile_recording_history(state: &mut PersistedData) {
     let output_directory = PathBuf::from(&state.settings.output_directory);
@@ -75,10 +77,12 @@ fn recording_from_audio_path(audio_path: &Path) -> Option<RecentRecording> {
         file_path: audio_path.display().to_string(),
         transcript_path,
         transcript_language: None,
+        transcripts: Vec::new(),
         translation_path,
         anki_note_id: None,
         anki_deck_name: None,
         anki_note_type: None,
+        anki_pushes: Vec::new(),
         furigana_applied: false,
         audio_deleted: false,
         duration_ms: wav_duration_ms(audio_path).unwrap_or(0),
@@ -149,16 +153,59 @@ fn wav_duration_ms(path: &Path) -> Option<u64> {
 
 pub(super) fn normalize_recent_recording_languages(recordings: &mut [RecentRecording]) {
     for recording in recordings {
-        if recording.transcript_language.is_some() {
-            continue;
+        for transcript in &mut recording.transcripts {
+            transcript.language = transcript_language_key(&transcript.language);
         }
 
-        let Some(transcript_path) = recording.transcript_path.as_deref() else {
-            continue;
-        };
+        if recording.transcript_language.is_none() {
+            if let Some(transcript_path) = recording.transcript_path.as_deref() {
+                recording.transcript_language =
+                    derive_transcript_language_from_path(Path::new(transcript_path), "auto");
+            }
+        }
 
-        recording.transcript_language =
-            derive_transcript_language_from_path(Path::new(transcript_path), "auto");
+        if recording.transcripts.is_empty() {
+            if let Some(transcript_path) = recording.transcript_path.clone() {
+                recording.transcripts.push(RecordingTranscript {
+                    language: transcript_language_key(
+                        recording.transcript_language.as_deref().unwrap_or("auto"),
+                    ),
+                    file_path: transcript_path,
+                    detected_language: recording.transcript_language.clone(),
+                });
+            }
+        }
+
+        for push in &mut recording.anki_pushes {
+            push.language = transcript_language_key(&push.language);
+        }
+
+        if recording.anki_pushes.is_empty() {
+            if let (Some(note_id), Some(deck_name), Some(note_type)) = (
+                recording.anki_note_id,
+                recording.anki_deck_name.clone(),
+                recording.anki_note_type.clone(),
+            ) {
+                let language = recording
+                    .transcript_path
+                    .as_deref()
+                    .and_then(|transcript_path| {
+                        recording
+                            .transcripts
+                            .iter()
+                            .find(|transcript| transcript.file_path == transcript_path)
+                    })
+                    .map(|transcript| transcript.language.as_str())
+                    .unwrap_or_else(|| recording.transcript_language.as_deref().unwrap_or("auto"));
+                recording.anki_pushes.push(RecordingAnkiPush {
+                    language: transcript_language_key(language),
+                    deck_name,
+                    note_type,
+                    note_id,
+                    furigana_applied: recording.furigana_applied,
+                });
+            }
+        }
     }
 }
 

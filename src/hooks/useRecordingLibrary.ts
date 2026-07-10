@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { pathHasExtension, recordingSupportsFurigana } from "../lib/helpers";
+import {
+  pathHasExtension,
+  recordingAnkiPushForTarget,
+  recordingHasTranscriptForLanguage,
+  recordingSupportsFurigana,
+} from "../lib/helpers";
 import { createRecordingFilterTabs } from "../lib/navigation";
 import type {
   AnkiCatalog,
@@ -12,6 +17,7 @@ type UseRecordingLibraryOptions = {
   ankiCatalog: AnkiCatalog;
   ankiSettings: AnkiSettings;
   recentRecordings: RecentRecording[];
+  transcriptionLanguage: string;
 };
 
 const RECORDINGS_PER_PAGE = 8;
@@ -48,6 +54,7 @@ export function useRecordingLibrary({
   ankiCatalog,
   ankiSettings,
   recentRecordings,
+  transcriptionLanguage,
 }: UseRecordingLibraryOptions) {
   const [selectedRecordings, setSelectedRecordings] = useState<string[]>([]);
   const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
@@ -62,30 +69,40 @@ export function useRecordingLibrary({
   );
 
   const transcribedRecordings = useMemo(
-    () => recentRecordings.filter((recording) => recording.transcriptPath),
-    [recentRecordings],
+    () =>
+      recentRecordings.filter((recording) =>
+        recordingHasTranscriptForLanguage(recording, transcriptionLanguage),
+      ),
+    [recentRecordings, transcriptionLanguage],
   );
 
   const untranscribedRecordings = useMemo(
-    () => recentRecordings.filter((recording) => !recording.transcriptPath),
-    [recentRecordings],
+    () =>
+      recentRecordings.filter(
+        (recording) =>
+          !recordingHasTranscriptForLanguage(recording, transcriptionLanguage),
+      ),
+    [recentRecordings, transcriptionLanguage],
   );
 
   const recordingPushedToDeck = useCallback(
     (recording: RecentRecording, deckName: string) =>
-      recording.ankiNoteId !== null &&
-      recording.ankiDeckName !== null &&
-      recording.ankiDeckName === deckName,
-    [],
+      recordingAnkiPushForTarget(
+        recording,
+        transcriptionLanguage,
+        deckName,
+        ankiSettings.noteType,
+      ) !== null,
+    [ankiSettings.noteType, transcriptionLanguage],
   );
 
   const recordingPushableToDeck = useCallback(
     (recording: RecentRecording, deckName: string) =>
       deckName.trim().length > 0 &&
-      Boolean(recording.transcriptPath) &&
+      recordingHasTranscriptForLanguage(recording, transcriptionLanguage) &&
       !recording.audioDeleted &&
       !recordingPushedToDeck(recording, deckName),
-    [recordingPushedToDeck],
+    [recordingPushedToDeck, transcriptionLanguage],
   );
 
   const recordingPushedToCurrentAnkiDeck = useCallback(
@@ -190,8 +207,11 @@ export function useRecordingLibrary({
   const useBatchActionsOnly = visibleSelectedPaths.length > 1;
 
   const selectedTranscribedRecordings = useMemo(
-    () => visibleSelectedRecordings.filter((recording) => recording.transcriptPath),
-    [visibleSelectedRecordings],
+    () =>
+      visibleSelectedRecordings.filter((recording) =>
+        recordingHasTranscriptForLanguage(recording, transcriptionLanguage),
+      ),
+    [transcriptionLanguage, visibleSelectedRecordings],
   );
 
   const selectedPushableRecordings = useMemo(
@@ -203,8 +223,12 @@ export function useRecordingLibrary({
   );
 
   const selectedUntranscribedRecordings = useMemo(
-    () => visibleSelectedRecordings.filter((recording) => !recording.transcriptPath),
-    [visibleSelectedRecordings],
+    () =>
+      visibleSelectedRecordings.filter(
+        (recording) =>
+          !recordingHasTranscriptForLanguage(recording, transcriptionLanguage),
+      ),
+    [transcriptionLanguage, visibleSelectedRecordings],
   );
 
   const selectedUntranslatedRecordings = useMemo(
@@ -218,12 +242,26 @@ export function useRecordingLibrary({
   const selectedFuriganaRecordings = useMemo(
     () =>
       selectedTranscribedRecordings.filter(
-        (recording) =>
-          recording.ankiNoteId !== null &&
-          !recording.furiganaApplied &&
-          recordingSupportsFurigana(recording),
+        (recording) => {
+          const push = recordingAnkiPushForTarget(
+            recording,
+            transcriptionLanguage,
+            ankiSettings.deckName,
+            ankiSettings.noteType,
+          );
+          return (
+            push !== null &&
+            !push.furiganaApplied &&
+            recordingSupportsFurigana(recording, transcriptionLanguage)
+          );
+        },
       ),
-    [selectedTranscribedRecordings],
+    [
+      ankiSettings.deckName,
+      ankiSettings.noteType,
+      selectedTranscribedRecordings,
+      transcriptionLanguage,
+    ],
   );
 
   const convertibleRecordings = useMemo(

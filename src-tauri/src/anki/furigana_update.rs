@@ -22,13 +22,16 @@ pub(crate) fn add_furigana_to_anki_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
 ) -> Result<RecordingBatchResult, String> {
-    let settings = {
+    let (settings, transcription_language) = {
         let persisted_state = app.state::<SharedPersistedState>();
         let persisted = persisted_state
             .0
             .lock()
             .map_err(|_| "Could not read the Anki settings.".to_string())?;
-        persisted.settings.anki.clone()
+        (
+            persisted.settings.anki.clone(),
+            persisted.settings.whisper.language.clone(),
+        )
     };
 
     if settings.fields.transcription.is_empty() {
@@ -64,7 +67,7 @@ pub(crate) fn add_furigana_to_anki_inner<R: Runtime>(
 
     for recording in recordings {
         let file_path = recording.file_path.clone();
-        match add_furigana_to_single_anki_card(app, recording, &settings) {
+        match add_furigana_to_single_anki_card(app, recording, &settings, &transcription_language) {
             Ok(note_id) => items.push(RecordingActionItem {
                 file_path,
                 status: "success".into(),
@@ -107,40 +110,58 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
     app: &AppHandle<R>,
     recording: RecentRecording,
     settings: &AnkiSettings,
+    transcription_language: &str,
 ) -> Result<i64, (String, Option<i64>, String)> {
     let file_path = recording.file_path.clone();
-    let note_id = recording.anki_note_id;
-
+    let mut recording = refresh_recording_anki_reference(app, recording).map_err(|error| {
+        (
+            file_path.clone(),
+            None,
+            format!("Could not verify the existing Anki card: {error}"),
+        )
+    })?;
+    let matching_push = recording
+        .anki_push_for_target(
+            transcription_language,
+            &settings.deck_name,
+            &settings.note_type,
+        )
+        .cloned();
+    let note_id = matching_push.as_ref().map(|push| push.note_id).or_else(|| {
+        recording
+            .anki_pushes
+            .is_empty()
+            .then_some(recording.anki_note_id)
+            .flatten()
+    });
     let Some(note_id) = note_id else {
         return Err((
             file_path,
             None,
-            "Push this recording to Anki before adding furigana.".into(),
+            "Push this language to the configured Anki deck before adding furigana.".into(),
         ));
     };
 
-    let recording = refresh_recording_anki_reference(app, recording).map_err(|error| {
-        (
-            file_path.clone(),
-            Some(note_id),
-            format!("Could not verify the existing Anki card: {error}"),
-        )
-    })?;
-    if recording.anki_note_id.is_none() {
-        return Err((
-            file_path,
-            Some(note_id),
-            "The Anki card was deleted. Push this recording again before adding furigana.".into(),
-        ));
-    }
-
-    let transcript_path = recording.transcript_path.as_deref().ok_or_else(|| {
-        (
-            file_path.clone(),
-            Some(note_id),
-            "Transcribe this recording before adding furigana.".into(),
-        )
-    })?;
+    let transcript_variant = recording
+        .transcript_for_language(transcription_language)
+        .cloned();
+    let transcript_path = transcript_variant
+        .as_ref()
+        .map(|transcript| transcript.file_path.as_str())
+        .or_else(|| {
+            recording
+                .transcripts
+                .is_empty()
+                .then_some(recording.transcript_path.as_deref())
+                .flatten()
+        })
+        .ok_or_else(|| {
+            (
+                file_path.clone(),
+                Some(note_id),
+                format!("Transcribe this recording for {transcription_language} before adding furigana."),
+            )
+        })?;
     let transcript = fs::read_to_string(transcript_path).map_err(|error| {
         (
             file_path.clone(),
@@ -148,6 +169,10 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
             format!("Could not read transcript: {error}"),
         )
     })?;
+    if let Some(transcript_variant) = transcript_variant {
+        recording.transcript_path = Some(transcript_variant.file_path);
+        recording.transcript_language = transcript_variant.detected_language;
+    }
     if !recording_transcript_supports_furigana(&recording, &transcript) {
         return Err((
             file_path,
@@ -204,7 +229,16 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
     })?;
 
     update_recent_recording(app, &recording.file_path, |recording| {
-        recording.furigana_applied = true;
+        if let Some(push) = recording.anki_pushes.iter_mut().find(|push| {
+            push.note_id == note_id
+                && push.deck_name == settings.deck_name
+                && push.note_type == settings.note_type
+        }) {
+            push.furigana_applied = true;
+        }
+        if recording.anki_note_id == Some(note_id) {
+            recording.furigana_applied = true;
+        }
     })
     .map_err(|error| {
         (

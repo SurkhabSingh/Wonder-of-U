@@ -23,7 +23,9 @@ export function SavedRecordingsPage({
   configuredAnkiDeckLabel,
   configuredDeckMenuOptions,
   currentDeckName,
+  currentNoteType,
   availableAnkiDecks,
+  transcriptionLanguage,
   busyAction,
   allowMp3Conversion,
   expressionFieldMapped,
@@ -72,7 +74,9 @@ export function SavedRecordingsPage({
   configuredAnkiDeckLabel: string;
   configuredDeckMenuOptions: string[];
   currentDeckName: string;
+  currentNoteType: string;
   availableAnkiDecks: string[];
+  transcriptionLanguage: string;
   busyAction: BusyAction;
   allowMp3Conversion: boolean;
   expressionFieldMapped: boolean;
@@ -175,7 +179,9 @@ export function SavedRecordingsPage({
                 busyAction={busyAction}
                 configuredAnkiDeckLabel={configuredAnkiDeckLabel}
                 configuredDeckName={currentDeckName}
+                configuredNoteType={currentNoteType}
                 availableAnkiDecks={availableAnkiDecks}
+                transcriptionLanguage={transcriptionLanguage}
                 allowMp3Conversion={allowMp3Conversion}
                 expressionFieldMapped={expressionFieldMapped}
                 recordingPushedToDeck={recordingPushedToDeck}

@@ -165,6 +165,35 @@ pub(crate) struct AppSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct RecordingTranscript {
+    pub(crate) language: String,
+    pub(crate) file_path: String,
+    #[serde(default)]
+    pub(crate) detected_language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecordingAnkiPush {
+    pub(crate) language: String,
+    pub(crate) deck_name: String,
+    pub(crate) note_type: String,
+    pub(crate) note_id: i64,
+    #[serde(default)]
+    pub(crate) furigana_applied: bool,
+}
+
+pub(crate) fn transcript_language_key(language: &str) -> String {
+    let key = language.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        "auto".into()
+    } else {
+        key
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RecentRecording {
     pub(crate) file_name: String,
     pub(crate) file_path: String,
@@ -172,6 +201,8 @@ pub(crate) struct RecentRecording {
     pub(crate) transcript_path: Option<String>,
     #[serde(default)]
     pub(crate) transcript_language: Option<String>,
+    #[serde(default)]
+    pub(crate) transcripts: Vec<RecordingTranscript>,
     #[serde(default)]
     pub(crate) translation_path: Option<String>,
     #[serde(default)]
@@ -181,12 +212,39 @@ pub(crate) struct RecentRecording {
     #[serde(default)]
     pub(crate) anki_note_type: Option<String>,
     #[serde(default)]
+    pub(crate) anki_pushes: Vec<RecordingAnkiPush>,
+    #[serde(default)]
     pub(crate) furigana_applied: bool,
     #[serde(default)]
     pub(crate) audio_deleted: bool,
     pub(crate) duration_ms: u64,
     pub(crate) bytes_written: u64,
     pub(crate) created_at_ms: u64,
+}
+
+impl RecentRecording {
+    pub(crate) fn transcript_for_language(&self, language: &str) -> Option<&RecordingTranscript> {
+        let key = transcript_language_key(language);
+        self.transcripts
+            .iter()
+            .find(|transcript| transcript.language == key)
+    }
+
+    pub(crate) fn has_transcript_for_language(&self, language: &str) -> bool {
+        self.transcript_for_language(language).is_some()
+    }
+
+    pub(crate) fn anki_push_for_target(
+        &self,
+        language: &str,
+        deck_name: &str,
+        note_type: &str,
+    ) -> Option<&RecordingAnkiPush> {
+        let language = transcript_language_key(language);
+        self.anki_pushes.iter().find(|push| {
+            push.language == language && push.deck_name == deck_name && push.note_type == note_type
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

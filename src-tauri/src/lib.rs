@@ -232,10 +232,12 @@ mod tests {
             file_path: temp_dir.path().join("existing.wav").display().to_string(),
             transcript_path: None,
             transcript_language: None,
+            transcripts: Vec::new(),
             translation_path: None,
             anki_note_id: Some(42),
             anki_deck_name: Some("Japanese".into()),
             anki_note_type: Some("Mining".into()),
+            anki_pushes: Vec::new(),
             furigana_applied: false,
             audio_deleted: true,
             duration_ms: 123,
@@ -298,10 +300,12 @@ mod tests {
             file_path: "C:\\Temp\\sample.wav".into(),
             transcript_path: Some("C:\\Temp\\sample.transcript.txt".into()),
             transcript_language: Some("ja".into()),
+            transcripts: Vec::new(),
             translation_path: None,
             anki_note_id: Some(42),
             anki_deck_name: Some("Japanese".into()),
             anki_note_type: Some("Mining".into()),
+            anki_pushes: Vec::new(),
             furigana_applied: false,
             audio_deleted: false,
             duration_ms: 1,
@@ -309,18 +313,24 @@ mod tests {
             created_at_ms: 1,
         };
 
-        assert!(recording_pushed_to_anki_target(&recording, &settings));
+        assert!(recording_pushed_to_anki_target(&recording, &settings, "ja"));
 
         recording.anki_deck_name = Some("Other".into());
-        assert!(!recording_pushed_to_anki_target(&recording, &settings));
+        assert!(!recording_pushed_to_anki_target(
+            &recording, &settings, "ja"
+        ));
 
         recording.anki_deck_name = Some("Japanese".into());
         recording.anki_note_type = Some("Basic".into());
-        assert!(!recording_pushed_to_anki_target(&recording, &settings));
+        assert!(!recording_pushed_to_anki_target(
+            &recording, &settings, "ja"
+        ));
 
         recording.anki_note_type = Some("Mining".into());
         recording.anki_note_id = None;
-        assert!(!recording_pushed_to_anki_target(&recording, &settings));
+        assert!(!recording_pushed_to_anki_target(
+            &recording, &settings, "ja"
+        ));
     }
 
     #[test]
@@ -330,10 +340,12 @@ mod tests {
             file_path: "C:\\Temp\\sample.wav".into(),
             transcript_path: Some("C:\\Temp\\sample.transcript.txt".into()),
             transcript_language: Some("en".into()),
+            transcripts: Vec::new(),
             translation_path: None,
             anki_note_id: Some(42),
             anki_deck_name: Some("Japanese".into()),
             anki_note_type: Some("Mining".into()),
+            anki_pushes: Vec::new(),
             furigana_applied: false,
             audio_deleted: false,
             duration_ms: 1,

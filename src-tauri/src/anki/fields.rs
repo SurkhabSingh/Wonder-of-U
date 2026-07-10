@@ -131,7 +131,18 @@ fn extract_anki_sound_tags(value: &str) -> Vec<String> {
 pub(crate) fn recording_pushed_to_anki_target(
     recording: &RecentRecording,
     settings: &AnkiSettings,
+    transcription_language: &str,
 ) -> bool {
+    if !recording.anki_pushes.is_empty() {
+        return recording
+            .anki_push_for_target(
+                transcription_language,
+                &settings.deck_name,
+                &settings.note_type,
+            )
+            .is_some();
+    }
+
     recording.anki_note_id.is_some()
         && recording.anki_deck_name.as_deref() == Some(settings.deck_name.as_str())
         && recording.anki_note_type.as_deref() == Some(settings.note_type.as_str())

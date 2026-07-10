@@ -72,15 +72,31 @@ export type RecentRecording = {
   filePath: string;
   transcriptPath: string | null;
   transcriptLanguage: string | null;
+  transcripts: RecordingTranscript[];
   translationPath: string | null;
   ankiNoteId: number | null;
   ankiDeckName: string | null;
   ankiNoteType: string | null;
+  ankiPushes: RecordingAnkiPush[];
   furiganaApplied: boolean;
   audioDeleted: boolean;
   durationMs: number;
   bytesWritten: number;
   createdAtMs: number;
+};
+
+export type RecordingTranscript = {
+  language: string;
+  filePath: string;
+  detectedLanguage: string | null;
+};
+
+export type RecordingAnkiPush = {
+  language: string;
+  deckName: string;
+  noteType: string;
+  noteId: number;
+  furiganaApplied: boolean;
 };
 
 export type WhisperDetection = {
