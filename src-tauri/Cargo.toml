@@ -28,6 +28,7 @@ hound = "3.5.1"
 wasapi = "0.23.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10.1"

@@ -1,4 +1,10 @@
-use std::{collections::HashSet, fs, path::PathBuf, process::Command};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -8,12 +14,19 @@ use crate::{
     app_runtime::{build_app_bootstrap, emit_app_snapshot, log_event, update_shell_snapshot},
     app_state::write_persisted_data,
     app_types::{RecentRecording, RecordingActionItem, RecordingBatchResult, SharedPersistedState},
+    translation_bridge::TranslationBridge,
 };
 
-use super::{find_recent_recording, selected_recordings};
+use super::{find_recent_recording, selected_recordings, update_recent_recording};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Target language for the current translation pass. The bridge sends an empty
+/// provider so the extension uses its own selected provider (Google/DeepL).
+/// TODO: promote this to a user-configurable setting.
+const TRANSLATION_TARGET_LANGUAGE: &str = "en";
+const TRANSLATION_TIMEOUT: Duration = Duration::from_secs(90);
 
 fn remove_recording_from_history(
     recordings: &mut Vec<RecentRecording>,
@@ -64,28 +77,108 @@ fn playback_path(recording: &RecentRecording) -> Result<PathBuf, String> {
     }
 }
 
-fn translation_action_item(recording: RecentRecording) -> RecordingActionItem {
+fn failed_translation_item(recording: &RecentRecording, message: impl Into<String>) -> RecordingActionItem {
+    RecordingActionItem {
+        file_path: recording.file_path.clone(),
+        status: "failed".into(),
+        message: message.into(),
+        note_id: recording.anki_note_id,
+    }
+}
+
+fn translation_output_path(audio_path: &str, language: &str) -> PathBuf {
+    let path = Path::new(audio_path);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("recording");
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    directory.join(format!("{stem}.translation.{language}.txt"))
+}
+
+fn translate_single_recording<R: Runtime>(
+    app: &AppHandle<R>,
+    bridge: &TranslationBridge,
+    recording: RecentRecording,
+) -> RecordingActionItem {
     if recording.translation_path.is_some() {
-        RecordingActionItem {
+        return RecordingActionItem {
             file_path: recording.file_path,
             status: "skipped".into(),
             message: "Already translated.".into(),
             note_id: recording.anki_note_id,
+        };
+    }
+
+    let transcript_path = match recording.transcript_path.clone() {
+        Some(path) => path,
+        None => return failed_translation_item(&recording, "No transcript available to translate."),
+    };
+
+    let source_text = match fs::read_to_string(&transcript_path) {
+        Ok(text) => text,
+        Err(error) => {
+            return failed_translation_item(&recording, format!("Could not read the transcript: {error}"))
         }
-    } else if recording.transcript_path.is_none() {
-        RecordingActionItem {
-            file_path: recording.file_path,
+    };
+
+    if source_text.trim().is_empty() {
+        return failed_translation_item(&recording, "The transcript is empty.");
+    }
+
+    let source_lang = recording
+        .transcript_language
+        .clone()
+        .unwrap_or_else(|| "auto".to_string());
+    let job_id = bridge.submit(
+        source_text,
+        source_lang,
+        TRANSLATION_TARGET_LANGUAGE.to_string(),
+        String::new(),
+    );
+
+    let translated = match bridge.await_result(&job_id, TRANSLATION_TIMEOUT) {
+        Ok(text) => text,
+        Err(error) => return failed_translation_item(&recording, error),
+    };
+
+    if translated.trim().is_empty() {
+        return failed_translation_item(&recording, "The extension returned an empty translation.");
+    }
+
+    let output_path = translation_output_path(&recording.file_path, TRANSLATION_TARGET_LANGUAGE);
+    if let Err(error) = fs::write(&output_path, translated.trim().as_bytes()) {
+        return failed_translation_item(&recording, format!("Could not save the translation: {error}"));
+    }
+
+    let stored_path = output_path.display().to_string();
+    let file_path = recording.file_path.clone();
+    let note_id = recording.anki_note_id;
+
+    if let Err(error) = update_recent_recording(app, &file_path, {
+        let stored_path = stored_path.clone();
+        move |recording| recording.translation_path = Some(stored_path)
+    }) {
+        return RecordingActionItem {
+            file_path,
             status: "failed".into(),
-            message: "No transcript available to translate.".into(),
-            note_id: recording.anki_note_id,
-        }
-    } else {
-        RecordingActionItem {
-            file_path: recording.file_path,
-            status: "failed".into(),
-            message: "Translation provider is not configured yet. This will be wired through the translation/extension bridge phase.".into(),
-            note_id: recording.anki_note_id,
-        }
+            message: format!("Translation saved, but the history could not be updated: {error}"),
+            note_id,
+        };
+    }
+
+    log_event(
+        app,
+        "INFO",
+        "recording.translated",
+        serde_json::json!({ "filePath": file_path, "language": TRANSLATION_TARGET_LANGUAGE }),
+    );
+
+    RecordingActionItem {
+        file_path,
+        status: "success".into(),
+        message: "Translated.".into(),
+        note_id,
     }
 }
 
@@ -202,24 +295,55 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
     file_paths: Vec<String>,
 ) -> Result<RecordingBatchResult, String> {
     let recordings = selected_recordings(app, file_paths)?;
-    let mut items = Vec::new();
+    let bridge = app.state::<TranslationBridge>();
+    let bridge = bridge.inner();
 
-    for recording in recordings {
-        items.push(translation_action_item(recording));
+    if !bridge.is_connected() {
+        let items = recordings
+            .into_iter()
+            .map(|recording| {
+                failed_translation_item(
+                    &recording,
+                    "The browser extension is not connected. Open it and select \"App Support\" mode, then try again.",
+                )
+            })
+            .collect::<Vec<_>>();
+        let failed_count = items.len();
+
+        return Ok(RecordingBatchResult {
+            status: if failed_count == 0 {
+                "completed"
+            } else {
+                "unavailable"
+            }
+            .into(),
+            message: "Translation is unavailable because the browser extension is not connected in App Support mode.".to_string(),
+            items,
+            bootstrap: build_app_bootstrap(app)?,
+        });
     }
 
+    let mut items = Vec::new();
+    for recording in recordings {
+        items.push(translate_single_recording(app, bridge, recording));
+    }
+
+    let success_count = items.iter().filter(|item| item.status == "success").count();
     let skipped_count = items.iter().filter(|item| item.status == "skipped").count();
     let failed_count = items.iter().filter(|item| item.status == "failed").count();
 
+    let status = if failed_count == 0 {
+        "completed"
+    } else if success_count > 0 || skipped_count > 0 {
+        "partial"
+    } else {
+        "unavailable"
+    };
+
     Ok(RecordingBatchResult {
-        status: if failed_count == 0 {
-            "completed"
-        } else {
-            "unavailable"
-        }
-        .into(),
+        status: status.into(),
         message: format!(
-            "Translation request finished: {skipped_count} skipped, {failed_count} unavailable."
+            "Translation finished: {success_count} translated, {skipped_count} skipped, {failed_count} failed."
         ),
         items,
         bootstrap: build_app_bootstrap(app)?,

@@ -13,6 +13,7 @@ mod recording_session;
 mod runtime_assets;
 mod settings;
 mod transcription;
+mod translation_bridge;
 
 use app_config::AUTOSTART_ARGUMENT;
 use app_runtime::{emit_app_snapshot, setup_error};
@@ -46,6 +47,8 @@ pub fn run() {
             let startup_warnings = initialize_app_state(app)?;
             configure_desktop_shell(app, &setup_visibility, startup_warnings)
                 .map_err(setup_error)?;
+
+            translation_bridge::start_bridge_server(app.handle().clone());
 
             emit_app_snapshot(app.handle());
             Ok(())

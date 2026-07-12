@@ -33,6 +33,7 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
         condvar: Condvar::new(),
     });
     app.manage(RecorderState(Mutex::new(None)));
+    app.manage(crate::translation_bridge::TranslationBridge::new());
 
     let mut startup_warnings = Vec::new();
     {
