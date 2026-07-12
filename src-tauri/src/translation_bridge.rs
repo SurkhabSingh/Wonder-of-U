@@ -13,7 +13,11 @@ use crate::app_runtime::{log_event, now_ms};
 
 /// Loopback port the desktop app listens on for the browser-extension
 /// translation worker. Mirrors the extension's default (`BRIDGE.md`).
-pub(crate) const BRIDGE_PORT: u16 = 8766;
+///
+/// Must stay clear of Anki: 8765 is AnkiConnect and 8766 is our own furigana
+/// add-on (see `anki::furigana`). Binding either would silently fail and leave
+/// the extension talking to Anki, which answers our routes with a 404.
+pub(crate) const BRIDGE_PORT: u16 = 8791;
 const BRIDGE_PROTOCOL: &str = "1";
 const WORKER_THREADS: usize = 4;
 /// How recently the extension must have polled for the bridge to count as
@@ -313,6 +317,17 @@ fn respond_json<V: Serialize>(request: Request, status: u16, body: &V) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The HTTP tests below bind an ephemeral port, so they cannot catch the
+    /// bridge being configured onto a port something else already owns. Anki is
+    /// the neighbour that matters: it holds 8765 (AnkiConnect) and 8766 (our
+    /// furigana add-on). Binding either fails, and the extension then long-polls
+    /// Anki, which 404s our routes and surfaces as "bridge not connected".
+    #[test]
+    fn bridge_port_stays_clear_of_anki() {
+        assert_ne!(BRIDGE_PORT, 8765, "8765 is AnkiConnect");
+        assert_ne!(BRIDGE_PORT, 8766, "8766 is the furigana add-on");
+    }
 
     #[test]
     fn queue_submit_claim_and_await() {
