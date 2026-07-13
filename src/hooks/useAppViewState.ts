@@ -6,6 +6,7 @@ import {
 import { whisperStatusLabel } from "../lib/helpers";
 import {
   activePageLabel,
+  createDetailPages,
   createSetupPages,
   createWorkflowPages,
 } from "../lib/navigation";
@@ -158,9 +159,11 @@ export function useAppViewState({
     ffmpegReady: bootstrap.ffmpegDetection.status === "ready",
     ankiReady: ankiCatalog.status === "ready",
   });
+  const detailPages = createDetailPages();
   const currentPageLabel = activePageLabel(activePage, [
     ...workflowPages,
     ...setupPages,
+    ...detailPages,
   ]);
 
   return {

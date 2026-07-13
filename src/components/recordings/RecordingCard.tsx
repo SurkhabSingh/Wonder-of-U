@@ -44,6 +44,7 @@ export function RecordingCard({
   onTranslate,
   onConvertToMp3,
   onDelete,
+  onView,
 }: {
   recording: RecentRecording;
   selected: boolean;
@@ -68,6 +69,7 @@ export function RecordingCard({
   onTranslate: RecordingAction;
   onConvertToMp3: RecordingAction;
   onDelete: SingleRecordingAction;
+  onView: SingleRecordingAction;
 }) {
   const hasSelectedTranscript = recordingHasTranscriptForLanguage(
     recording,
@@ -103,19 +105,32 @@ export function RecordingCard({
     .join("\n");
   const hasAnyAnkiPush =
     recording.ankiPushes.length > 0 || recording.ankiNoteId !== null;
+  const canReadTranscript =
+    recording.transcripts.length > 0 || recording.transcriptPath !== null;
 
   return (
     <article className="recording-item">
       <div className="recording-head">
-        <label className="recording-select">
+        <div className="recording-select">
           <input
             type="checkbox"
             checked={selected}
             onChange={() => onToggleSelection(recording.filePath)}
             aria-label={`Select ${recording.fileName}`}
           />
-          <strong>{recording.fileName}</strong>
-        </label>
+          {canReadTranscript ? (
+            <button
+              type="button"
+              className="recording-filename-button"
+              onClick={() => void onView(recording.filePath)}
+              title="Read transcript and translation"
+            >
+              {recording.fileName}
+            </button>
+          ) : (
+            <strong>{recording.fileName}</strong>
+          )}
+        </div>
         <span>{formatDuration(recording.durationMs)}</span>
       </div>
       <div className="recording-meta">
@@ -210,6 +225,27 @@ export function RecordingCard({
               >
                 Play
               </DropdownMenuPrimitive.Item>
+              {canReadTranscript ? (
+                <DropdownMenuPrimitive.Item
+                  className="action-menu-item"
+                  onSelect={() => void onView(recording.filePath)}
+                >
+                  Read transcript
+                </DropdownMenuPrimitive.Item>
+              ) : (
+                <TooltipWrap description="Transcribe this recording first to read its transcript.">
+                  <span className="action-menu-tooltip-wrap">
+                    <DropdownMenuPrimitive.Item
+                      className="action-menu-item"
+                      disabled
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      Read transcript
+                      <span className="action-menu-meta">No text</span>
+                    </DropdownMenuPrimitive.Item>
+                  </span>
+                </TooltipWrap>
+              )}
               {!hasSelectedTranscript ? (
                 <DropdownMenuPrimitive.Item
                   className="action-menu-item"

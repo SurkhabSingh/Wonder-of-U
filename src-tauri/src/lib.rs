@@ -78,6 +78,7 @@ pub fn run() {
             stop_recording,
             load_anki_catalog,
             play_recording,
+            read_recording_texts,
             delete_recording,
             delete_recordings,
             push_recordings_to_anki,

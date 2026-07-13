@@ -89,7 +89,11 @@ export function SettingsPages({
   ) => void | Promise<void>;
   onUpdateAnkiField: (field: keyof AnkiFieldMapping, value: string) => void;
 }) {
-  if (activePage === "recorder" || activePage === "recordings") {
+  if (
+    activePage === "recorder" ||
+    activePage === "recordings" ||
+    activePage === "transcript"
+  ) {
     return null;
   }
 

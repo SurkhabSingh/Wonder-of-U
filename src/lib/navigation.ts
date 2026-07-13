@@ -58,6 +58,16 @@ export function createSetupPages({
   ];
 }
 
+export function createDetailPages(): PageNavigationItem[] {
+  return [
+    {
+      id: "transcript",
+      label: "Transcript",
+      description: "Read transcript and translation",
+    },
+  ];
+}
+
 export function createRecordingFilterTabs({
   allCount,
   untranscribedCount,

@@ -2,6 +2,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 mod actions;
 mod conversion;
+mod texts;
 mod transcription;
 
 pub(crate) use actions::{
@@ -9,6 +10,7 @@ pub(crate) use actions::{
     play_recording_inner, translate_recordings_inner,
 };
 pub(crate) use conversion::convert_recordings_to_mp3_inner;
+pub(crate) use texts::read_recording_texts_inner;
 pub(crate) use transcription::{
     rename_recording_outputs_from_transcript, transcribe_recordings_inner,
 };

@@ -100,6 +100,20 @@ export type RecordingAnkiPush = {
   furiganaApplied: boolean;
 };
 
+export type RecordingTextDocument = {
+  language: string;
+  detectedLanguage: string | null;
+  filePath: string;
+  text: string;
+  missing: boolean;
+};
+
+export type RecordingTexts = {
+  filePath: string;
+  transcripts: RecordingTextDocument[];
+  translations: RecordingTextDocument[];
+};
+
 export type WhisperDetection = {
   status: string;
   executablePath: string | null;
@@ -198,6 +212,7 @@ export type AutosaveState = "idle" | "saving" | "error";
 export type AppPage =
   | "recorder"
   | "recordings"
+  | "transcript"
   | "preferences"
   | "whisper"
   | "runtime"

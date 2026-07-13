@@ -5,6 +5,7 @@ import { PageSidebar } from "./components/layout/PageSidebar";
 import { RecorderPage } from "./components/recorder/RecorderPage";
 import { SavedRecordingsPage } from "./components/recordings/SavedRecordingsPage";
 import { SettingsPages } from "./components/settings/SettingsPages";
+import { TranscriptViewerPage } from "./components/transcripts/TranscriptViewerPage";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { useAnkiCatalog } from "./hooks/useAnkiCatalog";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
@@ -34,6 +35,9 @@ function App() {
   } = useAppBootstrap();
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [activePage, setActivePage] = useState<AppPage>("recorder");
+  const [viewingRecordingPath, setViewingRecordingPath] = useState<string | null>(
+    null,
+  );
   const [runtimeUpdateResult, setRuntimeUpdateResult] =
     useState<WhisperAssetUpdateResult | null>(null);
   const [modelUpdateResult, setModelUpdateResult] =
@@ -47,6 +51,23 @@ function App() {
   function showSuccess(message: string) {
     toast.success(message, { duration: 3500 });
   }
+
+  function openTranscriptViewer(filePath: string) {
+    setViewingRecordingPath(filePath);
+    setActivePage("transcript");
+  }
+
+  function closeTranscriptViewer() {
+    setViewingRecordingPath(null);
+    setActivePage("recordings");
+  }
+
+  const viewingRecording =
+    viewingRecordingPath !== null
+      ? bootstrap.recentRecordings.find(
+          (recording) => recording.filePath === viewingRecordingPath,
+        ) ?? null
+      : null;
 
   useEffect(() => {
     setRuntimeUpdateResult(null);
@@ -306,7 +327,36 @@ function App() {
               onConvertToMp3={convertRecordingsToMp3}
               onDeleteRecording={deleteRecording}
               onDeleteRecordings={deleteRecordings}
+              onView={openTranscriptViewer}
             />
+          ) : null}
+
+          {activePage === "transcript" ? (
+            viewingRecording ? (
+              <TranscriptViewerPage
+                recording={viewingRecording}
+                onBack={closeTranscriptViewer}
+              />
+            ) : (
+              <div className="transcript-viewer">
+                <div className="transcript-viewer-body is-single">
+                  <div className="transcript-error">
+                    <p className="panel-kicker">Recording unavailable</p>
+                    <p>
+                      This recording is no longer available. It may have been
+                      deleted from this machine.
+                    </p>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={closeTranscriptViewer}
+                    >
+                      Back to recordings
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
           ) : null}
 
           <SettingsPages

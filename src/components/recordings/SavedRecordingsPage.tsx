@@ -58,6 +58,7 @@ export function SavedRecordingsPage({
   onConvertToMp3,
   onDeleteRecording,
   onDeleteRecordings,
+  onView,
 }: {
   recordingActionMessage: string;
   recentRecordings: RecentRecording[];
@@ -109,6 +110,7 @@ export function SavedRecordingsPage({
   onConvertToMp3: RecordingAction;
   onDeleteRecording: SingleRecordingAction;
   onDeleteRecordings: RecordingAction;
+  onView: SingleRecordingAction;
 }) {
   const selectedRecordingSet = new Set(selectedRecordings);
   const useBatchActionsOnly = visibleSelectedPaths.length > 1;
@@ -195,6 +197,7 @@ export function SavedRecordingsPage({
                 onTranslate={onTranslate}
                 onConvertToMp3={onConvertToMp3}
                 onDelete={onDeleteRecording}
+                onView={onView}
               />
             ))}
           </div>

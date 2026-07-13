@@ -179,6 +179,31 @@ pub(crate) struct RecordingTranscript {
     pub(crate) detected_language: Option<String>,
 }
 
+/// A single transcript or translation text file, resolved for the reader view.
+/// `missing` is set (with `text` left empty) when the sidecar could not be read
+/// or resolved inside the recording's own folder, so one absent file degrades a
+/// pane instead of failing the whole request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecordingTextDocument {
+    pub(crate) language: String,
+    #[serde(default)]
+    pub(crate) detected_language: Option<String>,
+    pub(crate) file_path: String,
+    pub(crate) text: String,
+    pub(crate) missing: bool,
+}
+
+/// The full text payload behind the transcript viewer for one recording: every
+/// language transcript beside the audio, plus its translation sidecar(s).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecordingTexts {
+    pub(crate) file_path: String,
+    pub(crate) transcripts: Vec<RecordingTextDocument>,
+    pub(crate) translations: Vec<RecordingTextDocument>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingAnkiPush {
