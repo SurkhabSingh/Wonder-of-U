@@ -26,7 +26,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// provider so the extension uses its own selected provider (Google/DeepL).
 /// TODO: promote this to a user-configurable setting.
 const TRANSLATION_TARGET_LANGUAGE: &str = "en";
-const TRANSLATION_TIMEOUT: Duration = Duration::from_secs(90);
+/// Long enough to cover a chunked transcript (the extension translates a long
+/// transcript in several passes) plus one lease requeue if the extension dies
+/// mid-job. See `translation_bridge::LEASE_TIMEOUT`.
+const TRANSLATION_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn remove_recording_from_history(
     recordings: &mut Vec<RecentRecording>,
@@ -130,12 +133,15 @@ fn translate_single_recording<R: Runtime>(
         .transcript_language
         .clone()
         .unwrap_or_else(|| "auto".to_string());
-    let job_id = bridge.submit(
+    let job_id = match bridge.submit(
         source_text,
         source_lang,
         TRANSLATION_TARGET_LANGUAGE.to_string(),
         String::new(),
-    );
+    ) {
+        Ok(id) => id,
+        Err(error) => return failed_translation_item(&recording, error),
+    };
 
     let translated = match bridge.await_result(&job_id, TRANSLATION_TIMEOUT) {
         Ok(text) => text,
@@ -325,6 +331,17 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
 
     let mut items = Vec::new();
     for recording in recordings {
+        // Each job blocks for up to TRANSLATION_TIMEOUT, so a batch that loses the
+        // extension part-way through would otherwise sit there timing out once per
+        // remaining recording. Stop asking as soon as nobody is listening.
+        if !bridge.is_connected() {
+            items.push(failed_translation_item(
+                &recording,
+                "The browser extension disconnected before this recording was translated.",
+            ));
+            continue;
+        }
+
         items.push(translate_single_recording(app, bridge, recording));
     }
 

@@ -26,6 +26,21 @@ export function useRecordingActions({
   showSuccess,
   showWarning,
 }: UseRecordingActionsOptions) {
+  // A batch that could not run at all ("unavailable") or only partly ran
+  // ("partial") is not a success. Reporting it with a green check is how
+  // "the browser extension is not connected" ended up looking like good news.
+  const notifyBatchResult = useCallback(
+    (result: RecordingBatchResult, message: string) => {
+      if (result.status === "unavailable" || result.status === "partial") {
+        showWarning(message);
+        return;
+      }
+
+      showSuccess(message);
+    },
+    [showSuccess, showWarning],
+  );
+
   const playRecording = useCallback(
     async (filePath: string) => {
       try {
@@ -202,7 +217,7 @@ export function useRecordingActions({
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("transcribe", result);
         setRecordingActionMessage(message);
-        showSuccess(message);
+        notifyBatchResult(result, message);
       } catch (error) {
         setLoadError(
           errorMessage(error, "The recordings could not be transcribed."),
@@ -213,11 +228,11 @@ export function useRecordingActions({
     },
     [
       applyBootstrap,
+      notifyBatchResult,
       persistSettingsIfNeeded,
       setBusyAction,
       setLoadError,
       setRecordingActionMessage,
-      showSuccess,
     ],
   );
 
@@ -231,7 +246,7 @@ export function useRecordingActions({
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("translate", result);
         setRecordingActionMessage(message);
-        showSuccess(message);
+        notifyBatchResult(result, message);
       } catch (error) {
         setLoadError(
           errorMessage(error, "The translation request could not be completed."),
@@ -240,7 +255,13 @@ export function useRecordingActions({
         setBusyAction(null);
       }
     },
-    [applyBootstrap, setBusyAction, setLoadError, setRecordingActionMessage, showSuccess],
+    [
+      applyBootstrap,
+      notifyBatchResult,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+    ],
   );
 
   const convertRecordingsToMp3 = useCallback(
