@@ -5,8 +5,8 @@ mod conversion;
 mod transcription;
 
 pub(crate) use actions::{
-    delete_recording_inner, delete_recordings_inner, play_recording_inner,
-    translate_recordings_inner,
+    auto_translate_after_transcription, delete_recording_inner, delete_recordings_inner,
+    play_recording_inner, translate_recordings_inner,
 };
 pub(crate) use conversion::convert_recordings_to_mp3_inner;
 pub(crate) use transcription::{

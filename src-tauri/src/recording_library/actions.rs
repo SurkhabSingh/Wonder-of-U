@@ -99,6 +99,44 @@ fn translation_output_path(audio_path: &str, language: &str) -> PathBuf {
     directory.join(format!("{stem}.translation.{language}.txt"))
 }
 
+/// Translates a freshly created transcript, for the "translate after transcription"
+/// setting. Returns a short note for the caller to append to its own message, or
+/// `None` when there was nothing to say.
+///
+/// Translation is an optional extra here, never a reason for transcription to
+/// fail: if the extension is not connected we skip immediately rather than block
+/// the caller for the full translation timeout waiting for a worker that is not
+/// there.
+pub(crate) fn auto_translate_after_transcription<R: Runtime>(
+    app: &AppHandle<R>,
+    file_path: &str,
+) -> Option<String> {
+    let bridge = app.state::<TranslationBridge>();
+    let bridge = bridge.inner();
+
+    if !bridge.is_connected() {
+        return Some(
+            "Translation was skipped because the browser extension is not connected.".to_string(),
+        );
+    }
+
+    // The audio is renamed when its first transcript lands, so the caller's path
+    // is the only one that still resolves.
+    let recording = find_recent_recording(app, file_path).ok()?;
+
+    if recording.translation_path.is_some() {
+        return None;
+    }
+
+    let item = translate_single_recording(app, bridge, recording);
+
+    match item.status.as_str() {
+        "success" => Some("Translated.".to_string()),
+        "skipped" => None,
+        _ => Some(format!("Translation failed: {}", item.message)),
+    }
+}
+
 fn translate_single_recording<R: Runtime>(
     app: &AppHandle<R>,
     bridge: &TranslationBridge,

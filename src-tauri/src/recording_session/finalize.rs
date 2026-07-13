@@ -9,7 +9,7 @@ use crate::{
         transcript_language_key, ActiveRecording, RecentRecording, RecordingTranscript,
         SharedPersistedState,
     },
-    recording_library::rename_recording_outputs_from_transcript,
+    recording_library::{auto_translate_after_transcription, rename_recording_outputs_from_transcript},
     runtime_assets::refresh_whisper_detection_state,
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
@@ -186,6 +186,25 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                                     recent_recording.transcript_path.clone();
                                 shell.transition_count += 1;
                             })?;
+
+                            // Deliberately after the snapshot returns to "idle".
+                            // Translation blocks for as long as the browser takes,
+                            // and both start_recording and stop_recording refuse to
+                            // run unless the phase is idle — translating first would
+                            // lock the user out of recording for the whole wait.
+                            if settings.features.translate_after_transcription {
+                                if let Some(note) = auto_translate_after_transcription(
+                                    &app,
+                                    &recent_recording.file_path,
+                                ) {
+                                    let file_name = recent_recording.file_name.clone();
+                                    update_shell_snapshot(&app, |shell| {
+                                        shell.status_text =
+                                            format!("Saved {file_name} and transcript. {note}");
+                                    })?;
+                                }
+                            }
+
                             return Ok(());
                         }
                         Err(error) => {

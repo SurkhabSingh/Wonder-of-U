@@ -17,7 +17,7 @@ use crate::{
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
 
-use super::update_recent_recording;
+use super::{actions::auto_translate_after_transcription, update_recent_recording};
 
 static OUTPUT_RENAME_LOCK: Mutex<()> = Mutex::new(());
 
@@ -289,11 +289,25 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                         "transcriptPath": updated_recording.transcript_path
                     }),
                 );
+
+                let mut message =
+                    "Transcript created. WAV audio was kept for transcription accuracy."
+                        .to_string();
+
+                // The audio is renamed when its first transcript lands, so the
+                // updated path is the one that still resolves in history.
+                if settings.features.translate_after_transcription {
+                    if let Some(note) =
+                        auto_translate_after_transcription(app, &updated_recording.file_path)
+                    {
+                        message = format!("{message} {note}");
+                    }
+                }
+
                 items.push(RecordingActionItem {
                     file_path: updated_recording.file_path,
                     status: "success".into(),
-                    message: "Transcript created. WAV audio was kept for transcription accuracy."
-                        .into(),
+                    message,
                     note_id: updated_recording.anki_note_id,
                 });
             }

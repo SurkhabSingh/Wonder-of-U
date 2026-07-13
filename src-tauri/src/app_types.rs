@@ -86,6 +86,12 @@ pub(crate) struct FeatureSettings {
     pub(crate) allow_mp3_conversion: bool,
     #[serde(default)]
     pub(crate) auto_add_furigana_after_anki_push: bool,
+    /// Translate a transcript as soon as it is created, instead of waiting for the
+    /// user to press Translate. Needs the browser extension in App Support mode;
+    /// when it is not connected the transcript is still saved and the translation
+    /// is simply skipped.
+    #[serde(default)]
+    pub(crate) translate_after_transcription: bool,
 }
 
 impl Default for FeatureSettings {
@@ -95,6 +101,7 @@ impl Default for FeatureSettings {
             delete_local_audio_after_anki_push: false,
             allow_mp3_conversion: false,
             auto_add_furigana_after_anki_push: false,
+            translate_after_transcription: false,
         }
     }
 }

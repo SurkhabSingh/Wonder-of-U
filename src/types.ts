@@ -29,6 +29,7 @@ export type FeatureSettings = {
   deleteLocalAudioAfterAnkiPush: boolean;
   allowMp3Conversion: boolean;
   autoAddFuriganaAfterAnkiPush: boolean;
+  translateAfterTranscription: boolean;
 };
 
 export type AnkiFieldMapping = {

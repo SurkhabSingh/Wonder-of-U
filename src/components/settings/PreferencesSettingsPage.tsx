@@ -126,6 +126,21 @@ export function PreferencesSettingsPage({
           <label className="toggle">
             <input
               type="checkbox"
+              checked={settingsDraft.features.translateAfterTranscription}
+              onChange={(event) =>
+                onUpdateSettings({
+                  features: {
+                    translateAfterTranscription: event.currentTarget.checked,
+                  },
+                })
+              }
+            />
+            <span>Translate after transcription</span>
+          </label>
+
+          <label className="toggle">
+            <input
+              type="checkbox"
               checked={settingsDraft.features.deleteLocalAudioAfterAnkiPush}
               onChange={(event) => {
                 const enabled = event.currentTarget.checked;
@@ -188,6 +203,15 @@ export function PreferencesSettingsPage({
             <span>Start minimized to tray</span>
           </label>
         </div>
+
+        {settingsDraft.features.translateAfterTranscription ? (
+          <p className="microcopy">
+            Translation runs in the Wonder of U browser extension, so keep it
+            open in App Support mode. The browser window can stay minimized. If
+            it is not connected, the transcript is still saved and the
+            translation is skipped.
+          </p>
+        ) : null}
       </div>
     </article>
   );

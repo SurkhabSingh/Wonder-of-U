@@ -107,6 +107,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 .delete_local_audio_after_anki_push,
             allow_mp3_conversion: settings.features.allow_mp3_conversion,
             auto_add_furigana_after_anki_push: settings.features.auto_add_furigana_after_anki_push,
+            translate_after_transcription: settings.features.translate_after_transcription,
         },
         theme: theme.into(),
         launch_at_login: settings.launch_at_login,
