@@ -1,5 +1,5 @@
 import type { ActiveSegment } from "../../hooks/useAudioPlayer";
-import type { RecordingTextDocument } from "../../types";
+import type { RecordingSegment, RecordingTextDocument } from "../../types";
 import { TranscriptSegmentRow } from "./TranscriptSegmentRow";
 import { splitTranscriptSegments } from "./transcriptText";
 
@@ -11,9 +11,20 @@ type ReadingRow = {
   endMs: number | null;
 };
 
-function buildRows(document: RecordingTextDocument): ReadingRow[] {
-  if (document.segments.length > 0) {
-    return document.segments.map((segment) => ({
+// `segmentsOverride` lets the transcript pane render from an in-session edited
+// copy of the timed segments (merge/split) instead of the document's own. When
+// absent or empty, rows fall back to the document's segments, then to untimed
+// lines split from the plain text.
+function buildRows(
+  document: RecordingTextDocument,
+  segmentsOverride: RecordingSegment[] | undefined,
+): ReadingRow[] {
+  const segments =
+    segmentsOverride && segmentsOverride.length > 0
+      ? segmentsOverride
+      : document.segments;
+  if (segments.length > 0) {
+    return segments.map((segment) => ({
       text: segment.text,
       startMs: segment.startMs,
       endMs: segment.endMs,
@@ -42,6 +53,15 @@ export function TranscriptReadingPane({
   onActivateSegment,
   activeSegment,
   onPlaySegment,
+  editable = false,
+  segmentsOverride,
+  onMineSegment,
+  onMergeSegment,
+  onSplitSegment,
+  minedKeys,
+  miningKey = null,
+  isMining = false,
+  mineDisabledReason = null,
 }: {
   paneKey: string;
   kicker: string;
@@ -64,8 +84,24 @@ export function TranscriptReadingPane({
   // is unavailable (e.g. the local audio was deleted).
   activeSegment: ActiveSegment | null;
   onPlaySegment: ((startMs: number, endMs: number) => void) | undefined;
+  // Sentence-mining + merge/split affordances, only wired for the transcript
+  // pane. When `editable` is false (the translation pane), none of these render.
+  editable?: boolean;
+  segmentsOverride?: RecordingSegment[];
+  // Undefined when mining is unavailable for the recording (local audio gone);
+  // the Mine button is then omitted while merge/split stay available.
+  onMineSegment?: (index: number) => void;
+  onMergeSegment?: (index: number) => void;
+  onSplitSegment?: (index: number) => void;
+  // Content keys of rows already mined this session, and the row currently
+  // mining. Any in-flight mine disables the other rows' Mine buttons.
+  minedKeys?: Set<string>;
+  miningKey?: string | null;
+  isMining?: boolean;
+  // Non-null when Anki isn't usable; becomes the disabled Mine button's tooltip.
+  mineDisabledReason?: string | null;
 }) {
-  const rows = document ? buildRows(document) : [];
+  const rows = document ? buildRows(document, segmentsOverride) : [];
 
   return (
     <section className={`transcript-pane ${isCjk ? "is-cjk" : ""}`}>
@@ -86,12 +122,21 @@ export function TranscriptReadingPane({
         ) : (
           rows.map((row, index) => {
             const key = `${paneKey}-${index}`;
+            const timed = row.startMs !== null && row.endMs !== null;
             const playing =
               activeSegment !== null &&
               row.startMs !== null &&
               row.endMs !== null &&
               row.startMs === activeSegment.startMs &&
               row.endMs === activeSegment.endMs;
+            // Merge/split edit only timed rows; the untimed fallback stays plain.
+            const rowEditable = editable && timed;
+            const mineKey = timed
+              ? `${row.startMs}:${row.endMs}:${row.text}`
+              : null;
+            const mined =
+              mineKey !== null && (minedKeys?.has(mineKey) ?? false);
+            const mineBusy = mineKey !== null && miningKey === mineKey;
             return (
               <TranscriptSegmentRow
                 key={key}
@@ -110,6 +155,29 @@ export function TranscriptReadingPane({
                 }}
                 onActivate={() => onActivateSegment(index)}
                 onDeactivate={() => onActivateSegment(null)}
+                editable={rowEditable}
+                onMine={
+                  rowEditable && onMineSegment
+                    ? () => onMineSegment(index)
+                    : undefined
+                }
+                mined={mined}
+                mineBusy={mineBusy}
+                // A mine in flight elsewhere blocks a second concurrent request.
+                mineDisabled={mineDisabledReason !== null || (isMining && !mineBusy)}
+                mineDisabledReason={mineDisabledReason}
+                onMerge={
+                  rowEditable && onMergeSegment
+                    ? () => onMergeSegment(index)
+                    : undefined
+                }
+                canMerge={index < rows.length - 1}
+                onSplit={
+                  rowEditable && onSplitSegment
+                    ? () => onSplitSegment(index)
+                    : undefined
+                }
+                canSplit={row.text.length >= 2}
               />
             );
           })

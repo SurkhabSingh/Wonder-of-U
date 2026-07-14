@@ -163,6 +163,58 @@ export function useRecordingActions({
     ],
   );
 
+  // Sentence mining: creates ONE Anki card for a single sentence from the
+  // reading view. Mirrors pushRecordingsToAnki (persist → invoke → applyBootstrap
+  // → routed toast) but returns the batch result so the caller can mark the row
+  // "mined" from the note id — mining does not mutate RecentRecording in v1.
+  const mineSegment = useCallback(
+    async (
+      filePath: string,
+      text: string,
+      startMs: number,
+      endMs: number,
+      translation: string | null,
+    ): Promise<RecordingBatchResult | null> => {
+      try {
+        setBusyAction("mineSegment");
+        await persistSettingsIfNeeded();
+        const result = await invoke<RecordingBatchResult>("mine_segment_to_anki", {
+          filePath,
+          text,
+          startMs,
+          endMs,
+          translation,
+        });
+        applyBootstrap(result.bootstrap);
+        const message = result.message;
+        setRecordingActionMessage(message);
+        notifyBatchResult(result, message);
+        return result;
+      } catch (error) {
+        const message = errorMessage(
+          error,
+          "The sentence could not be mined to Anki.",
+        );
+        if (message.toLowerCase().includes("anki")) {
+          showWarning(message);
+        }
+        setLoadError(message);
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [
+      applyBootstrap,
+      notifyBatchResult,
+      persistSettingsIfNeeded,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+      showWarning,
+    ],
+  );
+
   const addFuriganaToAnki = useCallback(
     async (filePaths: string[]) => {
       try {
@@ -321,6 +373,7 @@ export function useRecordingActions({
     convertRecordingsToMp3,
     deleteRecording,
     deleteRecordings,
+    mineSegment,
     playRecording,
     pushRecordingsToAnki,
     transcribeRecordings,

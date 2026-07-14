@@ -15,6 +15,16 @@ export function TranscriptSegmentRow({
   onSelect,
   onActivate,
   onDeactivate,
+  editable = false,
+  onMine,
+  mined = false,
+  mineBusy = false,
+  mineDisabled = false,
+  mineDisabledReason = null,
+  onMerge,
+  canMerge = false,
+  onSplit,
+  canSplit = false,
 }: {
   segmentKey: string;
   text: string;
@@ -31,6 +41,20 @@ export function TranscriptSegmentRow({
   onSelect: () => void;
   onActivate: () => void;
   onDeactivate: () => void;
+  // Sentence-mining + merge/split controls. Only timed transcript rows are
+  // editable; when false none of the controls below render.
+  editable?: boolean;
+  // Undefined when mining is unavailable (local audio deleted). When present but
+  // `mineDisabled`, the button is inert and explains itself via the tooltip.
+  onMine?: () => void;
+  mined?: boolean;
+  mineBusy?: boolean;
+  mineDisabled?: boolean;
+  mineDisabledReason?: string | null;
+  onMerge?: () => void;
+  canMerge?: boolean;
+  onSplit?: () => void;
+  canSplit?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const hasTiming = startMs !== null && endMs !== null;
@@ -101,9 +125,66 @@ export function TranscriptSegmentRow({
         >
           {copied ? "Copied" : "Copy"}
         </button>
-        {/* Reserved, deliberately quiet slot for the sentence-mining action
-            that grows here in a later roadmap item. */}
-        <span className="transcript-segment-slot" aria-hidden="true" />
+        {editable ? (
+          <>
+            {onMerge ? (
+              <button
+                type="button"
+                className="transcript-segment-edit"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMerge();
+                }}
+                disabled={!canMerge}
+                title="Merge with the next line"
+                aria-label="Merge with the next line"
+              >
+                <span aria-hidden="true">{"⤓"}</span>
+              </button>
+            ) : null}
+            {onSplit ? (
+              <button
+                type="button"
+                className="transcript-segment-edit"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSplit();
+                }}
+                disabled={!canSplit}
+                title="Split this line in two"
+                aria-label="Split this line in two"
+              >
+                <span aria-hidden="true">{"|"}</span>
+              </button>
+            ) : null}
+            {onMine ? (
+              mined ? (
+                <span
+                  className="transcript-segment-mined"
+                  title="Mined to Anki"
+                >
+                  {"✓ Mined"}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="transcript-segment-mine"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onMine();
+                  }}
+                  disabled={mineDisabled || mineBusy}
+                  title={mineDisabledReason ?? "Mine this sentence to Anki"}
+                  aria-label="Mine this sentence to Anki"
+                >
+                  {mineBusy ? "Mining…" : "Mine"}
+                </button>
+              )
+            ) : null}
+          </>
+        ) : (
+          <span className="transcript-segment-slot" aria-hidden="true" />
+        )}
       </div>
     </div>
   );

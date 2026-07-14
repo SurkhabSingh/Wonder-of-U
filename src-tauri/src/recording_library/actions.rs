@@ -71,7 +71,7 @@ fn delete_recording_files(recording: &RecentRecording) -> Result<(), String> {
     Ok(())
 }
 
-fn playback_path(recording: &RecentRecording) -> Result<PathBuf, String> {
+pub(crate) fn playback_path(recording: &RecentRecording) -> Result<PathBuf, String> {
     let path = PathBuf::from(&recording.file_path);
     if path.exists() {
         Ok(path)

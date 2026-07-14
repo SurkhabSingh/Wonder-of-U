@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import { useRecordingTexts } from "../../hooks/useRecordingTexts";
 import {
@@ -7,7 +7,11 @@ import {
   formatTimestamp,
 } from "../../lib/format";
 import { transcriptLanguageLabel } from "../../lib/helpers";
-import type { RecentRecording, RecordingTextDocument } from "../../types";
+import type {
+  RecentRecording,
+  RecordingSegment,
+  RecordingTextDocument,
+} from "../../types";
 import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { TranscriptLanguageTabs } from "./TranscriptLanguageTabs";
 import type { TranscriptLanguageTab } from "./TranscriptLanguageTabs";
@@ -24,6 +28,125 @@ const VIEW_MODES: { id: TranscriptViewMode; label: string }[] = [
 
 // Scripts without word spacing get a wider leading and a shorter measure.
 const CJK_LANGUAGES = new Set(["ja", "zh", "yue", "zh-cn", "zh-tw"]);
+
+// Sentence-ending punctuation used to pick a natural split point (CJK + Latin).
+const SENTENCE_ENDINGS = new Set([
+  "。",
+  "！",
+  "？",
+  "．",
+  ".",
+  "!",
+  "?",
+  "…",
+]);
+
+// A stable, content-derived key for a segment so an already-mined row keeps its
+// "✓ Mined" marker across re-renders. Merging/splitting produces a new sentence
+// (new text/timing), so its key differs and the marker naturally resets.
+function segmentMineKey(segment: RecordingSegment): string {
+  return `${segment.startMs}:${segment.endMs}:${segment.text}`;
+}
+
+// Merge row i with row i+1 into one sentence spanning both time ranges. The
+// joiner is script-aware: CJK scripts run without inter-word spaces, so a space
+// would leave an unnatural gap in the merged sentence (and in a mined card).
+function mergeSegmentAt(
+  segments: RecordingSegment[],
+  index: number,
+  joiner: string,
+): RecordingSegment[] {
+  if (index < 0 || index >= segments.length - 1) {
+    return segments;
+  }
+  const a = segments[index];
+  const b = segments[index + 1];
+  const merged: RecordingSegment = {
+    text: `${a.text}${joiner}${b.text}`,
+    startMs: a.startMs,
+    endMs: b.endMs,
+  };
+  return [...segments.slice(0, index), merged, ...segments.slice(index + 2)];
+}
+
+// Split row i at the first sentence-ending punctuation at or after the text
+// midpoint, else at the character midpoint. Time is divided proportionally by
+// the character cut index so each half keeps a plausible span.
+function splitSegmentAt(
+  segments: RecordingSegment[],
+  index: number,
+): RecordingSegment[] {
+  const segment = segments[index];
+  if (!segment) {
+    return segments;
+  }
+  const text = segment.text;
+  if (text.length < 2) {
+    return segments;
+  }
+
+  const midpoint = Math.floor(text.length / 2);
+  let cutIndex = midpoint;
+  for (let position = midpoint; position < text.length; position += 1) {
+    if (SENTENCE_ENDINGS.has(text[position])) {
+      // Keep the punctuation with the first sentence.
+      cutIndex = position + 1;
+      break;
+    }
+  }
+  // A punctuation mark sitting at the very end leaves nothing for the second
+  // half; fall back to the character midpoint in that case.
+  if (cutIndex <= 0 || cutIndex >= text.length) {
+    cutIndex = midpoint;
+  }
+
+  const firstText = text.slice(0, cutIndex).trim();
+  const secondText = text.slice(cutIndex).trim();
+  if (firstText.length === 0 || secondText.length === 0) {
+    return segments;
+  }
+
+  const span = segment.endMs - segment.startMs;
+  const splitMs = Math.round(segment.startMs + span * (cutIndex / text.length));
+  const first: RecordingSegment = {
+    text: firstText,
+    startMs: segment.startMs,
+    endMs: splitMs,
+  };
+  const second: RecordingSegment = {
+    text: secondText,
+    startMs: splitMs,
+    endMs: segment.endMs,
+  };
+  return [...segments.slice(0, index), first, second, ...segments.slice(index + 1)];
+}
+
+// The translation that already exists for a mined sentence: the positionally
+// paired line the viewer shows beside it. Returns null (mine the text alone,
+// never generate a fresh translation) when there is no translation document, or
+// when the row was merged/split — an edit shifts the row out of alignment with
+// the translation's lines, so the pairing can no longer be trusted.
+function pairedTranslationFor(
+  index: number,
+  segment: RecordingSegment,
+  transcript: RecordingTextDocument | null,
+  translation: RecordingTextDocument | null,
+): string | null {
+  if (!translation || translation.missing) {
+    return null;
+  }
+  const original = transcript?.segments[index];
+  if (
+    !original ||
+    original.startMs !== segment.startMs ||
+    original.endMs !== segment.endMs ||
+    original.text !== segment.text
+  ) {
+    return null;
+  }
+  const line = splitTranscriptSegments(translation.text)[index]?.trim();
+  return line && line.length > 0 ? line : null;
+}
 
 function documentLanguageLabel(document: RecordingTextDocument): string {
   const requested =
@@ -84,6 +207,10 @@ export function TranscriptViewerPage({
   isReTranscribing,
   onReTranslate,
   isReTranslating,
+  onMineSegment,
+  isMining,
+  expressionFieldMapped,
+  ankiReachable,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -96,6 +223,21 @@ export function TranscriptViewerPage({
   // Undefined disables the affordance.
   onReTranslate: ((force: boolean) => void) | undefined;
   isReTranslating: boolean;
+  // Mine a single sentence into its own Anki card. Resolves true when a card was
+  // actually created, so the row can show a persistent "✓ Mined" marker. The
+  // paired translation line (or null when the recording has none) rides along so
+  // mining reuses the existing translation instead of generating a fresh one.
+  onMineSegment: (
+    text: string,
+    startMs: number,
+    endMs: number,
+    translation: string | null,
+  ) => Promise<boolean>;
+  isMining: boolean;
+  // Whether the Anki expression field is mapped and Anki is reachable. Together
+  // they decide whether Mine is enabled and which tooltip explains a disabled one.
+  expressionFieldMapped: boolean;
+  ankiReachable: boolean;
 }) {
   // The segments sidecar path is folded in so backfilling timestamps on an
   // already-transcribed language (same count, same translation) still changes
@@ -166,6 +308,67 @@ export function TranscriptViewerPage({
   }, [transcripts, activeLanguage]);
 
   const activeTranslation = translations[0] ?? null;
+
+  // A local, in-session editable copy of the active transcript's timed segments.
+  // Merge/split rewrite this copy only; nothing is persisted, and switching
+  // language or reloading the transcript resets it from the source segments.
+  const [editedSegments, setEditedSegments] = useState<RecordingSegment[]>([]);
+  // Rows the user has mined this session, tracked by content key so the marker
+  // survives re-renders but not a merge/split (which makes a new sentence).
+  const [minedKeys, setMinedKeys] = useState<Set<string>>(new Set());
+  // The single row with a mine request in flight, so only it shows "Mining…".
+  const [miningKey, setMiningKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditedSegments(activeTranscript?.segments ?? []);
+    setMinedKeys(new Set());
+    setMiningKey(null);
+  }, [activeTranscript]);
+
+  const handleMergeSegment = (index: number) => {
+    const joiner = isCjkDocument(activeTranscript) ? "" : " ";
+    setEditedSegments((segments) => mergeSegmentAt(segments, index, joiner));
+  };
+
+  const handleSplitSegment = (index: number) => {
+    setEditedSegments((segments) => splitSegmentAt(segments, index));
+  };
+
+  const handleMineSegment = (index: number) => {
+    const segment = editedSegments[index];
+    if (!segment || miningKey !== null) {
+      return;
+    }
+    const key = segmentMineKey(segment);
+    setMiningKey(key);
+    const translation = pairedTranslationFor(
+      index,
+      segment,
+      activeTranscript,
+      activeTranslation,
+    );
+    void onMineSegment(segment.text, segment.startMs, segment.endMs, translation)
+      .then((mined) => {
+        if (mined) {
+          setMinedKeys((previous) => {
+            const next = new Set(previous);
+            next.add(key);
+            return next;
+          });
+        }
+      })
+      .finally(() => {
+        setMiningKey((current) => (current === key ? null : current));
+      });
+  };
+
+  // Mining writes an Anki card with the sentence audio, so it needs local audio
+  // present. When it isn't usable, an explanatory tooltip replaces the action.
+  const mineDisabledReason = !expressionFieldMapped
+    ? "Map an Anki note first"
+    : !ankiReachable
+      ? "Anki not reachable"
+      : null;
 
   const languageTabs = useMemo<TranscriptLanguageTab[]>(
     () =>
@@ -379,6 +582,17 @@ export function TranscriptViewerPage({
               onActivateSegment={setActiveSegmentIndex}
               activeSegment={activeSegment}
               onPlaySegment={handlePlaySegment}
+              editable
+              segmentsOverride={editedSegments}
+              onMergeSegment={handleMergeSegment}
+              onSplitSegment={handleSplitSegment}
+              onMineSegment={
+                recording.audioDeleted ? undefined : handleMineSegment
+              }
+              minedKeys={minedKeys}
+              miningKey={miningKey}
+              isMining={isMining}
+              mineDisabledReason={mineDisabledReason}
             />
           ) : null}
 

@@ -2,8 +2,8 @@ use tauri::AppHandle;
 
 use crate::{
     anki::{
-        add_furigana_to_anki_inner, load_anki_catalog_inner, push_recordings_to_anki_deck_inner,
-        push_recordings_to_anki_inner,
+        add_furigana_to_anki_inner, load_anki_catalog_inner, mine_segment_to_anki_inner,
+        push_recordings_to_anki_deck_inner, push_recordings_to_anki_inner,
     },
     app_runtime::build_app_bootstrap,
     app_types::{
@@ -202,6 +202,30 @@ pub(crate) async fn push_recordings_to_anki_deck(
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         push_recordings_to_anki_deck_inner(&app_for_blocking, file_paths, deck_name)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn mine_segment_to_anki(
+    app: AppHandle,
+    file_path: String,
+    text: String,
+    start_ms: u64,
+    end_ms: u64,
+    translation: Option<String>,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        mine_segment_to_anki_inner(
+            &app_for_blocking,
+            file_path,
+            text,
+            start_ms,
+            end_ms,
+            translation,
+        )
     })
     .await
     .map_err(|error| error.to_string())?

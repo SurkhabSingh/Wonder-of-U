@@ -218,6 +218,7 @@ function App() {
     convertRecordingsToMp3,
     deleteRecording,
     deleteRecordings,
+    mineSegment,
     pushRecordingsToAnki,
     transcribeRecordings,
     translateRecordings,
@@ -230,6 +231,13 @@ function App() {
     showSuccess,
     showWarning,
   });
+
+  // Sentence mining needs a mapped expression field to write to and a reachable
+  // Anki. `offline` is the only catalog status that definitively means "not
+  // reachable"; idle/ready are treated as reachable (the click still reports
+  // honestly if Anki turns out to be down).
+  const expressionFieldMapped = Boolean(settingsDraft.anki.fields.transcription);
+  const ankiReachable = displayedAnkiCatalog.status !== "offline";
 
   return (
     <main className="app-shell">
@@ -364,6 +372,22 @@ function App() {
                   void translateRecordings([viewingRecording.filePath], force)
                 }
                 isReTranslating={busyAction === "translateRecording"}
+                onMineSegment={async (text, startMs, endMs, translation) => {
+                  const result = await mineSegment(
+                    viewingRecording.filePath,
+                    text,
+                    startMs,
+                    endMs,
+                    translation,
+                  );
+                  const item = result?.items[0];
+                  return Boolean(
+                    item && item.status === "success" && item.noteId !== null,
+                  );
+                }}
+                isMining={busyAction === "mineSegment"}
+                expressionFieldMapped={expressionFieldMapped}
+                ankiReachable={ankiReachable}
               />
             ) : (
               <div className="transcript-viewer">

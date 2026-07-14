@@ -212,6 +212,7 @@ export type BusyAction =
   | "playRecording"
   | "deleteRecording"
   | "pushAnki"
+  | "mineSegment"
   | "addFurigana"
   | "translateRecording"
   | "transcribeRecording"

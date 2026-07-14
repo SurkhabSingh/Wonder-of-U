@@ -7,7 +7,7 @@ mod transcription;
 
 pub(crate) use actions::{
     auto_translate_after_transcription, delete_recording_inner, delete_recordings_inner,
-    play_recording_inner, translate_recordings_inner,
+    play_recording_inner, playback_path, translate_recordings_inner,
 };
 pub(crate) use conversion::convert_recordings_to_mp3_inner;
 pub(crate) use texts::read_recording_texts_inner;
@@ -21,7 +21,7 @@ use crate::{
     app_types::{RecentRecording, SharedPersistedState},
 };
 
-fn find_recent_recording<R: Runtime>(
+pub(crate) fn find_recent_recording<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
 ) -> Result<RecentRecording, String> {

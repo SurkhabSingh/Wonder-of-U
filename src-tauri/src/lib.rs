@@ -86,6 +86,7 @@ pub fn run() {
             delete_recordings,
             push_recordings_to_anki,
             push_recordings_to_anki_deck,
+            mine_segment_to_anki,
             add_furigana_to_anki,
             translate_recordings,
             transcribe_recordings,
