@@ -208,7 +208,6 @@ function App() {
     convertRecordingsToMp3,
     deleteRecording,
     deleteRecordings,
-    playRecording,
     pushRecordingsToAnki,
     transcribeRecordings,
     translateRecordings,
@@ -350,7 +349,6 @@ function App() {
               onToggleSelection={toggleRecordingSelection}
               onClearSelection={clearRecordingSelection}
               onOpenRecordingMenuChange={setOpenRecordingMenuPath}
-              onPlay={playRecording}
               onTranscribe={transcribeRecordings}
               onPushToAnki={pushRecordingsToAnki}
               onAddFurigana={addFuriganaToAnki}

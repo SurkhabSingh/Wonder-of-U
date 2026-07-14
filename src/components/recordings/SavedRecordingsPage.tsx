@@ -1,5 +1,7 @@
+import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import type { RecordingFilterTab } from "../../lib/navigation";
 import type { BusyAction, RecentRecording, RecordingFilter } from "../../types";
+import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { RecordingCard } from "./RecordingCard";
 import { SavedRecordingsToolbar } from "./SavedRecordingsToolbar";
 
@@ -52,7 +54,6 @@ export function SavedRecordingsPage({
   onToggleSelection,
   onClearSelection,
   onOpenRecordingMenuChange,
-  onPlay,
   onTranscribe,
   onPushToAnki,
   onAddFurigana,
@@ -106,7 +107,6 @@ export function SavedRecordingsPage({
   onToggleSelection: (filePath: string) => void;
   onClearSelection: () => void;
   onOpenRecordingMenuChange: (filePath: string | null) => void;
-  onPlay: SingleRecordingAction;
   onTranscribe: RecordingAction;
   onPushToAnki: PushAction;
   onAddFurigana: RecordingAction;
@@ -118,6 +118,20 @@ export function SavedRecordingsPage({
 }) {
   const selectedRecordingSet = new Set(selectedRecordings);
   const useBatchActionsOnly = visibleSelectedPaths.length > 1;
+
+  // In-app whole-file playback. The row Play action routes here instead of the
+  // old external OS handler; the now-playing bar docks at the bottom while a
+  // track is loaded.
+  const player = useAudioPlayer();
+  const handlePlay = (filePath: string) => {
+    const recording = recentRecordings.find(
+      (candidate) => candidate.filePath === filePath,
+    );
+    if (!recording || recording.audioDeleted) {
+      return;
+    }
+    player.playRecording(recording);
+  };
 
   return (
     <div className="recorder-view recordings-view">
@@ -204,7 +218,7 @@ export function SavedRecordingsPage({
                 recordingPushedToCurrentAnkiDeck={recordingPushedToCurrentAnkiDeck}
                 onToggleSelection={onToggleSelection}
                 onOpenChange={onOpenRecordingMenuChange}
-                onPlay={onPlay}
+                onPlay={handlePlay}
                 onTranscribe={onTranscribe}
                 onPushToAnki={onPushToAnki}
                 onAddFurigana={onAddFurigana}
@@ -244,6 +258,18 @@ export function SavedRecordingsPage({
               </button>
             </div>
           </nav>
+        ) : null}
+
+        {player.filePath !== null ? (
+          <NowPlayingBar
+            fileName={player.fileName}
+            isPlaying={player.isPlaying}
+            currentTimeMs={player.currentTimeMs}
+            durationMs={player.durationMs}
+            onToggle={player.toggle}
+            onSeek={player.seekMs}
+            onStop={player.stop}
+          />
         ) : null}
       </article>
     </div>

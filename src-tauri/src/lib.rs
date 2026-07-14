@@ -16,8 +16,9 @@ mod transcription;
 mod translation_bridge;
 
 use app_config::AUTOSTART_ARGUMENT;
-use app_runtime::{emit_app_snapshot, setup_error};
+use app_runtime::{emit_app_snapshot, log_event, setup_error};
 use app_setup::initialize_app_state;
+use app_types::SharedPersistedState;
 use commands::*;
 use desktop_shell::{
     acquire_single_instance_or_exit, configure_desktop_shell, mark_main_page_loaded,
@@ -47,6 +48,8 @@ pub fn run() {
             let startup_warnings = initialize_app_state(app)?;
             configure_desktop_shell(app, &setup_visibility, startup_warnings)
                 .map_err(setup_error)?;
+
+            allow_recording_directories_in_asset_scope(app.handle());
 
             translation_bridge::start_bridge_server(app.handle().clone());
 
@@ -92,6 +95,55 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Widen the asset-protocol scope to the directories where recordings live so
+/// the webview can stream local audio through `convertFileSrc`. The static scope
+/// in `tauri.conf.json` is intentionally empty; we confine it to the configured
+/// recordings folder at runtime rather than a broad glob. Failures are logged,
+/// never fatal.
+fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
+    let directories = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let guard = match persisted_state.0.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                log_event(
+                    app,
+                    "WARN",
+                    "asset.scope",
+                    serde_json::json!({
+                        "message": "Could not read app settings to widen the asset scope."
+                    }),
+                );
+                return;
+            }
+        };
+
+        // Only the recordings directory needs to stream through the asset
+        // protocol. The managed asset directory (whisper/ffmpeg binaries and
+        // models) is deliberately NOT allowed — the player never serves from it.
+        vec![guard.settings.output_directory.clone()]
+    };
+
+    let scope = app.asset_protocol_scope();
+    for directory in directories {
+        if directory.trim().is_empty() {
+            continue;
+        }
+
+        if let Err(error) = scope.allow_directory(&directory, true) {
+            log_event(
+                app,
+                "WARN",
+                "asset.scope",
+                serde_json::json!({
+                    "directory": directory,
+                    "message": format!("Could not allow recordings directory in asset scope: {error}")
+                }),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

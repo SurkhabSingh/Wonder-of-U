@@ -114,6 +114,40 @@ export function RecordingCard({
     recordingPushedToCurrentAnkiDeck,
   );
 
+  // The single most-relevant next step, surfaced as a one-click primary button.
+  // Priority mirrors recordingChips(); each case invokes the same handler its
+  // matching overflow-menu item uses, so no new behavior is introduced.
+  const primaryAction = !hasSelectedTranscript
+    ? {
+        label: "Transcribe",
+        onClick: () => void onTranscribe([recording.filePath]),
+        disabled: busyAction === "transcribeRecording",
+      }
+    : recording.transcriptPath && recording.translationPath === null
+      ? {
+          label: "Translate",
+          onClick: () => void onTranslate([recording.filePath]),
+          disabled: busyAction === "translateRecording",
+        }
+      : canPushToConfiguredDeck && configuredDeckName
+        ? {
+            label: `Push to ${configuredAnkiDeckLabel}`,
+            onClick: () => void onPushToAnki([recording.filePath]),
+            disabled: busyAction === "pushAnki",
+          }
+        : canReadTranscript
+          ? {
+              label: "Read",
+              onClick: () => void onView(recording.filePath),
+              disabled: false,
+            }
+          : {
+              label: "Play",
+              onClick: () => void onPlay(recording.filePath),
+              disabled:
+                recording.audioDeleted || busyAction === "playRecording",
+            };
+
   return (
     <article className="recording-item">
       <div className="recording-select">
@@ -142,66 +176,79 @@ export function RecordingCard({
           {formatBytes(recording.bytesWritten)} ·{" "}
           {formatTimestamp(recording.createdAtMs)}
         </span>
-      </div>
-      <div
-        className="recording-state-row"
-        title={
-          recording.transcriptPath
-            ? `Audio: ${recording.filePath}\nTranscript: ${recording.transcriptPath}`
-            : `Audio: ${recording.filePath}`
-        }
-      >
-        {stateChips.map((chip) => (
-          <span
-            key={chip.label}
-            className={`status-chip status-chip-${chip.tone}`}
-          >
-            {chip.label}
+        <div
+          className="recording-state-row"
+          title={
+            recording.transcriptPath
+              ? `Audio: ${recording.filePath}\nTranscript: ${recording.transcriptPath}`
+              : `Audio: ${recording.filePath}`
+          }
+        >
+          {stateChips.map((chip) => (
+            <span
+              key={chip.label}
+              className={`status-chip status-chip-${chip.tone}`}
+            >
+              {chip.label}
+            </span>
+          ))}
+          <span className="status-chip status-chip-neutral">
+            {recording.audioDeleted
+              ? "Transcript only - local audio deleted"
+              : recording.transcriptPath
+                ? "Audio + transcript"
+                : "Audio only"}
           </span>
-        ))}
-        <span className="status-chip status-chip-neutral">
-          {recording.audioDeleted
-            ? "Transcript only - local audio deleted"
-            : recording.transcriptPath
-              ? "Audio + transcript"
-              : "Audio only"}
-        </span>
-        {hasAnyAnkiPush ? (
-          <span
-            className="status-chip status-chip-neutral"
-            title={
-              ankiPushSummary ||
-              (recording.ankiDeckName
-                ? `Pushed to ${recording.ankiDeckName}${
-                    recording.ankiNoteType ? ` / ${recording.ankiNoteType}` : ""
-                  }`
-                : "Pushed to Anki")
-            }
-          >
-            {selectedAnkiPush
-              ? `Anki: ${selectedAnkiPush.deckName} (${selectedLanguageLabel})`
-              : recording.ankiPushes.length > 0
-                ? `Anki: ${recording.ankiPushes.length} other language ${
-                    recording.ankiPushes.length === 1 ? "card" : "cards"
-                  }`
-                : recording.ankiDeckName
-                  ? `Anki: ${recording.ankiDeckName}`
-                  : "In Anki"}
-          </span>
-        ) : null}
-        {recording.translationPath !== null ? (
-          <span className="status-chip status-chip-success">Translated</span>
-        ) : null}
-        {languageLabels.length > 0 ? (
-          <span
-            className="status-chip status-chip-neutral"
-            title={`Transcribed languages: ${languageLabels.join(", ")}`}
-          >
-            Transcripts: {languageLabels.join(", ")}
-          </span>
-        ) : null}
+          {hasAnyAnkiPush ? (
+            <span
+              className="status-chip status-chip-neutral"
+              title={
+                ankiPushSummary ||
+                (recording.ankiDeckName
+                  ? `Pushed to ${recording.ankiDeckName}${
+                      recording.ankiNoteType ? ` / ${recording.ankiNoteType}` : ""
+                    }`
+                  : "Pushed to Anki")
+              }
+            >
+              {selectedAnkiPush
+                ? `Anki: ${selectedAnkiPush.deckName} (${selectedLanguageLabel})`
+                : recording.ankiPushes.length > 0
+                  ? `Anki: ${recording.ankiPushes.length} other language ${
+                      recording.ankiPushes.length === 1 ? "card" : "cards"
+                    }`
+                  : recording.ankiDeckName
+                    ? `Anki: ${recording.ankiDeckName}`
+                    : "In Anki"}
+            </span>
+          ) : null}
+          {recording.translationPath !== null ? (
+            <span className="status-chip status-chip-success">Translated</span>
+          ) : null}
+          {languageLabels.length > 0 ? (
+            <span
+              className="status-chip status-chip-neutral"
+              title={`Transcribed languages: ${languageLabels.join(", ")}`}
+            >
+              Transcripts: {languageLabels.join(", ")}
+            </span>
+          ) : null}
+        </div>
       </div>
       <div className="recording-actions">
+        <button
+          type="button"
+          className="secondary recording-primary-action"
+          onClick={primaryAction.onClick}
+          disabled={useBatchActionsOnly || primaryAction.disabled}
+          title={
+            useBatchActionsOnly
+              ? "Use Batch Actions while multiple recordings are selected."
+              : undefined
+          }
+        >
+          {primaryAction.label}
+        </button>
         <DropdownMenuPrimitive.Root
           modal={false}
           open={!useBatchActionsOnly && open}
@@ -212,15 +259,16 @@ export function RecordingCard({
           <DropdownMenuPrimitive.Trigger asChild>
             <button
               type="button"
-              className="secondary compact-menu-trigger"
+              className="secondary recording-overflow-trigger"
               disabled={useBatchActionsOnly}
+              aria-label="More actions"
               title={
                 useBatchActionsOnly
                   ? "Use Batch Actions while multiple recordings are selected."
-                  : "Open recording actions"
+                  : "More actions"
               }
             >
-              Actions
+              <span aria-hidden="true">⋯</span>
             </button>
           </DropdownMenuPrimitive.Trigger>
           <DropdownMenuPrimitive.Portal>

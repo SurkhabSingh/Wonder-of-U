@@ -1001,8 +1001,8 @@ input::placeholder {
 /* Mirrors the Home recent-item rhythm: a flat row with the filename and
    metadata on the left and state chips + the Actions menu on the right. */
 .recording-item {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: var(--space-4);
   align-items: center;
   padding: var(--space-5) var(--space-6);
@@ -1042,12 +1042,11 @@ input::placeholder {
 }
 
 .recording-state-row {
-  flex: 0 1 auto;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
-  justify-content: flex-end;
+  margin-top: var(--space-2);
 }
 
 .recording-filter-root {
@@ -1232,7 +1231,29 @@ input::placeholder {
 
 .recording-actions {
   position: relative;
-  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+  align-self: center;
+  justify-self: end;
+}
+
+.recording-primary-action {
+  max-width: 172px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-actions .recording-overflow-trigger {
+  min-width: 0;
+  padding: 4px 9px;
+  color: var(--text-subtle);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.recording-actions .recording-overflow-trigger:hover:not(:disabled) {
+  color: var(--text-strong);
 }
 
 .compact-menu-trigger {
@@ -1752,7 +1773,9 @@ input::placeholder {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* header · player bar · reading body — the bar hugs its content (auto) so it
+     doesn't stretch to fill the leftover height. */
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: var(--space-6);
 }
 
@@ -2494,4 +2517,155 @@ input::placeholder {
   .home-record-card {
     align-items: flex-start;
   }
+}
+
+/* --- Whole-file audio player ------------------------------------------------
+   A flat bar with a single accent for the seek fill. The dock variant pins to
+   the bottom of the Library; the compact variant rides the viewer chrome. */
+.now-playing-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.now-playing-bar-dock {
+  margin-top: var(--space-5);
+  padding: var(--space-4) var(--space-6);
+}
+
+.now-playing-bar-compact {
+  padding: var(--space-3) var(--space-5);
+}
+
+.now-playing-toggle,
+.now-playing-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  min-width: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-strong);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.now-playing-toggle {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-primary);
+}
+
+.now-playing-toggle:hover:not(:disabled) {
+  opacity: 0.9;
+  border-color: var(--accent);
+}
+
+.now-playing-close {
+  color: var(--text-subtle);
+}
+
+.now-playing-close:hover:not(:disabled) {
+  color: var(--text-strong);
+}
+
+.now-playing-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--text-base);
+  font-weight: var(--weight-mid);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Custom seek control — the browser's default track/thumb chrome is replaced
+   with a hairline rail and an accent fill up to the current position. */
+.now-playing-seek {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--seek-fill, 0%),
+    var(--border-strong) var(--seek-fill, 0%) 100%
+  );
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.now-playing-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+  border-radius: var(--radius-pill);
+}
+
+.now-playing-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px;
+  height: 14px;
+  width: 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.now-playing-seek::-moz-range-track {
+  height: 4px;
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+.now-playing-seek::-moz-range-progress {
+  height: 4px;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.now-playing-seek::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.now-playing-seek:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.now-playing-unavailable {
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4) var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }

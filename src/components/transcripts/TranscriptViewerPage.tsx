@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import { useRecordingTexts } from "../../hooks/useRecordingTexts";
 import {
   formatBytes,
@@ -7,6 +8,7 @@ import {
 } from "../../lib/format";
 import { transcriptLanguageLabel } from "../../lib/helpers";
 import type { RecentRecording, RecordingTextDocument } from "../../types";
+import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { TranscriptLanguageTabs } from "./TranscriptLanguageTabs";
 import type { TranscriptLanguageTab } from "./TranscriptLanguageTabs";
 import { TranscriptReadingPane } from "./TranscriptReadingPane";
@@ -89,6 +91,26 @@ export function TranscriptViewerPage({
     filePath: recording.filePath,
     changeSignature,
   });
+
+  // Whole-file playback for this recording, driven by the compact top bar.
+  // Gated on audioDeleted below so a transcript-only entry never tries to load.
+  const player = useAudioPlayer();
+  const isActiveTrack = player.filePath === recording.filePath;
+  const handleTogglePlayback = () => {
+    if (isActiveTrack) {
+      player.toggle();
+    } else {
+      player.playRecording(recording);
+    }
+  };
+  const handleSeekPlayback = (ms: number) => {
+    if (isActiveTrack) {
+      player.seekMs(ms);
+    } else {
+      // Nothing loaded yet — start the track so the scrub has audio to move.
+      player.playRecording(recording);
+    }
+  };
 
   const transcripts = data?.transcripts ?? [];
   const translations = data?.translations ?? [];
@@ -222,6 +244,26 @@ export function TranscriptViewerPage({
           </div>
         </div>
       </header>
+
+      {recording.audioDeleted ? (
+        <p className="now-playing-unavailable">
+          Local audio was deleted — playback is unavailable for this recording.
+        </p>
+      ) : (
+        <NowPlayingBar
+          variant="compact"
+          fileName={recording.fileName}
+          isPlaying={isActiveTrack && player.isPlaying}
+          currentTimeMs={isActiveTrack ? player.currentTimeMs : 0}
+          durationMs={
+            isActiveTrack && player.durationMs > 0
+              ? player.durationMs
+              : recording.durationMs
+          }
+          onToggle={handleTogglePlayback}
+          onSeek={handleSeekPlayback}
+        />
+      )}
 
       {status === "error" ? (
         <div className="transcript-viewer-body is-single">
