@@ -86,10 +86,17 @@ export type RecentRecording = {
   createdAtMs: number;
 };
 
+export type RecordingSegment = {
+  text: string;
+  startMs: number;
+  endMs: number;
+};
+
 export type RecordingTranscript = {
   language: string;
   filePath: string;
   detectedLanguage: string | null;
+  segmentsPath: string | null;
 };
 
 export type RecordingAnkiPush = {
@@ -106,6 +113,10 @@ export type RecordingTextDocument = {
   filePath: string;
   text: string;
   missing: boolean;
+  // Timed sentences parsed from the Whisper segments sidecar. Empty for older
+  // recordings transcribed before timestamps were captured, and always empty
+  // for translations (which have no per-sentence timing of their own).
+  segments: RecordingSegment[];
 };
 
 export type RecordingTexts = {

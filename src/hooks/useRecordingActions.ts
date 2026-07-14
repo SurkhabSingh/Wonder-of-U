@@ -207,12 +207,15 @@ export function useRecordingActions({
   );
 
   const transcribeRecordings = useCallback(
-    async (filePaths: string[]) => {
+    // `force` bypasses the has-transcript skip so an existing recording can be
+    // re-run for the SAME language to backfill the segments sidecar.
+    async (filePaths: string[], force = false) => {
       try {
         setBusyAction("transcribeRecording");
         await persistSettingsIfNeeded();
         const result = await invoke<RecordingBatchResult>("transcribe_recordings", {
           filePaths,
+          force,
         });
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("transcribe", result);
@@ -237,11 +240,14 @@ export function useRecordingActions({
   );
 
   const translateRecordings = useCallback(
-    async (filePaths: string[]) => {
+    // `force` bypasses the has-translation skip so a recording that is already
+    // translated can be re-translated (deterministic overwrite of the sidecar).
+    async (filePaths: string[], force = false) => {
       try {
         setBusyAction("translateRecording");
         const result = await invoke<RecordingBatchResult>("translate_recordings", {
           filePaths,
+          force,
         });
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("translate", result);

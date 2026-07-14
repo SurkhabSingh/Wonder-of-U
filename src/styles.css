@@ -1734,10 +1734,12 @@ input::placeholder {
 .transcript-viewer {
   min-height: 0;
   height: 100%;
-  display: grid;
-  /* header · player bar · reading body — the bar hugs its content (auto) so it
-     doesn't stretch to fill the leftover height. */
-  grid-template-rows: auto auto minmax(0, 1fr);
+  /* Flex column so any number of hug-height chrome rows (header, player bar,
+     the optional enable-timing nudge) stack at their natural size and the
+     reading body claims all remaining height. A fixed grid track count broke
+     when the nudge appeared — it fell into the 1fr row and ballooned. */
+  display: flex;
+  flex-direction: column;
   gap: var(--space-6);
 }
 
@@ -1865,8 +1867,10 @@ input::placeholder {
   white-space: nowrap;
 }
 
-/* Independently scrolling two-column reading grid. */
+/* Independently scrolling two-column reading grid. Flexes to fill whatever
+   height is left under the chrome rows, regardless of how many are shown. */
 .transcript-viewer-body {
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
   gap: var(--space-6);
@@ -1977,7 +1981,10 @@ input::placeholder {
   padding: var(--space-3) var(--space-7);
   border-left: 2px solid transparent;
   cursor: default;
-  transition: background var(--dur-fast) var(--ease-standard);
+  /* Transition the accent rail, not background: the .is-playing/.is-selected
+     fill is var(--accent-soft), and transitioning a var()-valued property
+     leaves it painted at the old theme's value after a live theme toggle. */
+  transition: border-left-color var(--dur-fast) var(--ease-standard);
 }
 
 .transcript-segment + .transcript-segment {
@@ -2000,6 +2007,14 @@ input::placeholder {
   background: var(--accent-soft);
 }
 
+/* The line currently playing through the shared viewer player. Reuses the
+   accent rail + tint so it reads as the same family as a selected row, just
+   lit by playback rather than by the pointer. */
+.transcript-segment.is-playing {
+  border-left-color: var(--segment-active-rail);
+  background: var(--accent-soft);
+}
+
 .transcript-segment-gutter {
   display: flex;
   align-items: center;
@@ -2015,12 +2030,68 @@ input::placeholder {
   height: calc(var(--reading-base-cjk) * var(--leading-reading-cjk));
 }
 
+/* Timed rows stack the play control above its timestamp; the row aligns items
+   to the top, so a slightly taller gutter sits flush with the first text line. */
+.transcript-segment-gutter.has-timing {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-1);
+  height: auto;
+  padding-top: 2px;
+}
+
 .transcript-segment-dot {
   width: 5px;
   height: 5px;
   border-radius: var(--radius-pill);
   background: var(--text-subtle);
   opacity: 0.55;
+}
+
+.transcript-segment-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-subtle);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.transcript-segment:hover .transcript-segment-play {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.transcript-segment-play:hover,
+.transcript-segment-play:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--surface);
+}
+
+.transcript-segment.is-playing .transcript-segment-play {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--surface);
+}
+
+.transcript-segment-time {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 .transcript-segment-body {
@@ -2088,6 +2159,63 @@ input::placeholder {
 .transcript-segment-slot {
   width: var(--space-2);
   height: 1px;
+}
+
+/* Quiet inline nudge for older transcripts that predate timestamps. Sits under
+   the transport bar and offers a forced re-transcribe to backfill segments. */
+.transcript-enable-timing-buttons {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-3);
+}
+
+.transcript-enable-timing {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.transcript-enable-timing-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-enable-timing-action {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.transcript-enable-timing-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.transcript-enable-timing-action:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 /* Load skeleton. */

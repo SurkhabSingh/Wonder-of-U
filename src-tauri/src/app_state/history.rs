@@ -172,6 +172,7 @@ pub(super) fn normalize_recent_recording_languages(recordings: &mut [RecentRecor
                     ),
                     file_path: transcript_path,
                     detected_language: recording.transcript_language.clone(),
+                    segments_path: None,
                 });
             }
         }

@@ -11,7 +11,7 @@ use crate::{
     app_state::{derive_transcript_language_from_path, sanitize_recording_name},
     app_types::{
         transcript_language_key, RecentRecording, RecordingActionItem, RecordingBatchResult,
-        RecordingTranscript, SharedPersistedState,
+        RecordingSegment, RecordingTranscript, SharedPersistedState,
     },
     runtime_assets::refresh_whisper_detection_state,
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
@@ -25,6 +25,7 @@ fn selected_untranscribed_recordings<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
     language: &str,
+    force: bool,
 ) -> Result<Vec<RecentRecording>, String> {
     let persisted_state = app.state::<SharedPersistedState>();
     let persisted = persisted_state
@@ -35,7 +36,9 @@ fn selected_untranscribed_recordings<R: Runtime>(
         persisted
             .recent_recordings
             .iter()
-            .filter(|recording| !recording.has_transcript_for_language(language))
+            // `force` re-runs even recordings that already have this language, so a
+            // segments sidecar can be backfilled onto an existing transcript.
+            .filter(|recording| force || !recording.has_transcript_for_language(language))
             .cloned()
             .collect()
     } else {
@@ -59,6 +62,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     original_file_path: &str,
     mut recording: RecentRecording,
     transcript_path: PathBuf,
+    json_path: PathBuf,
     requested_language: &str,
 ) -> Result<RecentRecording, String> {
     let language = transcript_language_key(requested_language);
@@ -126,6 +130,30 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     recording.transcript_path = Some(final_transcript_path.display().to_string());
     recording.transcript_language =
         derive_transcript_language_from_path(&final_transcript_path, requested_language);
+
+    // Parse whisper's per-segment json and drop a clean `{stem}.{lang}.segments.json`
+    // sidecar beside the audio so playback can jump per sentence. `recording.file_path`
+    // is now the final audio path (renamed for the first transcript, unchanged for
+    // additional languages), so its stem is exactly the one to mirror. A missing or
+    // unparseable json leaves `segments_path` None and never fails transcription.
+    let segments_path =
+        match store_segments_sidecar(&recording.file_path, &json_path, &language) {
+            Ok(path) => path.map(|path| path.display().to_string()),
+            Err(error) => {
+                log_event(
+                    app,
+                    "ERROR",
+                    "recording.store_segments_failed",
+                    serde_json::json!({
+                        "audioPath": recording.file_path,
+                        "message": error
+                    }),
+                );
+                None
+            }
+        };
+    let _ = fs::remove_file(&json_path);
+
     recording
         .transcripts
         .retain(|transcript| transcript.language != language);
@@ -133,6 +161,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
         language,
         file_path: final_transcript_path.display().to_string(),
         detected_language: recording.transcript_language.clone(),
+        segments_path,
     });
 
     let updated_recording = recording.clone();
@@ -166,6 +195,79 @@ fn store_additional_language_transcript(
     let target = parent.join(format!("{stem}.{language_tag}.transcript.txt"));
     move_file(transcript_path, &target)?;
     Ok(target)
+}
+
+/// Parse whisper's `--output-json` sidecar into the clean segment array and write
+/// `{stem}.{lang}.segments.json` beside the audio, mirroring how the transcript
+/// sidecar is named/placed. Returns `Ok(Some(path))` on success, `Ok(None)` when
+/// the json is absent or carries no parseable segments (a normal, non-fatal case),
+/// and `Err` only when the sidecar itself could not be written.
+fn store_segments_sidecar(
+    audio_file_path: &str,
+    json_path: &Path,
+    language: &str,
+) -> Result<Option<PathBuf>, String> {
+    let segments = match parse_whisper_segments(json_path) {
+        Some(segments) if !segments.is_empty() => segments,
+        _ => return Ok(None),
+    };
+
+    let _rename_guard = OUTPUT_RENAME_LOCK
+        .lock()
+        .map_err(|_| "Could not reserve a segments output name.".to_string())?;
+    let audio_path = Path::new(audio_file_path);
+    let parent = audio_path
+        .parent()
+        .ok_or_else(|| "The saved recording path did not have a parent folder.".to_string())?;
+    let stem = audio_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The saved recording path did not have a file name.".to_string())?;
+    let language_tag = sanitize_language_tag(language);
+    // Deterministic per-language name so re-transcribing the same language
+    // overwrites its previous segments sidecar instead of leaving orphans behind.
+    let target = parent.join(format!("{stem}.{language_tag}.segments.json"));
+    let serialized =
+        serde_json::to_string(&segments).map_err(|error| error.to_string())?;
+    fs::write(&target, serialized).map_err(|error| error.to_string())?;
+    Ok(Some(target))
+}
+
+/// Read whisper's json and convert its `transcription[].offsets.{from,to}` (ms)
+/// plus text into the clean segment array. Returns `None` for a missing or
+/// unparseable file so the caller can degrade to no segments.
+fn parse_whisper_segments(json_path: &Path) -> Option<Vec<RecordingSegment>> {
+    let raw = fs::read_to_string(json_path).ok()?;
+    let parsed: WhisperJson = serde_json::from_str(&raw).ok()?;
+    let segments = parsed
+        .transcription
+        .into_iter()
+        .map(|entry| RecordingSegment {
+            text: entry.text.trim().to_string(),
+            start_ms: entry.offsets.from,
+            end_ms: entry.offsets.to,
+        })
+        .collect();
+    Some(segments)
+}
+
+#[derive(serde::Deserialize)]
+struct WhisperJson {
+    #[serde(default)]
+    transcription: Vec<WhisperJsonSegment>,
+}
+
+#[derive(serde::Deserialize)]
+struct WhisperJsonSegment {
+    #[serde(default)]
+    text: String,
+    offsets: WhisperJsonOffsets,
+}
+
+#[derive(serde::Deserialize)]
+struct WhisperJsonOffsets {
+    from: u64,
+    to: u64,
 }
 
 fn sanitize_language_tag(language: &str) -> String {
@@ -206,6 +308,7 @@ fn move_file(source: &Path, target: &Path) -> Result<(), String> {
 pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
+    force: bool,
 ) -> Result<RecordingBatchResult, String> {
     let settings = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -233,12 +336,12 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     );
     let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
     let language = transcript_language_key(&settings.whisper.language);
-    let recordings = selected_untranscribed_recordings(app, file_paths, &language)?;
+    let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
     let mut items = Vec::new();
 
     for (index, recording) in recordings.into_iter().enumerate() {
-        if recording.has_transcript_for_language(&language) {
+        if !force && recording.has_transcript_for_language(&language) {
             items.push(RecordingActionItem {
                 file_path: recording.file_path,
                 status: "skipped".into(),
@@ -274,6 +377,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 &original_file_path,
                 recording.clone(),
                 result.transcript_path,
+                result.json_path,
                 &settings.whisper.language,
             )
         });
@@ -475,6 +579,68 @@ mod tests {
             })
             .count();
         assert_eq!(transcripts, 1);
+    }
+
+    #[test]
+    fn segments_sidecar_parses_whisper_json_and_lands_beside_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio_path = dir.path().join("hola_100.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+
+        // Whisper `--output-json` shape: transcription entries carry ms offsets.
+        let json_path = dir.path().join("whisper-temp.json");
+        fs::write(
+            &json_path,
+            r#"{
+                "transcription": [
+                    { "offsets": { "from": 0, "to": 2960 }, "text": " Bonjour le monde" },
+                    { "offsets": { "from": 2960, "to": 5000 }, "text": " Comment ca va" }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let stored =
+            store_segments_sidecar(&audio_path.display().to_string(), &json_path, "fr")
+                .unwrap()
+                .expect("a parseable json must yield a sidecar path");
+
+        assert_eq!(stored, dir.path().join("hola_100.fr.segments.json"));
+
+        // Round-trip: the written sidecar deserializes back into clean segments
+        // with trimmed text and the original ms offsets preserved.
+        let raw = fs::read_to_string(&stored).unwrap();
+        let segments: Vec<RecordingSegment> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text, "Bonjour le monde");
+        assert_eq!(segments[0].start_ms, 0);
+        assert_eq!(segments[0].end_ms, 2960);
+        assert_eq!(segments[1].text, "Comment ca va");
+        assert_eq!(segments[1].start_ms, 2960);
+        assert_eq!(segments[1].end_ms, 5000);
+    }
+
+    #[test]
+    fn missing_or_unparseable_json_yields_no_sidecar_without_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio_path = dir.path().join("hola_100.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+
+        // A json path that was never written.
+        let missing = dir.path().join("nope.json");
+        let result =
+            store_segments_sidecar(&audio_path.display().to_string(), &missing, "fr").unwrap();
+        assert!(result.is_none(), "a missing json must not produce a sidecar");
+
+        // A json that is not whisper-shaped parses to no segments.
+        let garbage = dir.path().join("garbage.json");
+        fs::write(&garbage, "not json at all").unwrap();
+        let result =
+            store_segments_sidecar(&audio_path.display().to_string(), &garbage, "fr").unwrap();
+        assert!(result.is_none(), "unparseable json must not produce a sidecar");
+
+        // No sidecar file was left behind for the language.
+        assert!(!dir.path().join("hola_100.fr.segments.json").exists());
     }
 
     #[test]

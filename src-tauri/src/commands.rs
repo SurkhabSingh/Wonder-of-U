@@ -211,10 +211,12 @@ pub(crate) async fn push_recordings_to_anki_deck(
 pub(crate) async fn translate_recordings(
     app: AppHandle,
     file_paths: Vec<String>,
+    force: Option<bool>,
 ) -> Result<RecordingBatchResult, String> {
     let app_for_blocking = app.clone();
+    let force = force.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        translate_recordings_inner(&app_for_blocking, file_paths)
+        translate_recordings_inner(&app_for_blocking, file_paths, force)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -237,10 +239,12 @@ pub(crate) async fn add_furigana_to_anki(
 pub(crate) async fn transcribe_recordings(
     app: AppHandle,
     file_paths: Vec<String>,
+    force: Option<bool>,
 ) -> Result<RecordingBatchResult, String> {
     let app_for_blocking = app.clone();
+    let force = force.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        transcribe_recordings_inner(&app_for_blocking, file_paths)
+        transcribe_recordings_inner(&app_for_blocking, file_paths, force)
     })
     .await
     .map_err(|error| error.to_string())?

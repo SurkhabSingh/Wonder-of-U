@@ -8,6 +8,11 @@ import { SavedRecordingsToolbar } from "./SavedRecordingsToolbar";
 type RecordingAction = (filePaths: string[]) => void | Promise<void>;
 type SingleRecordingAction = (filePath: string) => void | Promise<void>;
 type PushAction = (filePaths: string[], deckName?: string) => void | Promise<void>;
+// `force` re-runs translation on a recording that already has one.
+type TranslateAction = (
+  filePaths: string[],
+  force?: boolean,
+) => void | Promise<void>;
 
 export function SavedRecordingsPage({
   recordingActionMessage,
@@ -106,7 +111,7 @@ export function SavedRecordingsPage({
   onTranscribe: RecordingAction;
   onPushToAnki: PushAction;
   onAddFurigana: RecordingAction;
-  onTranslate: RecordingAction;
+  onTranslate: TranslateAction;
   onConvertToMp3: RecordingAction;
   onDeleteRecording: SingleRecordingAction;
   onDeleteRecordings: RecordingAction;

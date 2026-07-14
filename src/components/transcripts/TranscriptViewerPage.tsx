@@ -80,13 +80,29 @@ function TranscriptSkeleton() {
 export function TranscriptViewerPage({
   recording,
   onBack,
+  onReTranscribe,
+  isReTranscribing,
+  onReTranslate,
+  isReTranslating,
 }: {
   recording: RecentRecording;
   onBack: () => void;
+  // Force a re-transcribe of this recording for the active language so an older
+  // transcript can be backfilled with timestamps. Undefined disables the
+  // affordance entirely.
+  onReTranscribe: ((force: boolean) => void) | undefined;
+  isReTranscribing: boolean;
+  // Force a re-translate of this recording (overwrites the existing translation).
+  // Undefined disables the affordance.
+  onReTranslate: ((force: boolean) => void) | undefined;
+  isReTranslating: boolean;
 }) {
-  const changeSignature = `${recording.transcripts.length}:${
-    recording.translationPath ?? ""
-  }`;
+  // The segments sidecar path is folded in so backfilling timestamps on an
+  // already-transcribed language (same count, same translation) still changes
+  // the signature and triggers a re-read once the sidecar lands.
+  const changeSignature = `${recording.transcripts
+    .map((transcript) => `${transcript.language}:${transcript.segmentsPath ?? ""}`)
+    .join("|")}:${recording.translationPath ?? ""}`;
   const { data, status, error, reload } = useRecordingTexts({
     filePath: recording.filePath,
     changeSignature,
@@ -111,6 +127,14 @@ export function TranscriptViewerPage({
       player.playRecording(recording);
     }
   };
+  // Per-sentence playback rides the same player as the top bar. Disabled when
+  // the local audio is gone, so timed rows still show their timestamp but no
+  // play control rather than pretending playback works.
+  const handlePlaySegment = recording.audioDeleted
+    ? undefined
+    : (startMs: number, endMs: number) =>
+        player.playSegment(recording, startMs, endMs);
+  const activeSegment = isActiveTrack ? player.activeSegment : null;
 
   const transcripts = data?.transcripts ?? [];
   const translations = data?.translations ?? [];
@@ -179,6 +203,23 @@ export function TranscriptViewerPage({
       : null;
 
   const trimmedQuery = query.trim();
+
+  // An older transcript with text but no timed segments can be backfilled by a
+  // forced re-transcribe. Gated on local audio existing (nothing to re-run
+  // without it) and on the transcript view being visible.
+  const canEnablePerSentence =
+    onReTranscribe !== undefined &&
+    !recording.audioDeleted &&
+    viewMode !== "translation" &&
+    activeTranscript !== null &&
+    !activeTranscript.missing &&
+    activeTranscript.text.trim().length > 0 &&
+    activeTranscript.segments.length === 0;
+
+  // Re-run the (whole-document) translation, overwriting the existing sidecar.
+  // Sits beside the re-transcribe action in the same bar.
+  const canReTranslate =
+    onReTranslate !== undefined && recording.translationPath !== null;
 
   return (
     <div className="transcript-viewer">
@@ -265,6 +306,38 @@ export function TranscriptViewerPage({
         />
       )}
 
+      {canEnablePerSentence || canReTranslate ? (
+        <div className="transcript-enable-timing">
+          <span className="transcript-enable-timing-text">
+            {canEnablePerSentence
+              ? "Enable per-sentence playback — re-transcribe with timestamps."
+              : "Re-run the translation for this recording."}
+          </span>
+          <div className="transcript-enable-timing-buttons">
+            {canEnablePerSentence ? (
+              <button
+                type="button"
+                className="transcript-enable-timing-action"
+                onClick={() => onReTranscribe?.(true)}
+                disabled={isReTranscribing}
+              >
+                {isReTranscribing ? "Re-transcribing…" : "Re-transcribe"}
+              </button>
+            ) : null}
+            {canReTranslate ? (
+              <button
+                type="button"
+                className="transcript-enable-timing-action"
+                onClick={() => onReTranslate?.(true)}
+                disabled={isReTranslating}
+              >
+                {isReTranslating ? "Re-translating…" : "Re-translate"}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {status === "error" ? (
         <div className="transcript-viewer-body is-single">
           <div className="transcript-error">
@@ -304,6 +377,8 @@ export function TranscriptViewerPage({
               onSelectSegment={setSelectedSegment}
               activeSegmentIndex={activeSegmentIndex}
               onActivateSegment={setActiveSegmentIndex}
+              activeSegment={activeSegment}
+              onPlaySegment={handlePlaySegment}
             />
           ) : null}
 
@@ -326,6 +401,8 @@ export function TranscriptViewerPage({
               onSelectSegment={setSelectedSegment}
               activeSegmentIndex={activeSegmentIndex}
               onActivateSegment={setActiveSegmentIndex}
+              activeSegment={null}
+              onPlaySegment={undefined}
             />
           ) : null}
         </div>

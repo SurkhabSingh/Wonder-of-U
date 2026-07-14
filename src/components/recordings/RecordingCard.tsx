@@ -20,6 +20,11 @@ import { TooltipWrap } from "../ui/Tooltip";
 type RecordingAction = (filePaths: string[]) => void | Promise<void>;
 type SingleRecordingAction = (filePath: string) => void | Promise<void>;
 type PushAction = (filePaths: string[], deckName?: string) => void | Promise<void>;
+// `force` re-runs translation on a recording that already has one.
+type TranslateAction = (
+  filePaths: string[],
+  force?: boolean,
+) => void | Promise<void>;
 
 export function RecordingCard({
   recording,
@@ -67,7 +72,7 @@ export function RecordingCard({
   onTranscribe: RecordingAction;
   onPushToAnki: PushAction;
   onAddFurigana: RecordingAction;
-  onTranslate: RecordingAction;
+  onTranslate: TranslateAction;
   onConvertToMp3: RecordingAction;
   onDelete: SingleRecordingAction;
   onView: SingleRecordingAction;
@@ -407,6 +412,15 @@ export function RecordingCard({
                   disabled={busyAction === "translateRecording"}
                 >
                   Translate
+                </DropdownMenuPrimitive.Item>
+              ) : null}
+              {recording.transcriptPath && recording.translationPath !== null ? (
+                <DropdownMenuPrimitive.Item
+                  className="action-menu-item"
+                  onSelect={() => void onTranslate([recording.filePath], true)}
+                  disabled={busyAction === "translateRecording"}
+                >
+                  Re-translate
                 </DropdownMenuPrimitive.Item>
               ) : null}
               {allowMp3Conversion &&

@@ -158,6 +158,7 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                                 language: transcript_language_key(&settings.whisper.language),
                                 file_path: transcript_path.display().to_string(),
                                 detected_language: recent_recording.transcript_language.clone(),
+                                segments_path: None,
                             });
                             recent_recording.bytes_written = fs::metadata(&audio_path)
                                 .map(|metadata| metadata.len())

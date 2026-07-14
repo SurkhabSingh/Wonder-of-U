@@ -356,6 +356,14 @@ function App() {
               <TranscriptViewerPage
                 recording={viewingRecording}
                 onBack={closeTranscriptViewer}
+                onReTranscribe={(force) =>
+                  void transcribeRecordings([viewingRecording.filePath], force)
+                }
+                isReTranscribing={busyAction === "transcribeRecording"}
+                onReTranslate={(force) =>
+                  void translateRecordings([viewingRecording.filePath], force)
+                }
+                isReTranslating={busyAction === "translateRecording"}
               />
             ) : (
               <div className="transcript-viewer">

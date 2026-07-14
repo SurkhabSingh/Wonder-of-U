@@ -6,7 +6,9 @@ use std::{
 
 use tauri::{AppHandle, Runtime};
 
-use crate::app_types::{RecentRecording, RecordingTextDocument, RecordingTexts};
+use crate::app_types::{
+    RecentRecording, RecordingSegment, RecordingTextDocument, RecordingTexts,
+};
 
 use super::find_recent_recording;
 
@@ -57,6 +59,7 @@ pub(crate) fn collect_recording_texts(
             &transcript.file_path,
             transcript.language.clone(),
             transcript.detected_language.clone(),
+            transcript.segments_path.as_deref(),
         ));
     }
 
@@ -77,6 +80,7 @@ pub(crate) fn collect_recording_texts(
                     .clone()
                     .unwrap_or_else(|| "auto".to_string()),
                 recording.transcript_language.clone(),
+                None,
             ));
         }
     }
@@ -88,6 +92,7 @@ pub(crate) fn collect_recording_texts(
             sandbox_root,
             translation_path,
             language,
+            None,
             None,
         ));
     }
@@ -107,15 +112,30 @@ fn read_recording_text_document(
     file_path: &str,
     language: String,
     detected_language: Option<String>,
+    segments_path: Option<&str>,
 ) -> RecordingTextDocument {
     let text = read_text_within_sandbox(sandbox_root, Path::new(file_path));
+    let segments = segments_path
+        .map(|path| read_segments_within_sandbox(sandbox_root, Path::new(path)))
+        .unwrap_or_default();
     RecordingTextDocument {
         language,
         detected_language,
         file_path: file_path.to_string(),
         missing: text.is_none(),
         text: text.unwrap_or_default(),
+        segments,
     }
+}
+
+/// Read and deserialize the `{stem}.{lang}.segments.json` sidecar through the same
+/// sandbox guard used for transcripts (the file lives beside the audio, so it
+/// passes). A missing, out-of-sandbox, or unparseable sidecar degrades to an empty
+/// Vec so the read never fails over absent segments.
+fn read_segments_within_sandbox(sandbox_root: &Path, candidate: &Path) -> Vec<RecordingSegment> {
+    read_text_within_sandbox(sandbox_root, candidate)
+        .and_then(|raw| serde_json::from_str::<Vec<RecordingSegment>>(&raw).ok())
+        .unwrap_or_default()
 }
 
 /// Read a file only if it resolves inside `sandbox_root`. Returns `None` (never
@@ -218,6 +238,7 @@ mod tests {
             language: "en".into(),
             file_path: transcript_path.display().to_string(),
             detected_language: Some("en".into()),
+            segments_path: None,
         });
 
         let texts = collect_recording_texts(dir.path(), &recording);
@@ -246,11 +267,13 @@ mod tests {
             language: "en".into(),
             file_path: english_path.display().to_string(),
             detected_language: Some("en".into()),
+            segments_path: None,
         });
         recording.transcripts.push(RecordingTranscript {
             language: "ja".into(),
             file_path: japanese_path.display().to_string(),
             detected_language: Some("ja".into()),
+            segments_path: None,
         });
 
         let texts = collect_recording_texts(dir.path(), &recording);
@@ -307,6 +330,7 @@ mod tests {
             language: "en".into(),
             file_path: transcript_path.display().to_string(),
             detected_language: None,
+            segments_path: None,
         });
 
         let texts = collect_recording_texts(dir.path(), &recording);
@@ -332,6 +356,7 @@ mod tests {
             language: "en".into(),
             file_path: secret_path.display().to_string(),
             detected_language: None,
+            segments_path: None,
         });
 
         let texts = collect_recording_texts(sandbox.path(), &recording);
@@ -357,6 +382,7 @@ mod tests {
             language: "en".into(),
             file_path: transcript_path.display().to_string(),
             detected_language: None,
+            segments_path: None,
         });
 
         let texts = collect_recording_texts(dir.path(), &recording);
@@ -379,6 +405,7 @@ mod tests {
             language: "en".into(),
             file_path: transcript_path.display().to_string(),
             detected_language: Some("en".into()),
+            segments_path: None,
         });
         // The same file reached by a different-but-equivalent path (redundant
         // `.` component) must still be recognized as a duplicate.
@@ -399,5 +426,67 @@ mod tests {
             "the primary transcript must not be listed twice"
         );
         assert_eq!(texts.transcripts[0].text, "hello");
+    }
+
+    #[test]
+    fn reads_segments_sidecar_beside_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio_path = dir.path().join("clip.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+        let transcript_path = dir.path().join("clip.transcript.txt");
+        fs::write(&transcript_path, "hello world").unwrap();
+        let segments_path = dir.path().join("clip.en.segments.json");
+        fs::write(
+            &segments_path,
+            r#"[{"text":"hello","startMs":0,"endMs":1500},{"text":"world","startMs":1500,"endMs":2960}]"#,
+        )
+        .unwrap();
+
+        let mut recording = recording_with(&audio_path.display().to_string());
+        recording.transcripts.push(RecordingTranscript {
+            language: "en".into(),
+            file_path: transcript_path.display().to_string(),
+            detected_language: Some("en".into()),
+            segments_path: Some(segments_path.display().to_string()),
+        });
+
+        let texts = collect_recording_texts(dir.path(), &recording);
+
+        assert_eq!(texts.transcripts.len(), 1);
+        let document = &texts.transcripts[0];
+        assert_eq!(document.segments.len(), 2);
+        assert_eq!(document.segments[0].text, "hello");
+        assert_eq!(document.segments[0].start_ms, 0);
+        assert_eq!(document.segments[0].end_ms, 1500);
+        assert_eq!(document.segments[1].text, "world");
+        assert_eq!(document.segments[1].end_ms, 2960);
+    }
+
+    #[test]
+    fn missing_or_unparseable_segments_degrade_to_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio_path = dir.path().join("clip.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+        let transcript_path = dir.path().join("clip.transcript.txt");
+        fs::write(&transcript_path, "hello").unwrap();
+        // A sidecar path that was never written.
+        let segments_path = dir.path().join("clip.en.segments.json");
+
+        let mut recording = recording_with(&audio_path.display().to_string());
+        recording.transcripts.push(RecordingTranscript {
+            language: "en".into(),
+            file_path: transcript_path.display().to_string(),
+            detected_language: Some("en".into()),
+            segments_path: Some(segments_path.display().to_string()),
+        });
+
+        let texts = collect_recording_texts(dir.path(), &recording);
+
+        assert_eq!(texts.transcripts.len(), 1);
+        assert!(!texts.transcripts[0].missing);
+        assert!(
+            texts.transcripts[0].segments.is_empty(),
+            "a missing segments sidecar must not error the read"
+        );
     }
 }

@@ -170,6 +170,16 @@ pub(crate) struct AppSettings {
     pub(crate) start_minimized: bool,
 }
 
+/// One time-aligned sentence/segment parsed from whisper's `--output-json`
+/// sidecar, used to drive per-sentence audio playback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecordingSegment {
+    pub(crate) text: String,
+    pub(crate) start_ms: u64,
+    pub(crate) end_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingTranscript {
@@ -177,6 +187,11 @@ pub(crate) struct RecordingTranscript {
     pub(crate) file_path: String,
     #[serde(default)]
     pub(crate) detected_language: Option<String>,
+    /// Path to the `{stem}.{lang}.segments.json` sidecar beside the audio, when
+    /// whisper produced parseable per-segment offsets. `None` for transcripts
+    /// created before segments existed or when the json was missing/unparseable.
+    #[serde(default)]
+    pub(crate) segments_path: Option<String>,
 }
 
 /// A single transcript or translation text file, resolved for the reader view.
@@ -192,6 +207,11 @@ pub(crate) struct RecordingTextDocument {
     pub(crate) file_path: String,
     pub(crate) text: String,
     pub(crate) missing: bool,
+    /// Time-aligned segments for per-sentence playback, resolved from the
+    /// transcript's `segments_path` sidecar. Empty when there is no sidecar or it
+    /// could not be read/parsed — never a reason to fail the read.
+    #[serde(default)]
+    pub(crate) segments: Vec<RecordingSegment>,
 }
 
 /// The full text payload behind the transcript viewer for one recording: every

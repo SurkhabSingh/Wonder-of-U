@@ -128,7 +128,9 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
         return None;
     }
 
-    let item = translate_single_recording(app, bridge, recording);
+    // The translate-after-transcription path never forces a re-translate; `force`
+    // is only for the manual re-translate command.
+    let item = translate_single_recording(app, bridge, recording, false);
 
     match item.status.as_str() {
         "success" => Some("Translated.".to_string()),
@@ -141,14 +143,28 @@ fn translate_single_recording<R: Runtime>(
     app: &AppHandle<R>,
     bridge: &TranslationBridge,
     recording: RecentRecording,
+    force: bool,
 ) -> RecordingActionItem {
-    if recording.translation_path.is_some() {
+    // `force` re-translates even recordings that already have a translation,
+    // deterministically overwriting {stem}.translation.{lang}.txt.
+    if !force && recording.translation_path.is_some() {
         return RecordingActionItem {
             file_path: recording.file_path,
             status: "skipped".into(),
             message: "Already translated.".into(),
             note_id: recording.anki_note_id,
         };
+    }
+
+    // Fail fast when no worker is connected: otherwise submit() queues a job that
+    // no browser ever claims and await_result() blocks for the full 180s timeout,
+    // leaving the UI stuck on the busy overlay. The auto-translate path already
+    // guards this way; the manual/re-translate path must too.
+    if !bridge.is_connected() {
+        return failed_translation_item(
+            &recording,
+            "The browser extension is not connected. Open it in App Support mode, then try again.",
+        );
     }
 
     let transcript_path = match recording.transcript_path.clone() {
@@ -337,6 +353,7 @@ pub(crate) fn play_recording_inner<R: Runtime>(
 pub(crate) fn translate_recordings_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
+    force: bool,
 ) -> Result<RecordingBatchResult, String> {
     let recordings = selected_recordings(app, file_paths)?;
     let bridge = app.state::<TranslationBridge>();
@@ -380,7 +397,7 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
             continue;
         }
 
-        items.push(translate_single_recording(app, bridge, recording));
+        items.push(translate_single_recording(app, bridge, recording, force));
     }
 
     let success_count = items.iter().filter(|item| item.status == "success").count();
