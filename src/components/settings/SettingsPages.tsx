@@ -90,9 +90,11 @@ export function SettingsPages({
   onUpdateAnkiField: (field: keyof AnkiFieldMapping, value: string) => void;
 }) {
   if (
+    activePage === "home" ||
     activePage === "recorder" ||
     activePage === "recordings" ||
-    activePage === "transcript"
+    activePage === "transcript" ||
+    activePage === "setup"
   ) {
     return null;
   }

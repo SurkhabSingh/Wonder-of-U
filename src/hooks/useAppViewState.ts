@@ -1,26 +1,22 @@
 import { useEffect, useState } from "react";
-import {
-  MODEL_OPTIONS,
-  RECOMMENDED_RUNTIME_VERSION,
-} from "../constants";
-import { whisperStatusLabel } from "../lib/helpers";
+import { MODEL_OPTIONS, RECOMMENDED_RUNTIME_VERSION } from "../constants";
 import {
   activePageLabel,
   createDetailPages,
-  createSetupPages,
+  createSetupChecklist,
+  createSetupEntry,
   createWorkflowPages,
+  summarizeSetupChecklist,
 } from "../lib/navigation";
 import type {
   AppBootstrap,
   AppPage,
   AppSettings,
   BusyAction,
-  AnkiCatalog,
 } from "../types";
 
 type UseAppViewStateOptions = {
   activePage: AppPage;
-  ankiCatalog: AnkiCatalog;
   bootstrap: AppBootstrap;
   busyAction: BusyAction;
   settingsDraft: AppSettings;
@@ -28,7 +24,6 @@ type UseAppViewStateOptions = {
 
 export function useAppViewState({
   activePage,
-  ankiCatalog,
   bootstrap,
   busyAction,
   settingsDraft,
@@ -125,9 +120,6 @@ export function useAppViewState({
     bootstrap.modelDownload.status === "paused" ||
     bootstrap.modelDownload.status === "cancelling";
   const hotkeyTooltip = `Start recording: ${bootstrap.shell.hotkeys.start}\nStop recording: ${bootstrap.shell.hotkeys.stop}\nShow window: ${bootstrap.shell.hotkeys.showWindow}`;
-  const selectedModel =
-    MODEL_OPTIONS.find((option) => option.id === settingsDraft.whisper.modelChoice) ??
-    MODEL_OPTIONS[2];
   const activeRuntimeVersion =
     settingsDraft.whisper.runtimeVersion ||
     bootstrap.whisperDetection.runtimeVersion ||
@@ -152,17 +144,40 @@ export function useAppViewState({
       ? bootstrap.whisperDetection.modelPath ?? ""
       : "");
   const workflowPages = createWorkflowPages(bootstrap.recentRecordings.length);
-  const setupPages = createSetupPages({
-    whisperStatus: whisperStatusLabel(bootstrap.whisperDetection.status),
-    runtimeVersion: activeRuntimeVersion,
-    modelLabel: selectedModel.label,
+  const modelLabel =
+    MODEL_OPTIONS.find(
+      (option) => option.id === settingsDraft.whisper.modelChoice,
+    )?.label ??
+    settingsDraft.whisper.modelChoice ??
+    null;
+  const ankiSummary = settingsDraft.anki.deckName
+    ? `${settingsDraft.anki.deckName}${
+        settingsDraft.anki.noteType ? ` · ${settingsDraft.anki.noteType}` : ""
+      }`
+    : null;
+  const themeLabel =
+    settingsDraft.theme === "dark"
+      ? "Dark"
+      : settingsDraft.theme === "light"
+        ? "Light"
+        : "System";
+  const setupChecklist = createSetupChecklist({
+    cliReady: runtimeInstalled,
+    modelReady: modelInstalled,
     ffmpegReady: bootstrap.ffmpegDetection.status === "ready",
-    ankiReady: ankiCatalog.status === "ready",
+    ankiConfigured: Boolean(settingsDraft.anki.fields.transcription),
+    runtimeVersion: activeRuntimeVersion,
+    modelLabel,
+    ankiSummary,
+    themeLabel,
   });
+  const setupSummary = summarizeSetupChecklist(setupChecklist);
+  const setupEntry = createSetupEntry(setupSummary);
   const detailPages = createDetailPages();
   const currentPageLabel = activePageLabel(activePage, [
     ...workflowPages,
-    ...setupPages,
+    setupEntry,
+    ...setupChecklist,
     ...detailPages,
   ]);
 
@@ -181,7 +196,9 @@ export function useAppViewState({
     resolvedModelPath,
     recorderBusy,
     runtimeInstalled,
-    setupPages,
+    setupChecklist,
+    setupEntry,
+    setupSummary,
     showBusyOverlay,
     workflowPages,
   };

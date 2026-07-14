@@ -14,48 +14,152 @@ export type RecordingFilterTab = {
 
 export function createWorkflowPages(recordingCount: number): PageNavigationItem[] {
   return [
-    { id: "recorder", label: "Recorder", description: "Capture system audio" },
+    { id: "home", label: "Home", description: "Your work at a glance" },
     {
       id: "recordings",
-      label: "Saved Recordings",
+      label: "Library",
       description: `${recordingCount} local item${recordingCount === 1 ? "" : "s"}`,
     },
   ];
 }
 
-export function createSetupPages({
-  whisperStatus,
+export type SetupChecklistStep = {
+  id: AppPage;
+  label: string;
+  description: string;
+  done: boolean | null;
+  required: boolean;
+  // The step's current configured value (model name, deck, runtime version,
+  // theme), shown in place of the generic description so the checklist reads
+  // as a status board. Null falls back to the description.
+  value?: string | null;
+};
+
+export type SetupChecklistSummary = {
+  total: number;
+  done: number;
+  allDone: boolean;
+};
+
+// Every setup surface lives behind the single "Setup" checklist entry. This
+// group drives the sidebar's active-state highlight when the user drills into
+// one of the individual settings pages from the checklist.
+export const SETUP_PAGE_IDS: AppPage[] = [
+  "setup",
+  "preferences",
+  "whisper",
+  "runtime",
+  "model",
+  "storage",
+  "anki",
+];
+
+export function isSetupPage(page: AppPage): boolean {
+  return SETUP_PAGE_IDS.includes(page);
+}
+
+export function createSetupChecklist({
+  cliReady,
+  modelReady,
+  ffmpegReady,
+  ankiConfigured,
   runtimeVersion,
   modelLabel,
-  ffmpegReady,
-  ankiReady,
+  ankiSummary,
+  themeLabel,
 }: {
-  whisperStatus: string;
-  runtimeVersion: string;
-  modelLabel: string;
+  cliReady: boolean;
+  modelReady: boolean;
   ffmpegReady: boolean;
-  ankiReady: boolean;
-}): PageNavigationItem[] {
+  ankiConfigured: boolean;
+  runtimeVersion?: string | null;
+  modelLabel?: string | null;
+  ankiSummary?: string | null;
+  themeLabel?: string | null;
+}): SetupChecklistStep[] {
   return [
-    { id: "preferences", label: "App Preferences", description: "Theme and folders" },
     {
-      id: "whisper",
-      label: "Whisper Status",
-      description: whisperStatus,
+      id: "runtime",
+      label: "Whisper CLI",
+      description: cliReady
+        ? "Runtime installed"
+        : "Install the Whisper runtime",
+      done: cliReady,
+      required: true,
+      value: cliReady ? runtimeVersion ?? null : null,
     },
-    { id: "runtime", label: "Whisper CLI", description: runtimeVersion },
-    { id: "model", label: "Whisper Model", description: modelLabel },
     {
-      id: "storage",
-      label: "MP3 Compression",
-      description: ffmpegReady ? "FFmpeg ready" : "FFmpeg missing",
+      id: "model",
+      label: "Whisper Model",
+      description: modelReady
+        ? "Model downloaded"
+        : "Download a transcription model",
+      done: modelReady,
+      required: true,
+      value: modelReady ? modelLabel ?? null : null,
     },
     {
       id: "anki",
       label: "Anki Mapping",
-      description: ankiReady ? "Connected" : "Saved mapping",
+      description: ankiConfigured
+        ? "Note fields mapped"
+        : "Map your Anki note fields",
+      done: ankiConfigured,
+      required: true,
+      value: ankiConfigured ? ankiSummary ?? null : null,
+    },
+    {
+      id: "whisper",
+      label: "Whisper Status",
+      description:
+        cliReady && modelReady
+          ? "Ready to transcribe"
+          : "Waiting on the CLI and model",
+      done: cliReady && modelReady,
+      required: false,
+    },
+    {
+      id: "storage",
+      label: "MP3 Compression",
+      description: ffmpegReady
+        ? "FFmpeg ready"
+        : "Install FFmpeg for optional MP3 conversion",
+      done: ffmpegReady,
+      required: false,
+    },
+    {
+      id: "preferences",
+      label: "App Preferences",
+      description: "Theme, folders, and feature toggles",
+      done: null,
+      required: false,
+      value: themeLabel ?? null,
     },
   ];
+}
+
+export function summarizeSetupChecklist(
+  steps: SetupChecklistStep[],
+): SetupChecklistSummary {
+  const required = steps.filter((step) => step.required);
+  const done = required.filter((step) => step.done === true).length;
+  return {
+    total: required.length,
+    done,
+    allDone: required.length > 0 && done === required.length,
+  };
+}
+
+export function createSetupEntry(
+  summary: SetupChecklistSummary,
+): PageNavigationItem {
+  return {
+    id: "setup",
+    label: "Setup",
+    description: summary.allDone
+      ? "Setup complete"
+      : `${summary.done} of ${summary.total} steps done`,
+  };
 }
 
 export function createDetailPages(): PageNavigationItem[] {
@@ -102,5 +206,5 @@ export function activePageLabel(
   activePage: AppPage,
   pages: PageNavigationItem[],
 ): string {
-  return pages.find((page) => page.id === activePage)?.label ?? "Recorder";
+  return pages.find((page) => page.id === activePage)?.label ?? "Home";
 }

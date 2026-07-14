@@ -537,6 +537,12 @@ input::placeholder {
   font-size: 14px;
 }
 
+.page-primary-nav {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
 .page-accordion {
   display: grid;
   gap: 8px;
@@ -616,6 +622,14 @@ input::placeholder {
 
 .page-link.active span {
   color: var(--text-strong);
+}
+
+.page-setup-nav {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 .tab-button {
@@ -758,17 +772,13 @@ input::placeholder {
 
 .panel-header,
 .panel-actions,
-.recording-head,
-.recording-meta,
 .action-row {
   display: flex;
   gap: 10px;
   align-items: center;
 }
 
-.panel-header,
-.recording-head,
-.recording-meta {
+.panel-header {
   justify-content: space-between;
 }
 
@@ -988,48 +998,90 @@ input::placeholder {
   margin-top: 10px;
 }
 
+/* Mirrors the Home recent-item rhythm: a flat row with the filename and
+   metadata on the left and state chips + the Actions menu on the right. */
 .recording-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: center;
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.recording-main {
+  min-width: 0;
+  flex: 1 1 200px;
   display: grid;
-  gap: 5px;
+  gap: var(--space-1);
+}
+
+.recording-name {
+  color: var(--text-strong);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .recording-toolbar-actions,
-.recording-actions,
-.recording-state-row {
+.recording-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: var(--space-4);
   align-items: center;
 }
 
+.recording-state-row {
+  flex: 0 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .recording-filter-root {
-  margin-top: 12px;
+  margin-top: var(--space-6);
 }
 
 .recording-filter-tabs {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
-  padding: 4px;
+  gap: var(--space-3);
+  padding: var(--space-2);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface-raised);
 }
 
+/* Each tab reads like a Home stat tile: a labelled, semantically tinted
+   count that lifts its border + surface when active. */
 .recording-filter-tab {
   min-width: 0;
   min-height: 34px;
   display: flex;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-4);
   align-items: center;
-  padding: 6px 8px;
+  padding: var(--space-3) var(--space-4);
   border-color: transparent;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
 }
 
 .recording-filter-tab span {
@@ -1039,15 +1091,21 @@ input::placeholder {
   white-space: nowrap;
 }
 
-.recording-filter-tab strong {
-  min-width: 22px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-active);
-  color: var(--text-strong);
-  font-size: 10px;
-  font-weight: 650;
-  text-align: center;
+/* Semantic count tint, matching the Home stat palette. */
+.recording-filter-tab[data-filter="needsTranscription"] .status-chip-count {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.recording-filter-tab[data-filter="needsTranslation"] .status-chip-count {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.recording-filter-tab[data-filter="needsAnki"] .status-chip-count,
+.recording-filter-tab[data-filter="complete"] .status-chip-count {
+  background: var(--success-soft);
+  color: var(--success);
 }
 
 .recording-filter-tab[data-state="active"] {
@@ -1061,14 +1119,16 @@ input::placeholder {
   min-height: 44px;
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-5);
   align-items: center;
-  margin-top: 10px;
-  margin-bottom: 12px;
-  padding: 7px 9px;
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-6);
+  padding: var(--space-4) var(--space-4);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface-raised);
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
 }
 
 .recording-toolbar-selected {
@@ -1084,15 +1144,15 @@ input::placeholder {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: var(--space-3);
   align-items: center;
 }
 
 .selection-summary {
   flex: 0 0 auto;
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 
 .target-deck-pill {
@@ -1100,17 +1160,19 @@ input::placeholder {
   max-width: 260px;
   display: inline-flex;
   align-items: center;
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-4);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text-strong);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
 }
 
 .target-deck-trigger {
@@ -1144,15 +1206,15 @@ input::placeholder {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding-top: 10px;
+  gap: var(--space-6);
+  padding-top: var(--space-5);
   border-top: 1px solid var(--border);
 }
 
 .recording-page-summary,
 .recording-page-number {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   white-space: nowrap;
 }
 
@@ -1160,12 +1222,12 @@ input::placeholder {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .recording-page-actions .compact {
   min-height: 30px;
-  padding: 5px 10px;
+  padding: var(--space-2) var(--space-5);
 }
 
 .recording-actions {
@@ -1263,17 +1325,9 @@ input::placeholder {
   background: var(--border);
 }
 
-.recording-state,
 .empty-state {
   color: var(--text-subtle);
   font-size: 11px;
-}
-
-.success-state {
-  color: var(--success);
-}
-
-.empty-state {
   margin: 12px 0 0;
 }
 
@@ -1292,16 +1346,6 @@ input::placeholder {
   accent-color: var(--accent);
 }
 
-.recording-head strong {
-  color: var(--text-strong);
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.recording-head span,
-.recording-meta span,
 .path-copy,
 .microcopy {
   color: var(--text-muted);
@@ -1403,6 +1447,170 @@ input::placeholder {
 .update-card.error {
   border-color: color-mix(in srgb, var(--error) 36%, var(--border));
   background: var(--error-soft);
+}
+
+.setup-checklist {
+  display: grid;
+  gap: var(--space-6);
+  align-content: start;
+}
+
+/* Inside the grid the container gap owns vertical rhythm. */
+.setup-checklist .microcopy {
+  margin: 0;
+}
+
+/* A thin "Optional" divider (Home's kicker voice) between the required
+   steps and the optional ones. */
+.setup-group-label {
+  margin: var(--space-2) 0 0;
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* The rewarding "all set" finish — flat success row, no shadow/gradient. */
+.setup-complete-row {
+  display: flex;
+  gap: var(--space-5);
+  align-items: center;
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid color-mix(in srgb, var(--success) 32%, var(--border));
+  border-radius: var(--radius-lg);
+  background: var(--success-soft);
+}
+
+.setup-complete-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.setup-progress {
+  padding: 3px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.setup-progress.complete {
+  border-color: color-mix(in srgb, var(--success) 32%, var(--border));
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.setup-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-step {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-6);
+  align-items: center;
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.setup-step:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-active);
+  opacity: 1;
+}
+
+/* "Do this next": the first required, still-to-do step gets an accent rail
+   and a lifted surface so the eye lands on the next action. */
+.setup-step-next {
+  border-color: var(--border-strong);
+  border-left: 2px solid var(--accent);
+  background: var(--surface-active);
+}
+
+.setup-step-marker {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.setup-step-marker.done {
+  border-color: transparent;
+  background: var(--success);
+  color: var(--on-primary);
+}
+
+.setup-step-marker.todo {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+}
+
+.setup-step-marker.optional {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  color: var(--text-subtle);
+}
+
+.setup-step-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setup-step-label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.setup-step-optional {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-active);
+  color: var(--text-subtle);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.setup-step-body small {
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-step-body small.setup-step-value {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .progress-track {
@@ -1795,6 +2003,13 @@ input::placeholder {
   background: var(--segment-hover);
 }
 
+/* Positional link: hovering or selecting a row lights up the row at the same
+   index in the other pane, using the hover tint so the pair reads as one
+   intentional link rather than a new colour. */
+.transcript-segment.is-linked {
+  background: var(--segment-hover);
+}
+
 .transcript-segment.is-selected {
   border-left-color: var(--segment-active-rail);
   background: var(--accent-soft);
@@ -1961,5 +2176,322 @@ input::placeholder {
 
   .transcript-find-input {
     width: 180px;
+  }
+}
+
+/* ============================================================
+   Home screen (work-first landing)
+   ============================================================ */
+
+.home-view {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  gap: var(--space-6);
+  align-content: start;
+  overflow-y: auto;
+  padding-right: var(--space-2);
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.home-view::-webkit-scrollbar {
+  width: 8px;
+}
+
+.home-view::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.home-view::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+/* Compact capture card — same control contract as the recorder page. */
+.home-record-card {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-7);
+}
+
+.home-record-info {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.home-record-status {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  margin-top: var(--space-3);
+}
+
+.home-record-elapsed {
+  color: var(--text-strong);
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.home-record-phase {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.home-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: center;
+}
+
+/* The Shortcuts hint sits beside real buttons; style it as an
+   informational tooltip cue so it doesn't read as a disabled button. */
+.home-record-actions .tooltip-badge {
+  gap: 5px;
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.home-record-actions .tooltip-badge::before {
+  content: "\24D8";
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-subtle);
+}
+
+/* "What needs doing" — three tiles that jump into the library. */
+.home-needs-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.home-stat {
+  min-height: 0;
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.home-stat:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-active);
+  opacity: 1;
+}
+
+.home-stat-value {
+  color: var(--text-strong);
+  font-size: var(--text-2xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.home-stat-value.is-warning {
+  color: var(--warning);
+}
+
+.home-stat-value.is-accent {
+  color: var(--accent);
+}
+
+.home-stat-value.is-success {
+  color: var(--success);
+}
+
+.home-stat-label {
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* Recent recordings — name opens the reader, chips report state. */
+.home-recent-list {
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+  margin-top: var(--space-6);
+  padding: 0;
+  list-style: none;
+}
+
+.home-recent-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-5);
+  align-items: center;
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.home-recent-main {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.home-recent-name {
+  color: var(--text-strong);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-recent-meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Persistent muted underline so the read action is discoverable at rest,
+   not only on hover (where it brightens to the accent color). */
+.home-recent-main .recording-filename-button,
+.recording-main .recording-filename-button {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.home-recent-chips {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
+
+/* One shared state-chip scale across Home, Library, and Setup. The
+   `.home-chip*` aliases keep the Home reference screen pixel-identical. */
+.status-chip,
+.home-chip {
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.status-chip-neutral {
+  background: var(--surface-active);
+  color: var(--text-muted);
+}
+
+.status-chip-warning,
+.home-chip-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.status-chip-accent,
+.home-chip-accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.status-chip-success,
+.home-chip-success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.status-chip-error {
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+/* Count-badge variant used on the Library filter tabs. */
+.status-chip-count {
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-active);
+  color: var(--text-strong);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  text-align: center;
+}
+
+/* Import drop-zone — visual placeholder only (no handlers yet). */
+.home-dropzone {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: center;
+  padding: var(--space-9) var(--space-8);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  text-align: center;
+}
+
+.home-dropzone-icon {
+  color: var(--text-muted);
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.home-dropzone-label {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-mid);
+}
+
+.home-dropzone small {
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+}
+
+/* Library name search — sits in the panel header. */
+.library-search {
+  flex: 0 1 220px;
+  width: 220px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 32px;
+}
+
+/* Against the dark panel the input can read as flat text, so lift its
+   border and add a faint inset to keep it legible as a field at rest. */
+:root[data-theme="dark"] .library-search:not(:focus-visible) {
+  border-color: var(--border-strong);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 820px) {
+  .home-needs-row {
+    grid-template-columns: 1fr;
+  }
+
+  .home-record-card {
+    align-items: flex-start;
   }
 }

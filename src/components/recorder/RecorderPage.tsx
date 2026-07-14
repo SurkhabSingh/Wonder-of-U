@@ -2,7 +2,7 @@ import { formatDuration } from "../../lib/format";
 import type { RecorderPhase } from "../../types";
 import { TooltipBadge } from "../ui/Tooltip";
 
-function recorderStatusLabel(phase: RecorderPhase, statusText: string): string {
+export function recorderStatusLabel(phase: RecorderPhase, statusText: string): string {
   return phase === "idle"
     ? "Ready"
     : phase === "recording"

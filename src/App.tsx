@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
+import { HomePage } from "./components/home/HomePage";
 import { PageSidebar } from "./components/layout/PageSidebar";
 import { RecorderPage } from "./components/recorder/RecorderPage";
 import { SavedRecordingsPage } from "./components/recordings/SavedRecordingsPage";
 import { SettingsPages } from "./components/settings/SettingsPages";
+import { SetupChecklist } from "./components/settings/SetupChecklist";
 import { TranscriptViewerPage } from "./components/transcripts/TranscriptViewerPage";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { useAnkiCatalog } from "./hooks/useAnkiCatalog";
@@ -34,7 +36,7 @@ function App() {
     updateSettings,
   } = useAppBootstrap();
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
-  const [activePage, setActivePage] = useState<AppPage>("recorder");
+  const [activePage, setActivePage] = useState<AppPage>("home");
   const [viewingRecordingPath, setViewingRecordingPath] = useState<string | null>(
     null,
   );
@@ -113,6 +115,7 @@ function App() {
     recordingPageCount,
     recordingPageEnd,
     recordingPageStart,
+    recordingSearch,
     filteredRecordingsCount,
     recordingPushedToCurrentAnkiDeck,
     recordingPushedToDeck,
@@ -127,6 +130,7 @@ function App() {
     setOpenRecordingMenuPath,
     setRecordingFilter,
     setRecordingPage,
+    setRecordingSearch,
     toggleRecordingSelection,
     untranslatedRecordings,
     untranscribedRecordings,
@@ -153,12 +157,13 @@ function App() {
     resolvedCliPath,
     resolvedModelPath,
     runtimeInstalled,
-    setupPages,
+    setupChecklist,
+    setupEntry,
+    setupSummary,
     showBusyOverlay,
     workflowPages,
   } = useAppViewState({
     activePage,
-    ankiCatalog: displayedAnkiCatalog,
     bootstrap,
     busyAction,
     settingsDraft,
@@ -246,11 +251,35 @@ function App() {
             activePage={activePage}
             activePageLabel={currentPageLabel}
             workflowPages={workflowPages}
-            setupPages={setupPages}
+            setupEntry={setupEntry}
             onPageSelect={setActivePage}
           />
 
           <section className="content-column">
+          {activePage === "home" ? (
+            <HomePage
+              elapsedMs={elapsedRecordingMs}
+              phase={bootstrap.shell.phase}
+              statusText={bootstrap.shell.statusText}
+              hotkeyTooltip={hotkeyTooltip}
+              recorderBusy={recorderBusy}
+              isRecording={isRecording}
+              stopBusy={busyAction === "stop"}
+              anyBusy={busyAction !== null}
+              onStartRecording={() => void startRecording()}
+              onStopRecording={() => void stopRecording()}
+              onHideToTray={() => void hideToTray()}
+              recentRecordings={bootstrap.recentRecordings}
+              needsTranscriptCount={untranscribedRecordings.length}
+              needsTranslationCount={untranslatedRecordings.length}
+              readyForAnkiCount={pushableRecordings.length}
+              transcriptionLanguage={settingsDraft.whisper.language}
+              recordingPushedToCurrentAnkiDeck={recordingPushedToCurrentAnkiDeck}
+              onView={openTranscriptViewer}
+              onOpenLibrary={() => setActivePage("recordings")}
+            />
+          ) : null}
+
           {activePage === "recorder" ? (
             <RecorderPage
               elapsedMs={elapsedRecordingMs}
@@ -278,6 +307,7 @@ function App() {
               recordingPageCount={recordingPageCount}
               recordingPageStart={recordingPageStart}
               recordingPageEnd={recordingPageEnd}
+              recordingSearch={recordingSearch}
               filteredRecordingsCount={filteredRecordingsCount}
               selectedRecordings={selectedRecordings}
               visibleSelectedPaths={visibleSelectedPaths}
@@ -305,6 +335,7 @@ function App() {
               recordingPushedToDeck={recordingPushedToDeck}
               recordingPushedToCurrentAnkiDeck={recordingPushedToCurrentAnkiDeck}
               onFilterChange={setRecordingFilter}
+              onSearchChange={setRecordingSearch}
               onPageChange={setRecordingPage}
               onDefaultDeckChange={(deck) =>
                 updateSettings({
@@ -357,6 +388,14 @@ function App() {
                 </div>
               </div>
             )
+          ) : null}
+
+          {activePage === "setup" ? (
+            <SetupChecklist
+              steps={setupChecklist}
+              summary={setupSummary}
+              onNavigate={setActivePage}
+            />
           ) : null}
 
           <SettingsPages

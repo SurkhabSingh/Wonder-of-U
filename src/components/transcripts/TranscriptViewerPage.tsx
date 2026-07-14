@@ -97,6 +97,14 @@ export function TranscriptViewerPage({
   const [viewMode, setViewMode] = useState<TranscriptViewMode>("sideBySide");
   const [query, setQuery] = useState("");
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  // Links transcript row i to translation row i by POSITION only. Today's
+  // translation is a whole-document translation, so row i on one side is not
+  // guaranteed to be the semantic counterpart of row i on the other — the
+  // pairing is purely positional. Exact per-line alignment arrives with
+  // per-segment translation; there is no semantic matching here.
+  const [activeSegmentIndex, setActiveSegmentIndex] = useState<number | null>(
+    null,
+  );
 
   const activeTranscript = useMemo<RecordingTextDocument | null>(() => {
     if (transcripts.length === 0) {
@@ -252,6 +260,8 @@ export function TranscriptViewerPage({
               missingLabel="The transcript file is missing from this machine."
               selectedSegment={selectedSegment}
               onSelectSegment={setSelectedSegment}
+              activeSegmentIndex={activeSegmentIndex}
+              onActivateSegment={setActiveSegmentIndex}
             />
           ) : null}
 
@@ -272,6 +282,8 @@ export function TranscriptViewerPage({
               missingLabel="The translation file is missing from this machine."
               selectedSegment={selectedSegment}
               onSelectSegment={setSelectedSegment}
+              activeSegmentIndex={activeSegmentIndex}
+              onActivateSegment={setActiveSegmentIndex}
             />
           ) : null}
         </div>

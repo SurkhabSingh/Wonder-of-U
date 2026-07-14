@@ -20,6 +20,51 @@ export function recordingHasTranscriptForLanguage(
   );
 }
 
+export type RecordingChipTone =
+  | "neutral"
+  | "accent"
+  | "success"
+  | "warning"
+  | "error";
+
+export type RecordingChip = {
+  label: string;
+  tone: RecordingChipTone;
+};
+
+// The at-a-glance state vocabulary shared by the Home recent list and the
+// Library card: warning = needs transcript, accent = needs translation,
+// success = ready to push to Anki.
+export function recordingChips(
+  recording: RecentRecording,
+  transcriptionLanguage: string,
+  recordingPushedToCurrentAnkiDeck: (recording: RecentRecording) => boolean,
+): RecordingChip[] {
+  const hasTranscript = recordingHasTranscriptForLanguage(
+    recording,
+    transcriptionLanguage,
+  );
+  const chips: RecordingChip[] = [];
+
+  if (!hasTranscript) {
+    chips.push({ label: "Needs transcript", tone: "warning" });
+  }
+
+  if (hasTranscript && recording.translationPath === null) {
+    chips.push({ label: "Needs translation", tone: "accent" });
+  }
+
+  if (
+    hasTranscript &&
+    !recording.audioDeleted &&
+    !recordingPushedToCurrentAnkiDeck(recording)
+  ) {
+    chips.push({ label: "Ready for Anki", tone: "success" });
+  }
+
+  return chips;
+}
+
 export function recordingAnkiPushForTarget(
   recording: RecentRecording,
   language: string,

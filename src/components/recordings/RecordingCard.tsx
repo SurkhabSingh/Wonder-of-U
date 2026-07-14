@@ -8,6 +8,7 @@ import {
 import {
   pathHasExtension,
   recordingAnkiPushForTarget,
+  recordingChips,
   recordingHasTranscriptForLanguage,
   recordingSupportsFurigana,
   recordingTranscriptLanguageLabels,
@@ -107,35 +108,40 @@ export function RecordingCard({
     recording.ankiPushes.length > 0 || recording.ankiNoteId !== null;
   const canReadTranscript =
     recording.transcripts.length > 0 || recording.transcriptPath !== null;
+  const stateChips = recordingChips(
+    recording,
+    transcriptionLanguage,
+    recordingPushedToCurrentAnkiDeck,
+  );
 
   return (
     <article className="recording-item">
-      <div className="recording-head">
-        <div className="recording-select">
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={() => onToggleSelection(recording.filePath)}
-            aria-label={`Select ${recording.fileName}`}
-          />
-          {canReadTranscript ? (
-            <button
-              type="button"
-              className="recording-filename-button"
-              onClick={() => void onView(recording.filePath)}
-              title="Read transcript and translation"
-            >
-              {recording.fileName}
-            </button>
-          ) : (
-            <strong>{recording.fileName}</strong>
-          )}
-        </div>
-        <span>{formatDuration(recording.durationMs)}</span>
+      <div className="recording-select">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelection(recording.filePath)}
+          aria-label={`Select ${recording.fileName}`}
+        />
       </div>
-      <div className="recording-meta">
-        <span>{formatBytes(recording.bytesWritten)}</span>
-        <span>{formatTimestamp(recording.createdAtMs)}</span>
+      <div className="recording-main">
+        {canReadTranscript ? (
+          <button
+            type="button"
+            className="recording-filename-button"
+            onClick={() => void onView(recording.filePath)}
+            title="Read transcript and translation"
+          >
+            {recording.fileName}
+          </button>
+        ) : (
+          <strong className="recording-name">{recording.fileName}</strong>
+        )}
+        <span className="recording-meta">
+          {formatDuration(recording.durationMs)} ·{" "}
+          {formatBytes(recording.bytesWritten)} ·{" "}
+          {formatTimestamp(recording.createdAtMs)}
+        </span>
       </div>
       <div
         className="recording-state-row"
@@ -145,7 +151,15 @@ export function RecordingCard({
             : `Audio: ${recording.filePath}`
         }
       >
-        <span className="recording-state">
+        {stateChips.map((chip) => (
+          <span
+            key={chip.label}
+            className={`status-chip status-chip-${chip.tone}`}
+          >
+            {chip.label}
+          </span>
+        ))}
+        <span className="status-chip status-chip-neutral">
           {recording.audioDeleted
             ? "Transcript only - local audio deleted"
             : recording.transcriptPath
@@ -154,7 +168,7 @@ export function RecordingCard({
         </span>
         {hasAnyAnkiPush ? (
           <span
-            className="recording-state success-state"
+            className="status-chip status-chip-neutral"
             title={
               ankiPushSummary ||
               (recording.ankiDeckName
@@ -176,11 +190,11 @@ export function RecordingCard({
           </span>
         ) : null}
         {recording.translationPath !== null ? (
-          <span className="recording-state success-state">Translated</span>
+          <span className="status-chip status-chip-success">Translated</span>
         ) : null}
         {languageLabels.length > 0 ? (
           <span
-            className="recording-state"
+            className="status-chip status-chip-neutral"
             title={`Transcribed languages: ${languageLabels.join(", ")}`}
           >
             Transcripts: {languageLabels.join(", ")}

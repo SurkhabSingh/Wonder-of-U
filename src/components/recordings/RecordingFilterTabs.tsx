@@ -26,9 +26,10 @@ export function RecordingFilterTabs({
             key={tab.id}
             value={tab.id}
             className="recording-filter-tab"
+            data-filter={tab.id}
           >
             <span>{tab.label}</span>
-            <strong>{tab.count}</strong>
+            <strong className="status-chip-count">{tab.count}</strong>
           </TabsPrimitive.Trigger>
         ))}
       </TabsPrimitive.List>

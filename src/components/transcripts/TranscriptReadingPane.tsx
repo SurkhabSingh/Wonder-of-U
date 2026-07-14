@@ -14,6 +14,8 @@ export function TranscriptReadingPane({
   missingLabel,
   selectedSegment,
   onSelectSegment,
+  activeSegmentIndex,
+  onActivateSegment,
 }: {
   paneKey: string;
   kicker: string;
@@ -26,6 +28,11 @@ export function TranscriptReadingPane({
   missingLabel: string;
   selectedSegment: string | null;
   onSelectSegment: (key: string | null) => void;
+  // Positional link shared across both panes: the row at this index is
+  // highlighted in every pane that has one. See TranscriptViewerPage for why
+  // this pairing is positional rather than semantic.
+  activeSegmentIndex: number | null;
+  onActivateSegment: (index: number | null) => void;
 }) {
   const segments = document ? splitTranscriptSegments(document.text) : [];
 
@@ -55,9 +62,13 @@ export function TranscriptReadingPane({
                 text={segment}
                 query={query}
                 selected={selectedSegment === key}
-                onSelect={() =>
-                  onSelectSegment(selectedSegment === key ? null : key)
-                }
+                linked={activeSegmentIndex === index}
+                onSelect={() => {
+                  onActivateSegment(index);
+                  onSelectSegment(selectedSegment === key ? null : key);
+                }}
+                onActivate={() => onActivateSegment(index)}
+                onDeactivate={() => onActivateSegment(null)}
               />
             );
           })

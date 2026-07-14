@@ -1,20 +1,20 @@
-import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import type { PageNavigationItem } from "../../lib/navigation";
+import { isSetupPage } from "../../lib/navigation";
 import type { AppPage } from "../../types";
 
 function PageLink({
   page,
-  activePage,
+  active,
   onSelect,
 }: {
   page: PageNavigationItem;
-  activePage: AppPage;
+  active: boolean;
   onSelect: (page: AppPage) => void;
 }) {
   return (
     <button
       type="button"
-      className={`page-link ${activePage === page.id ? "active" : ""}`}
+      className={`page-link ${active ? "active" : ""}`}
       onClick={() => onSelect(page.id)}
     >
       <span>{page.label}</span>
@@ -27,13 +27,13 @@ export function PageSidebar({
   activePage,
   activePageLabel,
   workflowPages,
-  setupPages,
+  setupEntry,
   onPageSelect,
 }: {
   activePage: AppPage;
   activePageLabel: string;
   workflowPages: PageNavigationItem[];
-  setupPages: PageNavigationItem[];
+  setupEntry: PageNavigationItem;
   onPageSelect: (page: AppPage) => void;
 }) {
   return (
@@ -42,49 +42,23 @@ export function PageSidebar({
         <p className="panel-kicker">Wonder of U</p>
         <strong>{activePageLabel}</strong>
       </div>
-      <AccordionPrimitive.Root
-        type="multiple"
-        defaultValue={["workflow", "setup"]}
-        className="page-accordion"
-      >
-        <AccordionPrimitive.Item value="workflow" className="page-accordion-item">
-          <AccordionPrimitive.Header>
-            <AccordionPrimitive.Trigger className="page-accordion-trigger">
-              Workflow
-              <span aria-hidden="true">{"\u2304"}</span>
-            </AccordionPrimitive.Trigger>
-          </AccordionPrimitive.Header>
-          <AccordionPrimitive.Content className="page-accordion-content">
-            {workflowPages.map((page) => (
-              <PageLink
-                key={page.id}
-                page={page}
-                activePage={activePage}
-                onSelect={onPageSelect}
-              />
-            ))}
-          </AccordionPrimitive.Content>
-        </AccordionPrimitive.Item>
-
-        <AccordionPrimitive.Item value="setup" className="page-accordion-item">
-          <AccordionPrimitive.Header>
-            <AccordionPrimitive.Trigger className="page-accordion-trigger">
-              Setup
-              <span aria-hidden="true">{"\u2304"}</span>
-            </AccordionPrimitive.Trigger>
-          </AccordionPrimitive.Header>
-          <AccordionPrimitive.Content className="page-accordion-content">
-            {setupPages.map((page) => (
-              <PageLink
-                key={page.id}
-                page={page}
-                activePage={activePage}
-                onSelect={onPageSelect}
-              />
-            ))}
-          </AccordionPrimitive.Content>
-        </AccordionPrimitive.Item>
-      </AccordionPrimitive.Root>
+      <nav className="page-primary-nav" aria-label="Primary">
+        {workflowPages.map((page) => (
+          <PageLink
+            key={page.id}
+            page={page}
+            active={activePage === page.id}
+            onSelect={onPageSelect}
+          />
+        ))}
+      </nav>
+      <nav className="page-setup-nav" aria-label="Setup">
+        <PageLink
+          page={setupEntry}
+          active={isSetupPage(activePage)}
+          onSelect={onPageSelect}
+        />
+      </nav>
     </aside>
   );
 }

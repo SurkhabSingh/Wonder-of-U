@@ -58,6 +58,7 @@ export function useRecordingLibrary({
 }: UseRecordingLibraryOptions) {
   const [selectedRecordings, setSelectedRecordings] = useState<string[]>([]);
   const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
+  const [recordingSearch, setRecordingSearch] = useState("");
   const [recordingPage, setRecordingPage] = useState(1);
   const [openRecordingMenuPath, setOpenRecordingMenuPath] = useState<string | null>(
     null,
@@ -140,28 +141,32 @@ export function useRecordingLibrary({
   );
 
   const filteredRecordings = useMemo(() => {
+    let statusFiltered = recentRecordings;
+
     if (recordingFilter === "needsTranscription") {
-      return untranscribedRecordings;
+      statusFiltered = untranscribedRecordings;
+    } else if (recordingFilter === "needsAnki") {
+      statusFiltered = pushableRecordings;
+    } else if (recordingFilter === "needsTranslation") {
+      statusFiltered = untranslatedRecordings;
+    } else if (recordingFilter === "complete") {
+      statusFiltered = completeRecordings;
     }
 
-    if (recordingFilter === "needsAnki") {
-      return pushableRecordings;
+    const query = recordingSearch.trim().toLowerCase();
+    if (query.length === 0) {
+      return statusFiltered;
     }
 
-    if (recordingFilter === "needsTranslation") {
-      return untranslatedRecordings;
-    }
-
-    if (recordingFilter === "complete") {
-      return completeRecordings;
-    }
-
-    return recentRecordings;
+    return statusFiltered.filter((recording) =>
+      recording.fileName.toLowerCase().includes(query),
+    );
   }, [
     completeRecordings,
     pushableRecordings,
     recentRecordings,
     recordingFilter,
+    recordingSearch,
     untranslatedRecordings,
     untranscribedRecordings,
   ]);
@@ -345,6 +350,11 @@ export function useRecordingLibrary({
     setOpenRecordingMenuPath(null);
   }, []);
 
+  const changeRecordingSearch = useCallback((search: string) => {
+    setRecordingSearch(search);
+    setRecordingPage(1);
+  }, []);
+
   useEffect(() => {
     if (useBatchActionsOnly) {
       setOpenRecordingMenuPath(null);
@@ -383,6 +393,7 @@ export function useRecordingLibrary({
     recordingPageCount,
     recordingPageEnd,
     recordingPageStart,
+    recordingSearch,
     filteredRecordingsCount: filteredRecordings.length,
     recordingPushedToCurrentAnkiDeck,
     recordingPushedToDeck,
@@ -397,6 +408,7 @@ export function useRecordingLibrary({
     setOpenRecordingMenuPath,
     setRecordingFilter: changeRecordingFilter,
     setRecordingPage,
+    setRecordingSearch: changeRecordingSearch,
     toggleRecordingSelection,
     transcribedRecordings,
     untranslatedRecordings,

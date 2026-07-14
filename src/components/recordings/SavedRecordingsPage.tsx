@@ -17,6 +17,7 @@ export function SavedRecordingsPage({
   recordingPageCount,
   recordingPageStart,
   recordingPageEnd,
+  recordingSearch,
   filteredRecordingsCount,
   selectedRecordings,
   visibleSelectedPaths,
@@ -44,6 +45,7 @@ export function SavedRecordingsPage({
   recordingPushedToDeck,
   recordingPushedToCurrentAnkiDeck,
   onFilterChange,
+  onSearchChange,
   onPageChange,
   onDefaultDeckChange,
   onRefreshAnki,
@@ -69,6 +71,7 @@ export function SavedRecordingsPage({
   recordingPageCount: number;
   recordingPageStart: number;
   recordingPageEnd: number;
+  recordingSearch: string;
   filteredRecordingsCount: number;
   selectedRecordings: string[];
   visibleSelectedPaths: string[];
@@ -96,6 +99,7 @@ export function SavedRecordingsPage({
   recordingPushedToDeck: (recording: RecentRecording, deckName: string) => boolean;
   recordingPushedToCurrentAnkiDeck: (recording: RecentRecording) => boolean;
   onFilterChange: (filter: RecordingFilter) => void;
+  onSearchChange: (search: string) => void;
   onPageChange: (page: number) => void;
   onDefaultDeckChange: (deckName: string) => void;
   onRefreshAnki: () => void | Promise<void>;
@@ -120,9 +124,19 @@ export function SavedRecordingsPage({
       <article className="panel recent-panel">
         <header className="panel-header">
           <div>
-            <p className="panel-kicker">Recent Output</p>
-            <h2>Saved Recordings</h2>
+            <p className="panel-kicker">Local</p>
+            <h2>Library</h2>
           </div>
+          {recentRecordings.length > 0 ? (
+            <input
+              type="search"
+              className="library-search"
+              value={recordingSearch}
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="Search by name"
+              aria-label="Search recordings by name"
+            />
+          ) : null}
         </header>
 
         {recordingActionMessage ? (

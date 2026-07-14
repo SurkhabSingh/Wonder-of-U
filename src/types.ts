@@ -210,9 +210,11 @@ export type BusyAction =
 export type AutosaveState = "idle" | "saving" | "error";
 
 export type AppPage =
+  | "home"
   | "recorder"
   | "recordings"
   | "transcript"
+  | "setup"
   | "preferences"
   | "whisper"
   | "runtime"

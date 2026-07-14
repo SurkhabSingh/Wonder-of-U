@@ -46,7 +46,7 @@ export function StorageSettingsPage({
           Wonder of U keeps WAV audio for transcription because that is the safest
           input path for Whisper. After a transcript exists, you can convert
           individual recordings, selected recordings, or all available WAV
-          recordings to MP3 from Saved Recordings. If a card was already pushed to
+          recordings to MP3 from the Library. If a card was already pushed to
           Anki, converting the local file later will not break that existing Anki
           card because Anki keeps its own copied media file. The Convert to MP3
           action stays hidden until you enable manual MP3 conversion in App

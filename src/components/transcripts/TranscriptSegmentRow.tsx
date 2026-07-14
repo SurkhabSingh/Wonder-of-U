@@ -6,13 +6,19 @@ export function TranscriptSegmentRow({
   text,
   query,
   selected,
+  linked,
   onSelect,
+  onActivate,
+  onDeactivate,
 }: {
   segmentKey: string;
   text: string;
   query: string;
   selected: boolean;
+  linked: boolean;
   onSelect: () => void;
+  onActivate: () => void;
+  onDeactivate: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -32,9 +38,13 @@ export function TranscriptSegmentRow({
 
   return (
     <div
-      className={`transcript-segment ${selected ? "is-selected" : ""}`}
+      className={`transcript-segment ${selected ? "is-selected" : ""} ${
+        linked ? "is-linked" : ""
+      }`}
       data-segment={segmentKey}
       onClick={onSelect}
+      onMouseEnter={onActivate}
+      onMouseLeave={onDeactivate}
     >
       <span className="transcript-segment-gutter" aria-hidden="true">
         <span className="transcript-segment-dot" />
