@@ -211,16 +211,14 @@ export type AutosaveState = "idle" | "saving" | "error";
 
 export type AppPage =
   | "home"
-  | "recorder"
   | "recordings"
   | "transcript"
   | "setup"
-  | "preferences"
-  | "whisper"
-  | "runtime"
-  | "model"
-  | "storage"
-  | "anki";
+  | "settings";
+
+// The stacked sections inside the single Settings page. Setup-checklist rows and
+// post-download navigation deep-link to one of these, scrolling it into view.
+export type SettingsSection = "preferences" | "whisper" | "storage" | "anki";
 
 export type RecordingFilter =
   | "all"

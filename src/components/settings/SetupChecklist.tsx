@@ -2,7 +2,7 @@ import type {
   SetupChecklistStep,
   SetupChecklistSummary,
 } from "../../lib/navigation";
-import type { AppPage } from "../../types";
+import type { AppPage, SettingsSection } from "../../types";
 
 type StepMarker = "done" | "todo" | "optional";
 
@@ -28,10 +28,12 @@ const STATUS_TONE: Record<StepMarker, "success" | "accent" | "neutral"> = {
 export function SetupChecklist({
   steps,
   summary,
+  onOpenSection,
   onNavigate,
 }: {
   steps: SetupChecklistStep[];
   summary: SetupChecklistSummary;
+  onOpenSection: (section: SettingsSection) => void;
   onNavigate: (page: AppPage) => void;
 }) {
   const requiredSteps = steps.filter((step) => step.required);
@@ -50,7 +52,7 @@ export function SetupChecklist({
         <button
           type="button"
           className={`setup-step ${isNext ? "setup-step-next" : ""}`}
-          onClick={() => onNavigate(step.id)}
+          onClick={() => onOpenSection(step.target)}
         >
           <span className={`setup-step-marker ${marker}`} aria-hidden="true">
             {marker === "done" ? "✓" : ""}
@@ -75,7 +77,7 @@ export function SetupChecklist({
   };
 
   return (
-    <div className="settings-scroll settings-page-single">
+    <div className="settings-scroll">
       <article className="panel settings-card setup-checklist">
         <header className="panel-header">
           <div>

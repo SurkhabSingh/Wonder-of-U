@@ -1,15 +1,13 @@
 import { whisperStatusLabel } from "../../lib/helpers";
-import type { AppBootstrap, AppPage, AppSettings } from "../../types";
+import type { AppBootstrap, AppSettings } from "../../types";
 import { TooltipBadge } from "../ui/Tooltip";
 
 export function WhisperStatusSettingsPage({
-  activePage,
   activeRuntimeVersion,
   bootstrap,
   manualRuntimeOverride,
   settingsDraft,
 }: {
-  activePage: AppPage;
   activeRuntimeVersion: string;
   bootstrap: AppBootstrap;
   manualRuntimeOverride: boolean;
@@ -20,7 +18,7 @@ export function WhisperStatusSettingsPage({
     : activeRuntimeVersion;
 
   return (
-    <article className="panel settings-card" hidden={activePage !== "whisper"}>
+    <>
       <header className="panel-header">
         <div>
           <p className="panel-kicker">Whisper Setup</p>
@@ -50,6 +48,6 @@ export function WhisperStatusSettingsPage({
           <strong>{settingsDraft.whisper.language}</strong>
         </div>
       </div>
-    </article>
+    </>
   );
 }

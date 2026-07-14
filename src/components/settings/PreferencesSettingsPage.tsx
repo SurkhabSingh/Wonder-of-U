@@ -1,5 +1,4 @@
 import type {
-  AppPage,
   AppSettings,
   AutosaveState,
   BusyAction,
@@ -9,7 +8,6 @@ import { ThemedSelect } from "../ui/ThemedSelect";
 import type { BrowseDirectoryField, SettingsUpdate } from "./settingsTypes";
 
 export function PreferencesSettingsPage({
-  activePage,
   autosaveMessage,
   autosaveState,
   busyAction,
@@ -17,7 +15,6 @@ export function PreferencesSettingsPage({
   onUpdateSettings,
   settingsDraft,
 }: {
-  activePage: AppPage;
   autosaveMessage: string;
   autosaveState: AutosaveState;
   busyAction: BusyAction;
@@ -26,7 +23,7 @@ export function PreferencesSettingsPage({
   settingsDraft: AppSettings;
 }) {
   return (
-    <article className="panel settings-card" hidden={activePage !== "preferences"}>
+    <>
       <header className="panel-header">
         <div>
           <p className="panel-kicker">Settings</p>
@@ -213,6 +210,6 @@ export function PreferencesSettingsPage({
           </p>
         ) : null}
       </div>
-    </article>
+    </>
   );
 }

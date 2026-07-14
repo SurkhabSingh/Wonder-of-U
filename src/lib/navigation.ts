@@ -1,9 +1,12 @@
-import type { AppPage, RecordingFilter } from "../types";
+import type { AppPage, RecordingFilter, SettingsSection } from "../types";
 
 export type PageNavigationItem = {
   id: AppPage;
   label: string;
   description: string;
+  // Optional count shown as a `.status-chip-count` badge beside the label
+  // (Library item total, Setup steps-done fraction).
+  count?: string;
 };
 
 export type RecordingFilterTab = {
@@ -18,13 +21,17 @@ export function createWorkflowPages(recordingCount: number): PageNavigationItem[
     {
       id: "recordings",
       label: "Library",
-      description: `${recordingCount} local item${recordingCount === 1 ? "" : "s"}`,
+      description: "",
+      count: String(recordingCount),
     },
   ];
 }
 
 export type SetupChecklistStep = {
-  id: AppPage;
+  id: string;
+  // The Settings section this row deep-links to. Multiple rows (CLI, model,
+  // status) point at the single "whisper" section.
+  target: SettingsSection;
   label: string;
   description: string;
   done: boolean | null;
@@ -41,18 +48,10 @@ export type SetupChecklistSummary = {
   allDone: boolean;
 };
 
-// Every setup surface lives behind the single "Setup" checklist entry. This
-// group drives the sidebar's active-state highlight when the user drills into
-// one of the individual settings pages from the checklist.
-export const SETUP_PAGE_IDS: AppPage[] = [
-  "setup",
-  "preferences",
-  "whisper",
-  "runtime",
-  "model",
-  "storage",
-  "anki",
-];
+// The Setup checklist ("setup") and the single Settings page ("settings") both
+// live behind the sidebar's "Setup" entry. This group keeps that entry
+// highlighted while the user drills into a Settings section from the checklist.
+export const SETUP_PAGE_IDS: AppPage[] = ["setup", "settings"];
 
 export function isSetupPage(page: AppPage): boolean {
   return SETUP_PAGE_IDS.includes(page);
@@ -80,6 +79,7 @@ export function createSetupChecklist({
   return [
     {
       id: "runtime",
+      target: "whisper",
       label: "Whisper CLI",
       description: cliReady
         ? "Runtime installed"
@@ -90,6 +90,7 @@ export function createSetupChecklist({
     },
     {
       id: "model",
+      target: "whisper",
       label: "Whisper Model",
       description: modelReady
         ? "Model downloaded"
@@ -100,6 +101,7 @@ export function createSetupChecklist({
     },
     {
       id: "anki",
+      target: "anki",
       label: "Anki Mapping",
       description: ankiConfigured
         ? "Note fields mapped"
@@ -110,6 +112,7 @@ export function createSetupChecklist({
     },
     {
       id: "whisper",
+      target: "whisper",
       label: "Whisper Status",
       description:
         cliReady && modelReady
@@ -120,6 +123,7 @@ export function createSetupChecklist({
     },
     {
       id: "storage",
+      target: "storage",
       label: "MP3 Compression",
       description: ffmpegReady
         ? "FFmpeg ready"
@@ -129,6 +133,7 @@ export function createSetupChecklist({
     },
     {
       id: "preferences",
+      target: "preferences",
       label: "App Preferences",
       description: "Theme, folders, and feature toggles",
       done: null,
@@ -156,9 +161,8 @@ export function createSetupEntry(
   return {
     id: "setup",
     label: "Setup",
-    description: summary.allDone
-      ? "Setup complete"
-      : `${summary.done} of ${summary.total} steps done`,
+    description: summary.allDone ? "Setup complete" : "",
+    count: summary.allDone ? undefined : `${summary.done}/${summary.total}`,
   };
 }
 

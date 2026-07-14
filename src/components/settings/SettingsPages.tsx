@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type {
   AnkiCatalog,
   AnkiFieldMapping,
@@ -6,6 +7,7 @@ import type {
   AppSettings,
   AutosaveState,
   BusyAction,
+  SettingsSection,
   WhisperAssetUpdateResult,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
@@ -23,6 +25,8 @@ import { WhisperStatusSettingsPage } from "./WhisperStatusSettingsPage";
 
 export function SettingsPages({
   activePage,
+  scrollTarget,
+  onScrollTargetHandled,
   bootstrap,
   settingsDraft,
   autosaveState,
@@ -55,6 +59,8 @@ export function SettingsPages({
   onUpdateAnkiField,
 }: {
   activePage: AppPage;
+  scrollTarget: SettingsSection | null;
+  onScrollTargetHandled: () => void;
   bootstrap: AppBootstrap;
   settingsDraft: AppSettings;
   autosaveState: AutosaveState;
@@ -89,95 +95,105 @@ export function SettingsPages({
   ) => void | Promise<void>;
   onUpdateAnkiField: (field: keyof AnkiFieldMapping, value: string) => void;
 }) {
-  if (
-    activePage === "home" ||
-    activePage === "recorder" ||
-    activePage === "recordings" ||
-    activePage === "transcript" ||
-    activePage === "setup"
-  ) {
+  // Deep links from the Setup checklist (and post-download navigation) land on
+  // the settings page and ask a specific section to scroll into view.
+  useEffect(() => {
+    if (activePage !== "settings" || scrollTarget === null) {
+      return;
+    }
+    document
+      .getElementById(`settings-${scrollTarget}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    onScrollTargetHandled();
+  }, [activePage, scrollTarget, onScrollTargetHandled]);
+
+  if (activePage !== "settings") {
     return null;
   }
 
   return (
-    <div className="settings-scroll settings-page-single">
-      <div className="settings-overview-grid">
-        <PreferencesSettingsPage
-          activePage={activePage}
-          autosaveMessage={autosaveMessage}
-          autosaveState={autosaveState}
-          busyAction={busyAction}
-          onBrowseDirectory={onBrowseDirectory}
-          onUpdateSettings={onUpdateSettings}
-          settingsDraft={settingsDraft}
-        />
-        <WhisperStatusSettingsPage
-          activePage={activePage}
-          activeRuntimeVersion={activeRuntimeVersion}
-          bootstrap={bootstrap}
-          manualRuntimeOverride={manualRuntimeOverride}
-          settingsDraft={settingsDraft}
-        />
-      </div>
+    <div className="settings-scroll">
+      <article className="panel settings-surface">
+        <section id="settings-preferences" className="settings-section">
+          <PreferencesSettingsPage
+            autosaveMessage={autosaveMessage}
+            autosaveState={autosaveState}
+            busyAction={busyAction}
+            onBrowseDirectory={onBrowseDirectory}
+            onUpdateSettings={onUpdateSettings}
+            settingsDraft={settingsDraft}
+          />
+        </section>
 
-      <div className="whisper-config-grid">
-        <RuntimeSettingsPage
-          activePage={activePage}
-          activeRuntimeVersion={activeRuntimeVersion}
-          bootstrap={bootstrap}
-          busyAction={busyAction}
-          downloadIsActive={downloadIsActive}
-          installedRuntimeVersions={installedRuntimeVersions}
-          manualRuntimeOverride={manualRuntimeOverride}
-          onBrowseFile={onBrowseFile}
-          onCancelDownload={onCancelDownload}
-          onCheckRuntimeUpdate={onCheckRuntimeUpdate}
-          onDownloadRecommendedRuntime={onDownloadRecommendedRuntime}
-          onDownloadRuntimeVersion={onDownloadRuntimeVersion}
-          onToggleDownloadPause={onToggleDownloadPause}
-          onUpdateSettings={onUpdateSettings}
-          resolvedCliPath={resolvedCliPath}
-          runtimeInstalled={runtimeInstalled}
-          runtimeUpdateResult={runtimeUpdateResult}
-          runtimeUpdateVersion={runtimeUpdateVersion}
-          settingsDraft={settingsDraft}
-        />
-        <ModelSettingsPage
-          activePage={activePage}
-          bootstrap={bootstrap}
-          busyAction={busyAction}
-          downloadIsActive={downloadIsActive}
-          modelInstalled={modelInstalled}
-          modelUpdateResult={modelUpdateResult}
-          onBrowseFile={onBrowseFile}
-          onCancelDownload={onCancelDownload}
-          onCheckModelUpdate={onCheckModelUpdate}
-          onDownloadRecommendedModel={onDownloadRecommendedModel}
-          onToggleDownloadPause={onToggleDownloadPause}
-          onUpdateSettings={onUpdateSettings}
-          resolvedModelPath={resolvedModelPath}
-          settingsDraft={settingsDraft}
-        />
-        <StorageSettingsPage
-          activePage={activePage}
-          bootstrap={bootstrap}
-          busyAction={busyAction}
-          downloadIsActive={downloadIsActive}
-          onCancelDownload={onCancelDownload}
-          onDownloadRecommendedFfmpeg={onDownloadRecommendedFfmpeg}
-          onToggleDownloadPause={onToggleDownloadPause}
-        />
-      </div>
+        <section
+          id="settings-whisper"
+          className="settings-section whisper-section"
+        >
+          <WhisperStatusSettingsPage
+            activeRuntimeVersion={activeRuntimeVersion}
+            bootstrap={bootstrap}
+            manualRuntimeOverride={manualRuntimeOverride}
+            settingsDraft={settingsDraft}
+          />
+          <RuntimeSettingsPage
+            activeRuntimeVersion={activeRuntimeVersion}
+            bootstrap={bootstrap}
+            busyAction={busyAction}
+            downloadIsActive={downloadIsActive}
+            installedRuntimeVersions={installedRuntimeVersions}
+            manualRuntimeOverride={manualRuntimeOverride}
+            onBrowseFile={onBrowseFile}
+            onCancelDownload={onCancelDownload}
+            onCheckRuntimeUpdate={onCheckRuntimeUpdate}
+            onDownloadRecommendedRuntime={onDownloadRecommendedRuntime}
+            onDownloadRuntimeVersion={onDownloadRuntimeVersion}
+            onToggleDownloadPause={onToggleDownloadPause}
+            onUpdateSettings={onUpdateSettings}
+            resolvedCliPath={resolvedCliPath}
+            runtimeInstalled={runtimeInstalled}
+            runtimeUpdateResult={runtimeUpdateResult}
+            runtimeUpdateVersion={runtimeUpdateVersion}
+            settingsDraft={settingsDraft}
+          />
+          <ModelSettingsPage
+            bootstrap={bootstrap}
+            busyAction={busyAction}
+            downloadIsActive={downloadIsActive}
+            modelInstalled={modelInstalled}
+            modelUpdateResult={modelUpdateResult}
+            onBrowseFile={onBrowseFile}
+            onCancelDownload={onCancelDownload}
+            onCheckModelUpdate={onCheckModelUpdate}
+            onDownloadRecommendedModel={onDownloadRecommendedModel}
+            onToggleDownloadPause={onToggleDownloadPause}
+            onUpdateSettings={onUpdateSettings}
+            resolvedModelPath={resolvedModelPath}
+            settingsDraft={settingsDraft}
+          />
+        </section>
 
-      <AnkiMappingSettingsPage
-        activePage={activePage}
-        busyAction={busyAction}
-        displayedAnkiCatalog={displayedAnkiCatalog}
-        onRefreshAnkiCatalog={onRefreshAnkiCatalog}
-        onUpdateAnkiField={onUpdateAnkiField}
-        onUpdateSettings={onUpdateSettings}
-        settingsDraft={settingsDraft}
-      />
+        <section id="settings-storage" className="settings-section">
+          <StorageSettingsPage
+            bootstrap={bootstrap}
+            busyAction={busyAction}
+            downloadIsActive={downloadIsActive}
+            onCancelDownload={onCancelDownload}
+            onDownloadRecommendedFfmpeg={onDownloadRecommendedFfmpeg}
+            onToggleDownloadPause={onToggleDownloadPause}
+          />
+        </section>
+
+        <section id="settings-anki" className="settings-section">
+          <AnkiMappingSettingsPage
+            busyAction={busyAction}
+            displayedAnkiCatalog={displayedAnkiCatalog}
+            onRefreshAnkiCatalog={onRefreshAnkiCatalog}
+            onUpdateAnkiField={onUpdateAnkiField}
+            onUpdateSettings={onUpdateSettings}
+            settingsDraft={settingsDraft}
+          />
+        </section>
+      </article>
     </div>
   );
 }

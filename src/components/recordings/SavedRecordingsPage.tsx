@@ -17,8 +17,6 @@ export function SavedRecordingsPage({
   recordingFilterTabs,
   recordingPage,
   recordingPageCount,
-  recordingPageStart,
-  recordingPageEnd,
   recordingSearch,
   filteredRecordingsCount,
   selectedRecordings,
@@ -70,8 +68,6 @@ export function SavedRecordingsPage({
   recordingFilterTabs: RecordingFilterTab[];
   recordingPage: number;
   recordingPageCount: number;
-  recordingPageStart: number;
-  recordingPageEnd: number;
   recordingSearch: string;
   filteredRecordingsCount: number;
   selectedRecordings: string[];
@@ -120,8 +116,8 @@ export function SavedRecordingsPage({
   const useBatchActionsOnly = visibleSelectedPaths.length > 1;
 
   // In-app whole-file playback. The row Play action routes here instead of the
-  // old external OS handler; the now-playing bar docks at the bottom while a
-  // track is loaded.
+  // old external OS handler; the now-playing bar docks at the top of the panel
+  // while a track is loaded, so it stays put across pages and filters.
   const player = useAudioPlayer();
   const handlePlay = (filePath: string) => {
     const recording = recentRecordings.find(
@@ -152,6 +148,18 @@ export function SavedRecordingsPage({
             />
           ) : null}
         </header>
+
+        {player.filePath !== null ? (
+          <NowPlayingBar
+            fileName={player.fileName}
+            isPlaying={player.isPlaying}
+            currentTimeMs={player.currentTimeMs}
+            durationMs={player.durationMs}
+            onToggle={player.toggle}
+            onSeek={player.seekMs}
+            onStop={player.stop}
+          />
+        ) : null}
 
         {recordingActionMessage ? (
           <p className="microcopy">{recordingActionMessage}</p>
@@ -231,45 +239,30 @@ export function SavedRecordingsPage({
           </div>
         )}
 
-        {filteredRecordingsCount > 0 ? (
+        {recordingPageCount > 1 ? (
           <nav className="recording-pagination" aria-label="Saved recordings pages">
-            <span className="recording-page-summary">
-              {recordingPageStart}-{recordingPageEnd} of {filteredRecordingsCount}
+            <button
+              type="button"
+              className="ghost recording-page-arrow"
+              aria-label="Previous page"
+              disabled={recordingPage <= 1}
+              onClick={() => onPageChange(recordingPage - 1)}
+            >
+              ‹
+            </button>
+            <span className="recording-page-number">
+              Page {recordingPage} of {recordingPageCount}
             </span>
-            <div className="recording-page-actions">
-              <button
-                type="button"
-                className="secondary compact"
-                disabled={recordingPage <= 1}
-                onClick={() => onPageChange(recordingPage - 1)}
-              >
-                Previous
-              </button>
-              <span className="recording-page-number">
-                Page {recordingPage} of {recordingPageCount}
-              </span>
-              <button
-                type="button"
-                className="secondary compact"
-                disabled={recordingPage >= recordingPageCount}
-                onClick={() => onPageChange(recordingPage + 1)}
-              >
-                Next
-              </button>
-            </div>
+            <button
+              type="button"
+              className="ghost recording-page-arrow"
+              aria-label="Next page"
+              disabled={recordingPage >= recordingPageCount}
+              onClick={() => onPageChange(recordingPage + 1)}
+            >
+              ›
+            </button>
           </nav>
-        ) : null}
-
-        {player.filePath !== null ? (
-          <NowPlayingBar
-            fileName={player.fileName}
-            isPlaying={player.isPlaying}
-            currentTimeMs={player.currentTimeMs}
-            durationMs={player.durationMs}
-            onToggle={player.toggle}
-            onSeek={player.seekMs}
-            onStop={player.stop}
-          />
         ) : null}
       </article>
     </div>

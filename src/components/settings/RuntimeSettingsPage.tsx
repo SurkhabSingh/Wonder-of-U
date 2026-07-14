@@ -1,6 +1,5 @@
 import type {
   AppBootstrap,
-  AppPage,
   AppSettings,
   BusyAction,
   WhisperAssetUpdateResult,
@@ -12,7 +11,6 @@ import { DownloadProgressCard } from "./DownloadProgressCard";
 import type { BrowseFileField, SettingsUpdate } from "./settingsTypes";
 
 export function RuntimeSettingsPage({
-  activePage,
   activeRuntimeVersion,
   bootstrap,
   busyAction,
@@ -32,7 +30,6 @@ export function RuntimeSettingsPage({
   runtimeUpdateVersion,
   settingsDraft,
 }: {
-  activePage: AppPage;
   activeRuntimeVersion: string;
   bootstrap: AppBootstrap;
   busyAction: BusyAction;
@@ -53,12 +50,9 @@ export function RuntimeSettingsPage({
   settingsDraft: AppSettings;
 }) {
   return (
-    <article className="panel settings-card" hidden={activePage !== "runtime"}>
+    <div className="settings-subsection">
       <header className="panel-header">
-        <div>
-          <p className="panel-kicker">Runtime</p>
-          <h2>Whisper CLI</h2>
-        </div>
+        <h3>Whisper CLI</h3>
         <TooltipBadge
           label="?"
           description="Paste a path if whisper-cli is already installed somewhere else, or let the app download and manage the recommended Windows runtime."
@@ -194,6 +188,6 @@ export function RuntimeSettingsPage({
           onCancel={() => void onCancelDownload()}
         />
       </div>
-    </article>
+    </div>
   );
 }

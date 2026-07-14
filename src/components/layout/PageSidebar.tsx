@@ -17,21 +17,24 @@ function PageLink({
       className={`page-link ${active ? "active" : ""}`}
       onClick={() => onSelect(page.id)}
     >
-      <span>{page.label}</span>
-      <small>{page.description}</small>
+      <span className="page-link-label">
+        {page.label}
+        {page.count ? (
+          <strong className="status-chip-count">{page.count}</strong>
+        ) : null}
+      </span>
+      {page.description ? <small>{page.description}</small> : null}
     </button>
   );
 }
 
 export function PageSidebar({
   activePage,
-  activePageLabel,
   workflowPages,
   setupEntry,
   onPageSelect,
 }: {
   activePage: AppPage;
-  activePageLabel: string;
   workflowPages: PageNavigationItem[];
   setupEntry: PageNavigationItem;
   onPageSelect: (page: AppPage) => void;
@@ -39,8 +42,7 @@ export function PageSidebar({
   return (
     <aside className="page-sidebar" aria-label="Application sections">
       <div className="sidebar-title">
-        <p className="panel-kicker">Wonder of U</p>
-        <strong>{activePageLabel}</strong>
+        <strong>Wonder of U</strong>
       </div>
       <nav className="page-primary-nav" aria-label="Primary">
         {workflowPages.map((page) => (

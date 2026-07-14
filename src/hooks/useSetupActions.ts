@@ -7,10 +7,10 @@ import type {
   AnkiFieldMapping,
   AnkiSettings,
   AppBootstrap,
-  AppPage,
   AppSettings,
   BusyAction,
   FeatureSettings,
+  SettingsSection,
   WhisperAssetUpdateResult,
   WhisperSettings,
 } from "../types";
@@ -28,7 +28,7 @@ type UseSetupActionsOptions = {
   persistSettingsIfNeeded: () => Promise<void>;
   resolvedCliPath: string;
   resolvedModelPath: string;
-  setActivePage: (page: AppPage) => void;
+  openSettingsSection: (section: SettingsSection) => void;
   setBusyAction: (busyAction: BusyAction) => void;
   setLoadError: (message: string) => void;
   setModelUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
@@ -46,7 +46,7 @@ export function useSetupActions({
   persistSettingsIfNeeded,
   resolvedCliPath,
   resolvedModelPath,
-  setActivePage,
+  openSettingsSection,
   setBusyAction,
   setLoadError,
   setModelUpdateResult,
@@ -65,7 +65,7 @@ export function useSetupActions({
           { runtimeVersion },
         );
         applyBootstrap(nextBootstrap);
-        setActivePage("runtime");
+        openSettingsSection("whisper");
       } catch (error) {
         setLoadError(
           errorMessage(error, "The selected Whisper runtime could not be prepared."),
@@ -77,7 +77,7 @@ export function useSetupActions({
     [
       applyBootstrap,
       persistSettingsIfNeeded,
-      setActivePage,
+      openSettingsSection,
       setBusyAction,
       setLoadError,
       setRuntimeUpdateResult,
@@ -93,13 +93,13 @@ export function useSetupActions({
       setBusyAction("downloadFfmpeg");
       const nextBootstrap = await invoke<AppBootstrap>("download_recommended_ffmpeg");
       applyBootstrap(nextBootstrap);
-      setActivePage("storage");
+      openSettingsSection("storage");
     } catch (error) {
       setLoadError(errorMessage(error, "FFmpeg could not be prepared."));
     } finally {
       setBusyAction(null);
     }
-  }, [applyBootstrap, setActivePage, setBusyAction, setLoadError]);
+  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
 
   const downloadRecommendedModel = useCallback(async () => {
     try {
@@ -110,7 +110,7 @@ export function useSetupActions({
         "download_recommended_whisper_model",
       );
       applyBootstrap(nextBootstrap);
-      setActivePage("model");
+      openSettingsSection("whisper");
     } catch (error) {
       setLoadError(
         errorMessage(error, "The recommended Whisper model could not be prepared."),
@@ -121,7 +121,7 @@ export function useSetupActions({
   }, [
     applyBootstrap,
     persistSettingsIfNeeded,
-    setActivePage,
+    openSettingsSection,
     setBusyAction,
     setLoadError,
     setModelUpdateResult,

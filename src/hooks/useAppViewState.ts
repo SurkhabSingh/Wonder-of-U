@@ -177,7 +177,7 @@ export function useAppViewState({
   const currentPageLabel = activePageLabel(activePage, [
     ...workflowPages,
     setupEntry,
-    ...setupChecklist,
+    { id: "settings", label: "Settings", description: "" },
     ...detailPages,
   ]);
 

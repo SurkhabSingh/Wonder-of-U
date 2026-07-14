@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { HomePage } from "./components/home/HomePage";
 import { PageSidebar } from "./components/layout/PageSidebar";
-import { RecorderPage } from "./components/recorder/RecorderPage";
 import { SavedRecordingsPage } from "./components/recordings/SavedRecordingsPage";
 import { SettingsPages } from "./components/settings/SettingsPages";
 import { SetupChecklist } from "./components/settings/SetupChecklist";
@@ -19,6 +18,7 @@ import { useSetupActions } from "./hooks/useSetupActions";
 import type {
   AppPage,
   BusyAction,
+  SettingsSection,
   WhisperAssetUpdateResult,
 } from "./types";
 
@@ -37,6 +37,8 @@ function App() {
   } = useAppBootstrap();
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [activePage, setActivePage] = useState<AppPage>("home");
+  const [settingsScrollTarget, setSettingsScrollTarget] =
+    useState<SettingsSection | null>(null);
   const [viewingRecordingPath, setViewingRecordingPath] = useState<string | null>(
     null,
   );
@@ -53,6 +55,17 @@ function App() {
   function showSuccess(message: string) {
     toast.success(message, { duration: 3500 });
   }
+
+  // Deep-link into the single Settings page and scroll a specific section into
+  // view. Used by the Setup checklist rows and by post-download navigation.
+  const openSettingsSection = useCallback((section: SettingsSection) => {
+    setSettingsScrollTarget(section);
+    setActivePage("settings");
+  }, []);
+
+  const clearSettingsScrollTarget = useCallback(() => {
+    setSettingsScrollTarget(null);
+  }, []);
 
   function openTranscriptViewer(filePath: string) {
     setViewingRecordingPath(filePath);
@@ -113,8 +126,6 @@ function App() {
     recordingFilterTabs,
     recordingPage,
     recordingPageCount,
-    recordingPageEnd,
-    recordingPageStart,
     recordingSearch,
     filteredRecordingsCount,
     recordingPushedToCurrentAnkiDeck,
@@ -145,7 +156,6 @@ function App() {
   const {
     activeRuntimeVersion,
     busyOverlayLabel,
-    currentPageLabel,
     downloadIsActive,
     elapsedRecordingMs,
     hotkeyTooltip,
@@ -186,7 +196,7 @@ function App() {
     persistSettingsIfNeeded,
     resolvedCliPath,
     resolvedModelPath,
-    setActivePage,
+    openSettingsSection,
     setBusyAction,
     setLoadError,
     setModelUpdateResult,
@@ -248,7 +258,6 @@ function App() {
         <section className="app-layout">
           <PageSidebar
             activePage={activePage}
-            activePageLabel={currentPageLabel}
             workflowPages={workflowPages}
             setupEntry={setupEntry}
             onPageSelect={setActivePage}
@@ -279,22 +288,6 @@ function App() {
             />
           ) : null}
 
-          {activePage === "recorder" ? (
-            <RecorderPage
-              elapsedMs={elapsedRecordingMs}
-              phase={bootstrap.shell.phase}
-              statusText={bootstrap.shell.statusText}
-              hotkeyTooltip={hotkeyTooltip}
-              recorderBusy={recorderBusy}
-              isRecording={isRecording}
-              stopBusy={busyAction === "stop"}
-              anyBusy={busyAction !== null}
-              onStartRecording={() => void startRecording()}
-              onStopRecording={() => void stopRecording()}
-              onHideToTray={() => void hideToTray()}
-            />
-          ) : null}
-
           {activePage === "recordings" ? (
             <SavedRecordingsPage
               recordingActionMessage={recordingActionMessage}
@@ -304,8 +297,6 @@ function App() {
               recordingFilterTabs={recordingFilterTabs}
               recordingPage={recordingPage}
               recordingPageCount={recordingPageCount}
-              recordingPageStart={recordingPageStart}
-              recordingPageEnd={recordingPageEnd}
               recordingSearch={recordingSearch}
               filteredRecordingsCount={filteredRecordingsCount}
               selectedRecordings={selectedRecordings}
@@ -392,12 +383,15 @@ function App() {
             <SetupChecklist
               steps={setupChecklist}
               summary={setupSummary}
+              onOpenSection={openSettingsSection}
               onNavigate={setActivePage}
             />
           ) : null}
 
           <SettingsPages
             activePage={activePage}
+            scrollTarget={settingsScrollTarget}
+            onScrollTargetHandled={clearSettingsScrollTarget}
             bootstrap={bootstrap}
             settingsDraft={settingsDraft}
             autosaveState={autosaveState}

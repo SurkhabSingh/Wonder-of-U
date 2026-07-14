@@ -1,10 +1,9 @@
 import { fileNameFromPath } from "../../lib/format";
-import type { AppBootstrap, AppPage, BusyAction } from "../../types";
+import type { AppBootstrap, BusyAction } from "../../types";
 import { TooltipBadge } from "../ui/Tooltip";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 
 export function StorageSettingsPage({
-  activePage,
   bootstrap,
   busyAction,
   downloadIsActive,
@@ -12,7 +11,6 @@ export function StorageSettingsPage({
   onDownloadRecommendedFfmpeg,
   onToggleDownloadPause,
 }: {
-  activePage: AppPage;
   bootstrap: AppBootstrap;
   busyAction: BusyAction;
   downloadIsActive: boolean;
@@ -21,10 +19,7 @@ export function StorageSettingsPage({
   onToggleDownloadPause: () => void | Promise<void>;
 }) {
   return (
-    <article
-      className="panel settings-card settings-card-wide"
-      hidden={activePage !== "storage"}
-    >
+    <>
       <header className="panel-header">
         <div>
           <p className="panel-kicker">Storage</p>
@@ -78,6 +73,6 @@ export function StorageSettingsPage({
         onTogglePause={() => void onToggleDownloadPause()}
         onCancel={() => void onCancelDownload()}
       />
-    </article>
+    </>
   );
 }

@@ -1,7 +1,6 @@
 import { LANGUAGE_OPTIONS, MODEL_OPTIONS } from "../../constants";
 import type {
   AppBootstrap,
-  AppPage,
   AppSettings,
   BusyAction,
   WhisperAssetUpdateResult,
@@ -13,7 +12,6 @@ import { DownloadProgressCard } from "./DownloadProgressCard";
 import type { BrowseFileField, SettingsUpdate } from "./settingsTypes";
 
 export function ModelSettingsPage({
-  activePage,
   bootstrap,
   busyAction,
   downloadIsActive,
@@ -28,7 +26,6 @@ export function ModelSettingsPage({
   resolvedModelPath,
   settingsDraft,
 }: {
-  activePage: AppPage;
   bootstrap: AppBootstrap;
   busyAction: BusyAction;
   downloadIsActive: boolean;
@@ -53,12 +50,9 @@ export function ModelSettingsPage({
   const manualModelOverride = settingsDraft.whisper.modelPath.trim().length > 0;
 
   return (
-    <article className="panel settings-card" hidden={activePage !== "model"}>
+    <div className="settings-subsection">
       <header className="panel-header">
-        <div>
-          <p className="panel-kicker">Model</p>
-          <h2>Whisper Model</h2>
-        </div>
+        <h3>Whisper Model</h3>
         <TooltipBadge
           label="?"
           description="Choose a model file manually, or let the app download the recommended multilingual model into your selected asset folder."
@@ -210,6 +204,6 @@ export function ModelSettingsPage({
           onCancel={() => void onCancelDownload()}
         />
       </div>
-    </article>
+    </div>
   );
 }

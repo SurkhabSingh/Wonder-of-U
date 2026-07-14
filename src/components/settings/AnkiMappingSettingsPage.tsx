@@ -1,7 +1,6 @@
 import type {
   AnkiCatalog,
   AnkiFieldMapping,
-  AppPage,
   AppSettings,
   BusyAction,
 } from "../../types";
@@ -12,7 +11,6 @@ import { AnkiFieldSelect } from "./AnkiFieldSelect";
 import type { SettingsUpdate } from "./settingsTypes";
 
 export function AnkiMappingSettingsPage({
-  activePage,
   busyAction,
   displayedAnkiCatalog,
   onRefreshAnkiCatalog,
@@ -20,7 +18,6 @@ export function AnkiMappingSettingsPage({
   onUpdateSettings,
   settingsDraft,
 }: {
-  activePage: AppPage;
   busyAction: BusyAction;
   displayedAnkiCatalog: AnkiCatalog;
   onRefreshAnkiCatalog: (
@@ -32,10 +29,7 @@ export function AnkiMappingSettingsPage({
   settingsDraft: AppSettings;
 }) {
   return (
-    <article
-      className="panel anki-panel settings-card settings-card-wide"
-      hidden={activePage !== "anki"}
-    >
+    <>
       <header className="panel-header">
         <div>
           <p className="panel-kicker">Anki</p>
@@ -238,6 +232,6 @@ export function AnkiMappingSettingsPage({
           visible in the current card side template.
         </p>
       </div>
-    </article>
+    </>
   );
 }
