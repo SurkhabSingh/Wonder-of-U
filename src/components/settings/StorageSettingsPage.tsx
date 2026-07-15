@@ -1,6 +1,5 @@
 import { fileNameFromPath } from "../../lib/format";
 import type { AppBootstrap, BusyAction } from "../../types";
-import { TooltipBadge } from "../ui/Tooltip";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 
 export function StorageSettingsPage({
@@ -25,10 +24,14 @@ export function StorageSettingsPage({
           <p className="panel-kicker">Storage</p>
           <h2>MP3 Compression</h2>
         </div>
-        <TooltipBadge
-          label={bootstrap.ffmpegDetection.status === "ready" ? "Ready" : "Missing"}
-          description={bootstrap.ffmpegDetection.message}
-        />
+        <span
+          className={`status-chip status-chip-${
+            bootstrap.ffmpegDetection.status === "ready" ? "success" : "warning"
+          }`}
+          title={bootstrap.ffmpegDetection.message}
+        >
+          {bootstrap.ffmpegDetection.status === "ready" ? "Ready" : "Missing"}
+        </span>
       </header>
 
       <div
@@ -58,7 +61,6 @@ export function StorageSettingsPage({
         <div className="action-row inline-actions">
           <button
             type="button"
-            className="secondary"
             onClick={() => void onDownloadRecommendedFfmpeg()}
             disabled={downloadIsActive || busyAction === "downloadFfmpeg"}
           >

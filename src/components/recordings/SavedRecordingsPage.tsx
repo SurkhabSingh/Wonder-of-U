@@ -23,7 +23,6 @@ export function SavedRecordingsPage({
   recordingPage,
   recordingPageCount,
   recordingSearch,
-  filteredRecordingsCount,
   selectedRecordings,
   visibleSelectedPaths,
   configuredAnkiDeckLabel,
@@ -74,7 +73,6 @@ export function SavedRecordingsPage({
   recordingPage: number;
   recordingPageCount: number;
   recordingSearch: string;
-  filteredRecordingsCount: number;
   selectedRecordings: string[];
   visibleSelectedPaths: string[];
   configuredAnkiDeckLabel: string;
@@ -174,7 +172,6 @@ export function SavedRecordingsPage({
           <SavedRecordingsToolbar
             recordingFilter={recordingFilter}
             recordingFilterTabs={recordingFilterTabs}
-            visibleRecordingsCount={filteredRecordingsCount}
             visibleSelectedPaths={visibleSelectedPaths}
             configuredAnkiDeckLabel={configuredAnkiDeckLabel}
             configuredDeckMenuOptions={configuredDeckMenuOptions}
@@ -188,11 +185,11 @@ export function SavedRecordingsPage({
             selectedFuriganaRecordings={selectedFuriganaRecordings}
             selectedUntranslatedRecordings={selectedUntranslatedRecordings}
             selectedConvertibleRecordings={selectedConvertibleRecordings}
+            selectedRecordingsPushableToDeck={selectedRecordingsPushableToDeck}
             untranscribedRecordings={untranscribedRecordings}
             pushableRecordings={pushableRecordings}
             untranslatedRecordings={untranslatedRecordings}
             convertibleRecordings={convertibleRecordings}
-            selectedRecordingsPushableToDeck={selectedRecordingsPushableToDeck}
             onFilterChange={onFilterChange}
             onDefaultDeckChange={onDefaultDeckChange}
             onRefreshAnki={onRefreshAnki}

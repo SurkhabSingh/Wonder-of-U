@@ -8,7 +8,11 @@ import {
   recordingChips,
 } from "../../lib/helpers";
 import { useFileDrop } from "../../hooks/useFileDrop";
-import type { RecentRecording, RecorderPhase } from "../../types";
+import type {
+  RecentRecording,
+  RecorderPhase,
+  RecordingFilter,
+} from "../../types";
 import { recorderStatusLabel } from "../recorder/RecorderPage";
 import { TooltipBadge } from "../ui/Tooltip";
 
@@ -57,7 +61,7 @@ export function HomePage({
   isImporting: boolean;
   onImportMedia: (paths: string[]) => void;
   onView: (filePath: string) => void;
-  onOpenLibrary: () => void;
+  onOpenLibrary: (filter?: RecordingFilter) => void;
 }) {
   const recent = recentRecordings.slice(0, 5);
   // A rejected drop or a failed picker has to say so. Silently doing nothing is
@@ -161,15 +165,27 @@ export function HomePage({
       </article>
 
       <div className="home-needs-row">
-        <button type="button" className="home-stat" onClick={onOpenLibrary}>
+        <button
+          type="button"
+          className="home-stat"
+          onClick={() => onOpenLibrary("needsTranscription")}
+        >
           <span className="home-stat-value is-warning">{needsTranscriptCount}</span>
           <span className="home-stat-label">Need transcript</span>
         </button>
-        <button type="button" className="home-stat" onClick={onOpenLibrary}>
+        <button
+          type="button"
+          className="home-stat"
+          onClick={() => onOpenLibrary("needsTranslation")}
+        >
           <span className="home-stat-value is-accent">{needsTranslationCount}</span>
           <span className="home-stat-label">Need translation</span>
         </button>
-        <button type="button" className="home-stat" onClick={onOpenLibrary}>
+        <button
+          type="button"
+          className="home-stat"
+          onClick={() => onOpenLibrary("needsAnki")}
+        >
           <span className="home-stat-value is-success">{readyForAnkiCount}</span>
           <span className="home-stat-label">Ready for Anki</span>
         </button>
@@ -182,14 +198,23 @@ export function HomePage({
             <h2>Latest recordings</h2>
           </div>
           {recentRecordings.length > 0 ? (
-            <button type="button" className="ghost" onClick={onOpenLibrary}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => onOpenLibrary()}
+            >
               View library
             </button>
           ) : null}
         </header>
 
         {recent.length === 0 ? (
-          <p className="empty-state">No recordings yet</p>
+          <div className="empty-state">
+            No recordings yet
+            <span className="empty-state-hint">
+              Record or import to see your recordings here
+            </span>
+          </div>
         ) : (
           <ul className="home-recent-list">
             {recent.map((recording) => {
@@ -249,7 +274,7 @@ export function HomePage({
         }${importDisabled ? " is-busy" : ""}`}
       >
         <span className="home-dropzone-icon" aria-hidden="true">
-          ＋
+          +
         </span>
         <span className="home-dropzone-label">
           {isImporting

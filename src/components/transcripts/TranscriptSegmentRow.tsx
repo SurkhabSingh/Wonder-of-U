@@ -154,7 +154,7 @@ export function TranscriptSegmentRow({
                 title="Split this line in two"
                 aria-label="Split this line in two"
               >
-                <span aria-hidden="true">{"|"}</span>
+                <span aria-hidden="true">{"⤒"}</span>
               </button>
             ) : null}
             {onMine ? (
@@ -163,7 +163,7 @@ export function TranscriptSegmentRow({
                   className="transcript-segment-mined"
                   title="Mined to Anki"
                 >
-                  {"✓ Mined"}
+                  <span aria-hidden="true">✓</span> Mined
                 </span>
               ) : (
                 <button

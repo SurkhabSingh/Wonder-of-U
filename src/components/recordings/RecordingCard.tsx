@@ -119,6 +119,28 @@ export function RecordingCard({
     recordingPushedToCurrentAnkiDeck,
   );
 
+  // The full provenance — paths, the deleted-audio explanation, and every
+  // transcribed language — lives in the row's hover title so the visible chip
+  // row can stay to a single line of the most-relevant state.
+  const stateRowTitleParts: string[] = [];
+  if (recording.audioDeleted) {
+    stateRowTitleParts.push("Transcript only — local audio deleted");
+    if (recording.transcriptPath) {
+      stateRowTitleParts.push(`Transcript: ${recording.transcriptPath}`);
+    }
+  } else {
+    stateRowTitleParts.push(`Audio: ${recording.filePath}`);
+    if (recording.transcriptPath) {
+      stateRowTitleParts.push(`Transcript: ${recording.transcriptPath}`);
+    }
+  }
+  if (languageLabels.length > 0) {
+    stateRowTitleParts.push(
+      `Transcribed languages: ${languageLabels.join(", ")}`,
+    );
+  }
+  const stateRowTitle = stateRowTitleParts.join("\n");
+
   // The single most-relevant next step, surfaced as a one-click primary button.
   // Priority mirrors recordingChips(); each case invokes the same handler its
   // matching overflow-menu item uses, so no new behavior is introduced.
@@ -154,7 +176,7 @@ export function RecordingCard({
             };
 
   return (
-    <article className="recording-item">
+    <article className={`recording-item ${selected ? "is-selected" : ""}`}>
       <div className="recording-select">
         <input
           type="checkbox"
@@ -181,14 +203,7 @@ export function RecordingCard({
           {formatBytes(recording.bytesWritten)} ·{" "}
           {formatTimestamp(recording.createdAtMs)}
         </span>
-        <div
-          className="recording-state-row"
-          title={
-            recording.transcriptPath
-              ? `Audio: ${recording.filePath}\nTranscript: ${recording.transcriptPath}`
-              : `Audio: ${recording.filePath}`
-          }
-        >
+        <div className="recording-state-row" title={stateRowTitle}>
           {stateChips.map((chip) => (
             <span
               key={chip.label}
@@ -197,13 +212,11 @@ export function RecordingCard({
               {chip.label}
             </span>
           ))}
-          <span className="status-chip status-chip-neutral">
-            {recording.audioDeleted
-              ? "Transcript only - local audio deleted"
-              : recording.transcriptPath
-                ? "Audio + transcript"
-                : "Audio only"}
-          </span>
+          {recording.audioDeleted ? (
+            <span className="status-chip status-chip-neutral">
+              Transcript only
+            </span>
+          ) : null}
           {hasAnyAnkiPush ? (
             <span
               className="status-chip status-chip-neutral"
@@ -225,17 +238,6 @@ export function RecordingCard({
                   : recording.ankiDeckName
                     ? `Anki: ${recording.ankiDeckName}`
                     : "In Anki"}
-            </span>
-          ) : null}
-          {recording.translationPath !== null ? (
-            <span className="status-chip status-chip-success">Translated</span>
-          ) : null}
-          {languageLabels.length > 0 ? (
-            <span
-              className="status-chip status-chip-neutral"
-              title={`Transcribed languages: ${languageLabels.join(", ")}`}
-            >
-              Transcripts: {languageLabels.join(", ")}
             </span>
           ) : null}
         </div>
@@ -347,7 +349,7 @@ export function RecordingCard({
                     >
                       Push to another deck
                       <span className="action-menu-sub-arrow" aria-hidden="true">
-                        &gt;
+                        ›
                       </span>
                     </DropdownMenuPrimitive.SubTrigger>
                     <DropdownMenuPrimitive.Portal>

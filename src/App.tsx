@@ -127,7 +127,6 @@ function App() {
     recordingPage,
     recordingPageCount,
     recordingSearch,
-    filteredRecordingsCount,
     recordingPushedToCurrentAnkiDeck,
     recordingPushedToDeck,
     selectedConvertibleRecordings,
@@ -306,7 +305,12 @@ function App() {
                 });
               }}
               onView={openTranscriptViewer}
-              onOpenLibrary={() => setActivePage("recordings")}
+              onOpenLibrary={(filter) => {
+                if (filter) {
+                  setRecordingFilter(filter);
+                }
+                setActivePage("recordings");
+              }}
             />
           ) : null}
 
@@ -320,7 +324,6 @@ function App() {
               recordingPage={recordingPage}
               recordingPageCount={recordingPageCount}
               recordingSearch={recordingSearch}
-              filteredRecordingsCount={filteredRecordingsCount}
               selectedRecordings={selectedRecordings}
               visibleSelectedPaths={visibleSelectedPaths}
               configuredAnkiDeckLabel={configuredAnkiDeckLabel}

@@ -58,12 +58,7 @@ export function SetupChecklist({
             {marker === "done" ? "✓" : ""}
           </span>
           <span className="setup-step-body">
-            <span className="setup-step-label">
-              {step.label}
-              {!step.required ? (
-                <span className="setup-step-optional">Optional</span>
-              ) : null}
-            </span>
+            <span className="setup-step-label">{step.label}</span>
             <small className={step.value ? "setup-step-value" : undefined}>
               {detail}
             </small>

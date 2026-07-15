@@ -1,6 +1,15 @@
 import { whisperStatusLabel } from "../../lib/helpers";
 import type { AppBootstrap, AppSettings } from "../../types";
-import { TooltipBadge } from "../ui/Tooltip";
+
+function whisperStatusTone(status: string): "success" | "warning" | "error" {
+  if (status === "ready") {
+    return "success";
+  }
+  if (status === "invalid") {
+    return "error";
+  }
+  return "warning";
+}
 
 export function WhisperStatusSettingsPage({
   activeRuntimeVersion,
@@ -24,10 +33,14 @@ export function WhisperStatusSettingsPage({
           <p className="panel-kicker">Whisper Setup</p>
           <h2>Whisper</h2>
         </div>
-        <TooltipBadge
-          label={whisperStatusLabel(bootstrap.whisperDetection.status)}
-          description={bootstrap.whisperDetection.message}
-        />
+        <span
+          className={`status-chip status-chip-${whisperStatusTone(
+            bootstrap.whisperDetection.status,
+          )}`}
+          title={bootstrap.whisperDetection.message}
+        >
+          {whisperStatusLabel(bootstrap.whisperDetection.status)}
+        </span>
       </header>
 
       <div className="meta-list compact-meta-list">

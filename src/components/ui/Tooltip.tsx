@@ -11,7 +11,7 @@ export function TooltipBadge({
   return (
     <TooltipPrimitive.Root>
       <TooltipPrimitive.Trigger asChild>
-        <span className="tooltip-badge" aria-label={description}>
+        <span className="tooltip-badge" tabIndex={0} aria-label={description}>
           {label}
         </span>
       </TooltipPrimitive.Trigger>

@@ -4,6 +4,7 @@ import type { RecordingFilterTab } from "../../lib/navigation";
 import type { BusyAction, RecentRecording, RecordingFilter } from "../../types";
 import { TooltipWrap } from "../ui/Tooltip";
 import { RecordingFilterTabs } from "./RecordingFilterTabs";
+import { SelectionActionBar } from "./SelectionActionBar";
 
 type RecordingAction = (filePaths: string[]) => void | Promise<void>;
 type PushAction = (filePaths: string[], deckName?: string) => void | Promise<void>;
@@ -11,7 +12,6 @@ type PushAction = (filePaths: string[], deckName?: string) => void | Promise<voi
 export function SavedRecordingsToolbar({
   recordingFilter,
   recordingFilterTabs,
-  visibleRecordingsCount,
   visibleSelectedPaths,
   configuredAnkiDeckLabel,
   configuredDeckMenuOptions,
@@ -25,11 +25,11 @@ export function SavedRecordingsToolbar({
   selectedFuriganaRecordings,
   selectedUntranslatedRecordings,
   selectedConvertibleRecordings,
+  selectedRecordingsPushableToDeck,
   untranscribedRecordings,
   pushableRecordings,
   untranslatedRecordings,
   convertibleRecordings,
-  selectedRecordingsPushableToDeck,
   onFilterChange,
   onDefaultDeckChange,
   onRefreshAnki,
@@ -43,7 +43,6 @@ export function SavedRecordingsToolbar({
 }: {
   recordingFilter: RecordingFilter;
   recordingFilterTabs: RecordingFilterTab[];
-  visibleRecordingsCount: number;
   visibleSelectedPaths: string[];
   configuredAnkiDeckLabel: string;
   configuredDeckMenuOptions: string[];
@@ -57,11 +56,11 @@ export function SavedRecordingsToolbar({
   selectedFuriganaRecordings: RecentRecording[];
   selectedUntranslatedRecordings: RecentRecording[];
   selectedConvertibleRecordings: RecentRecording[];
+  selectedRecordingsPushableToDeck: (deckName: string) => RecentRecording[];
   untranscribedRecordings: RecentRecording[];
   pushableRecordings: RecentRecording[];
   untranslatedRecordings: RecentRecording[];
   convertibleRecordings: RecentRecording[];
-  selectedRecordingsPushableToDeck: (deckName: string) => RecentRecording[];
   onFilterChange: (filter: RecordingFilter) => void;
   onDefaultDeckChange: (deckName: string) => void;
   onRefreshAnki: () => void | Promise<void>;
@@ -75,6 +74,37 @@ export function SavedRecordingsToolbar({
 }) {
   const hasSelection = visibleSelectedPaths.length > 0;
 
+  // Gmail-style select mode: with a selection active the filter tabs + toolbar
+  // row give way to a batch-actions bar that occupies the same slot. Nothing new
+  // floats or docks — the toolbar row itself morphs into the action bar.
+  if (hasSelection) {
+    return (
+      <SelectionActionBar
+        visibleSelectedPaths={visibleSelectedPaths}
+        configuredDeckMenuOptions={configuredDeckMenuOptions}
+        busyAction={busyAction}
+        allowMp3Conversion={allowMp3Conversion}
+        expressionFieldMapped={expressionFieldMapped}
+        selectedUntranscribedRecordings={selectedUntranscribedRecordings}
+        selectedPushableRecordings={selectedPushableRecordings}
+        selectedTranscribedRecordings={selectedTranscribedRecordings}
+        selectedFuriganaRecordings={selectedFuriganaRecordings}
+        selectedUntranslatedRecordings={selectedUntranslatedRecordings}
+        selectedConvertibleRecordings={selectedConvertibleRecordings}
+        selectedRecordingsPushableToDeck={selectedRecordingsPushableToDeck}
+        onTranscribe={onTranscribe}
+        onPushToAnki={onPushToAnki}
+        onAddFurigana={onAddFurigana}
+        onTranslate={onTranslate}
+        onConvertToMp3={onConvertToMp3}
+        onDelete={onDelete}
+        onClearSelection={onClearSelection}
+      />
+    );
+  }
+
+  // No selection: the toolbar's job is filters + the "…All" shortcuts for the
+  // current filter.
   return (
     <>
       <RecordingFilterTabs
@@ -83,26 +113,89 @@ export function SavedRecordingsToolbar({
         onChange={onFilterChange}
       />
 
-      <div
-        className={`recording-toolbar ${
-          hasSelection ? "recording-toolbar-selected" : ""
-        }`}
-      >
-        <div className="recording-toolbar-summary">
-          <span className="selection-summary">
-            {hasSelection
-              ? `${visibleSelectedPaths.length} selected`
-              : `${visibleRecordingsCount} shown`}
-          </span>
+      <div className="recording-toolbar">
+        {/* LEFT: the current filter's one bulk action, styled as a prominent
+            accent-outline button. Empty when the active filter has none. */}
+        <div className="recording-toolbar-actions">
+          {recordingFilter === "needsTranscription" &&
+          untranscribedRecordings.length > 0 ? (
+            <button
+              type="button"
+              className="selection-action-btn"
+              onClick={() =>
+                void onTranscribe(
+                  untranscribedRecordings.map((recording) => recording.filePath),
+                )
+              }
+              disabled={busyAction === "transcribeRecording"}
+            >
+              Transcribe All
+            </button>
+          ) : null}
+          {recordingFilter === "needsAnki" && pushableRecordings.length > 0 ? (
+            <button
+              type="button"
+              className="selection-action-btn"
+              onClick={() =>
+                void onPushToAnki(
+                  pushableRecordings.map((recording) => recording.filePath),
+                )
+              }
+              disabled={busyAction === "pushAnki"}
+            >
+              Push All
+            </button>
+          ) : null}
+          {recordingFilter === "needsTranslation" &&
+          untranslatedRecordings.length > 0 ? (
+            <button
+              type="button"
+              className="selection-action-btn"
+              onClick={() =>
+                void onTranslate(
+                  untranslatedRecordings.map((recording) => recording.filePath),
+                )
+              }
+              disabled={busyAction === "translateRecording"}
+            >
+              Translate All
+            </button>
+          ) : null}
+          {allowMp3Conversion && convertibleRecordings.length > 0 ? (
+            <TooltipWrap description={MP3_CONVERSION_WARNING}>
+              <button
+                type="button"
+                className="selection-action-btn"
+                onClick={() =>
+                  void onConvertToMp3(
+                    convertibleRecordings.map((recording) => recording.filePath),
+                  )
+                }
+                disabled={busyAction === "convertMp3"}
+              >
+                Convert All WAV
+              </button>
+            </TooltipWrap>
+          ) : null}
+        </div>
+
+        {/* RIGHT: a quiet Anki cluster — the default-deck selector paired with a
+            ghost Refresh. Grouped so they read as one unit. */}
+        <div className="recording-toolbar-anki">
           <DropdownMenuPrimitive.Root>
             <DropdownMenuPrimitive.Trigger asChild>
               <button
                 type="button"
-                className="target-deck-pill target-deck-trigger"
+                className="deck-select-trigger"
                 disabled={configuredDeckMenuOptions.length === 0}
                 title="Change the default Anki deck for normal pushes"
               >
-                Deck: {configuredAnkiDeckLabel}
+                <span className="deck-select-label">
+                  Deck: {configuredAnkiDeckLabel}
+                </span>
+                <span className="deck-select-caret" aria-hidden="true">
+                  {"▾"}
+                </span>
               </button>
             </DropdownMenuPrimitive.Trigger>
             <DropdownMenuPrimitive.Portal>
@@ -131,266 +224,13 @@ export function SavedRecordingsToolbar({
           </DropdownMenuPrimitive.Root>
           <button
             type="button"
-            className="target-deck-pill target-deck-trigger"
+            className="ghost"
             onClick={() => void onRefreshAnki()}
             disabled={busyAction === "loadAnki"}
             title="Refresh Anki decks, note types, fields, and pushed-card status"
           >
-            Refresh Anki
+            <span aria-hidden="true">{"↻"}</span> Refresh
           </button>
-        </div>
-        <div className="recording-toolbar-actions">
-          {hasSelection ? (
-            <DropdownMenuPrimitive.Root>
-              <DropdownMenuPrimitive.Trigger asChild>
-                <button
-                  type="button"
-                  className="secondary selected-actions-trigger"
-                >
-                  Batch Actions
-                </button>
-              </DropdownMenuPrimitive.Trigger>
-              <DropdownMenuPrimitive.Portal>
-                <DropdownMenuPrimitive.Content
-                  className="action-menu-content selected-actions-menu-content"
-                  align="end"
-                  sideOffset={6}
-                >
-                  <DropdownMenuPrimitive.Label className="action-menu-label">
-                    Selected recordings
-                  </DropdownMenuPrimitive.Label>
-                  {selectedUntranscribedRecordings.length > 0 ? (
-                    <DropdownMenuPrimitive.Item
-                      className="action-menu-item"
-                      onSelect={() =>
-                        void onTranscribe(
-                          selectedUntranscribedRecordings.map(
-                            (recording) => recording.filePath,
-                          ),
-                        )
-                      }
-                      disabled={busyAction === "transcribeRecording"}
-                    >
-                      Transcribe
-                      <span className="action-menu-meta">
-                        {selectedUntranscribedRecordings.length}
-                      </span>
-                    </DropdownMenuPrimitive.Item>
-                  ) : null}
-                  {selectedPushableRecordings.length > 0 ? (
-                    <DropdownMenuPrimitive.Item
-                      className="action-menu-item"
-                      onSelect={() =>
-                        void onPushToAnki(
-                          selectedPushableRecordings.map(
-                            (recording) => recording.filePath,
-                          ),
-                        )
-                      }
-                      disabled={busyAction === "pushAnki"}
-                    >
-                      Push to target deck
-                      <span className="action-menu-meta">
-                        {selectedPushableRecordings.length}
-                      </span>
-                    </DropdownMenuPrimitive.Item>
-                  ) : null}
-                  {selectedTranscribedRecordings.some(
-                    (recording) => !recording.audioDeleted,
-                  ) && configuredDeckMenuOptions.length > 0 ? (
-                    <DropdownMenuPrimitive.Sub>
-                      <DropdownMenuPrimitive.SubTrigger
-                        className="action-menu-item action-menu-sub-trigger"
-                        disabled={busyAction === "pushAnki"}
-                      >
-                        Push to another deck
-                        <span className="action-menu-sub-arrow" aria-hidden="true">
-                          &gt;
-                        </span>
-                      </DropdownMenuPrimitive.SubTrigger>
-                      <DropdownMenuPrimitive.Portal>
-                        <DropdownMenuPrimitive.SubContent
-                          className="action-menu-content action-menu-sub-content"
-                          sideOffset={8}
-                          alignOffset={-4}
-                        >
-                          <DropdownMenuPrimitive.Label className="action-menu-label">
-                            Choose target deck
-                          </DropdownMenuPrimitive.Label>
-                          {configuredDeckMenuOptions.map((deck) => {
-                            const deckPushable =
-                              selectedRecordingsPushableToDeck(deck);
-                            return (
-                              <DropdownMenuPrimitive.Item
-                                key={deck}
-                                className="action-menu-item"
-                                onSelect={() =>
-                                  void onPushToAnki(
-                                    deckPushable.map(
-                                      (recording) => recording.filePath,
-                                    ),
-                                    deck,
-                                  )
-                                }
-                                disabled={
-                                  deckPushable.length === 0 ||
-                                  busyAction === "pushAnki"
-                                }
-                              >
-                                <span>{deck}</span>
-                                <span className="action-menu-meta">
-                                  {deckPushable.length > 0
-                                    ? deckPushable.length
-                                    : "Done"}
-                                </span>
-                              </DropdownMenuPrimitive.Item>
-                            );
-                          })}
-                        </DropdownMenuPrimitive.SubContent>
-                      </DropdownMenuPrimitive.Portal>
-                    </DropdownMenuPrimitive.Sub>
-                  ) : null}
-                  {selectedFuriganaRecordings.length > 0 ? (
-                    <DropdownMenuPrimitive.Item
-                      className="action-menu-item"
-                      onSelect={() =>
-                        void onAddFurigana(
-                          selectedFuriganaRecordings.map(
-                            (recording) => recording.filePath,
-                          ),
-                        )
-                      }
-                      disabled={!expressionFieldMapped || busyAction === "addFurigana"}
-                    >
-                      Add furigana
-                      <span className="action-menu-meta">
-                        {expressionFieldMapped
-                          ? selectedFuriganaRecordings.length
-                          : "Map field"}
-                      </span>
-                    </DropdownMenuPrimitive.Item>
-                  ) : null}
-                  {selectedUntranslatedRecordings.length > 0 ? (
-                    <DropdownMenuPrimitive.Item
-                      className="action-menu-item"
-                      onSelect={() =>
-                        void onTranslate(
-                          selectedUntranslatedRecordings.map(
-                            (recording) => recording.filePath,
-                          ),
-                        )
-                      }
-                      disabled={busyAction === "translateRecording"}
-                    >
-                      Translate
-                      <span className="action-menu-meta">
-                        {selectedUntranslatedRecordings.length}
-                      </span>
-                    </DropdownMenuPrimitive.Item>
-                  ) : null}
-                  {allowMp3Conversion && selectedConvertibleRecordings.length > 0 ? (
-                    <DropdownMenuPrimitive.Item
-                      className="action-menu-item"
-                      title={MP3_CONVERSION_WARNING}
-                      onSelect={() =>
-                        void onConvertToMp3(
-                          selectedConvertibleRecordings.map(
-                            (recording) => recording.filePath,
-                          ),
-                        )
-                      }
-                      disabled={busyAction === "convertMp3"}
-                    >
-                      Convert to MP3
-                      <span className="action-menu-meta">
-                        {selectedConvertibleRecordings.length}
-                      </span>
-                    </DropdownMenuPrimitive.Item>
-                  ) : null}
-                  <DropdownMenuPrimitive.Separator className="action-menu-separator" />
-                  <DropdownMenuPrimitive.Item
-                    className="action-menu-item action-menu-item-danger"
-                    onSelect={() => void onDelete(visibleSelectedPaths)}
-                    disabled={busyAction === "deleteRecording"}
-                  >
-                    Delete
-                    <span className="action-menu-meta">
-                      {visibleSelectedPaths.length}
-                    </span>
-                  </DropdownMenuPrimitive.Item>
-                </DropdownMenuPrimitive.Content>
-              </DropdownMenuPrimitive.Portal>
-            </DropdownMenuPrimitive.Root>
-          ) : null}
-          {!hasSelection &&
-          recordingFilter === "needsTranscription" &&
-          untranscribedRecordings.length > 0 ? (
-            <button
-              type="button"
-              className="secondary"
-              onClick={() =>
-                void onTranscribe(
-                  untranscribedRecordings.map((recording) => recording.filePath),
-                )
-              }
-              disabled={busyAction === "transcribeRecording"}
-            >
-              Transcribe All
-            </button>
-          ) : null}
-          {!hasSelection &&
-          recordingFilter === "needsAnki" &&
-          pushableRecordings.length > 0 ? (
-            <button
-              type="button"
-              className="secondary"
-              onClick={() =>
-                void onPushToAnki(
-                  pushableRecordings.map((recording) => recording.filePath),
-                )
-              }
-              disabled={busyAction === "pushAnki"}
-            >
-              Push All
-            </button>
-          ) : null}
-          {!hasSelection &&
-          recordingFilter === "needsTranslation" &&
-          untranslatedRecordings.length > 0 ? (
-            <button
-              type="button"
-              className="secondary"
-              onClick={() =>
-                void onTranslate(
-                  untranslatedRecordings.map((recording) => recording.filePath),
-                )
-              }
-              disabled={busyAction === "translateRecording"}
-            >
-              Translate All
-            </button>
-          ) : null}
-          {!hasSelection && allowMp3Conversion && convertibleRecordings.length > 0 ? (
-            <TooltipWrap description={MP3_CONVERSION_WARNING}>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() =>
-                  void onConvertToMp3(
-                    convertibleRecordings.map((recording) => recording.filePath),
-                  )
-                }
-                disabled={busyAction === "convertMp3"}
-              >
-                Convert All WAV
-              </button>
-            </TooltipWrap>
-          ) : null}
-          {hasSelection ? (
-            <button type="button" className="ghost" onClick={onClearSelection}>
-              Clear selection
-            </button>
-          ) : null}
         </div>
       </div>
     </>

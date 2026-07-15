@@ -36,10 +36,18 @@ export function AnkiMappingSettingsPage({
           <h2>Card Mapping</h2>
         </div>
         <div className="panel-actions">
-          <TooltipBadge
-            label={displayedAnkiCatalog.status === "ready" ? "Ready" : "Saved"}
-            description={displayedAnkiCatalog.message}
-          />
+          <span
+            className={`status-chip status-chip-${
+              displayedAnkiCatalog.status === "ready"
+                ? "success"
+                : displayedAnkiCatalog.status === "offline"
+                  ? "error"
+                  : "warning"
+            }`}
+            title={displayedAnkiCatalog.message}
+          >
+            {displayedAnkiCatalog.status === "ready" ? "Ready" : "Saved"}
+          </span>
           <button
             type="button"
             className="secondary"
@@ -198,7 +206,7 @@ export function AnkiMappingSettingsPage({
         />
       </div>
 
-      <div className="update-card">
+      <div className="info-note">
         <label className="toggle inline-toggle">
           <input
             type="checkbox"
@@ -221,7 +229,7 @@ export function AnkiMappingSettingsPage({
         </p>
       </div>
 
-      <div className="update-card">
+      <div className="info-note">
         <strong>
           Recommended mapping: Expression / transcript -&gt; Expression or Back,
           Replay audio -&gt; Audio or Front.

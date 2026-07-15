@@ -188,7 +188,6 @@ export function ModelSettingsPage({
           <div className="action-row inline-actions">
             <button
               type="button"
-              className="secondary"
               onClick={() => void onDownloadRecommendedModel()}
               disabled={downloadIsActive || busyAction === "downloadModel"}
             >
