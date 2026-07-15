@@ -1,22 +1,34 @@
 import { fileNameFromPath } from "../../lib/format";
-import type { AppBootstrap, BusyAction } from "../../types";
+import type {
+  AppBootstrap,
+  BusyAction,
+  WhisperAssetUpdateResult,
+} from "../../types";
+import { UpdateResultCard } from "../ui/UpdateResultCard";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 
 export function StorageSettingsPage({
   bootstrap,
   busyAction,
   downloadIsActive,
+  ytdlpUpdateResult,
   onCancelDownload,
   onDownloadRecommendedFfmpeg,
+  onDownloadRecommendedYtdlp,
+  onCheckYtdlpUpdate,
   onToggleDownloadPause,
 }: {
   bootstrap: AppBootstrap;
   busyAction: BusyAction;
   downloadIsActive: boolean;
+  ytdlpUpdateResult: WhisperAssetUpdateResult | null;
   onCancelDownload: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
+  onDownloadRecommendedYtdlp: () => void | Promise<void>;
+  onCheckYtdlpUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
 }) {
+  const ytdlpReady = bootstrap.ytdlpDetection.status === "ready";
   return (
     <>
       <header className="panel-header">
@@ -71,6 +83,68 @@ export function StorageSettingsPage({
       <DownloadProgressCard
         snapshot={bootstrap.modelDownload}
         kind="ffmpeg"
+        downloadIsActive={downloadIsActive}
+        onTogglePause={() => void onToggleDownloadPause()}
+        onCancel={() => void onCancelDownload()}
+      />
+
+      <header className="panel-header">
+        <div>
+          <p className="panel-kicker">Storage</p>
+          <h2>YouTube Import</h2>
+        </div>
+        <span
+          className={`status-chip status-chip-${ytdlpReady ? "success" : "warning"}`}
+          title={bootstrap.ytdlpDetection.message}
+        >
+          {ytdlpReady ? "Ready" : "Missing"}
+        </span>
+      </header>
+
+      <div className={`update-card ${ytdlpReady ? "current" : "available"}`}>
+        <strong>
+          {bootstrap.ytdlpDetection.message ||
+            (ytdlpReady
+              ? "yt-dlp is installed and ready to fetch YouTube audio."
+              : "Install yt-dlp to import audio from a YouTube link.")}
+        </strong>
+        <p className="microcopy">
+          Wonder of U uses yt-dlp to fetch a YouTube video's audio into your
+          Library. Once it lands, transcribe it from the Library like any other
+          recording. yt-dlp is fetched from its official releases (GPLv3); it is
+          not bundled.
+        </p>
+        {bootstrap.ytdlpDetection.executablePath ? (
+          <p className="path-copy" title={bootstrap.ytdlpDetection.executablePath}>
+            {fileNameFromPath(bootstrap.ytdlpDetection.executablePath)}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="action-row inline-actions">
+        {ytdlpReady ? (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onCheckYtdlpUpdate()}
+            disabled={busyAction === "checkYtdlpUpdate"}
+          >
+            Update yt-dlp
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void onDownloadRecommendedYtdlp()}
+            disabled={downloadIsActive || busyAction === "downloadYtdlp"}
+          >
+            Download yt-dlp
+          </button>
+        )}
+      </div>
+      <UpdateResultCard result={ytdlpUpdateResult} />
+      <DownloadProgressCard
+        snapshot={bootstrap.modelDownload}
+        kind="ytdlp"
         downloadIsActive={downloadIsActive}
         onTogglePause={() => void onToggleDownloadPause()}
         onCancel={() => void onCancelDownload()}

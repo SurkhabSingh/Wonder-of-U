@@ -61,6 +61,7 @@ export function createSetupChecklist({
   cliReady,
   modelReady,
   ffmpegReady,
+  ytdlpReady,
   ankiConfigured,
   runtimeVersion,
   modelLabel,
@@ -70,6 +71,7 @@ export function createSetupChecklist({
   cliReady: boolean;
   modelReady: boolean;
   ffmpegReady: boolean;
+  ytdlpReady: boolean;
   ankiConfigured: boolean;
   runtimeVersion?: string | null;
   modelLabel?: string | null;
@@ -129,6 +131,16 @@ export function createSetupChecklist({
         ? "FFmpeg ready"
         : "Install FFmpeg for optional MP3 conversion",
       done: ffmpegReady,
+      required: false,
+    },
+    {
+      id: "ytdlp",
+      target: "storage",
+      label: "YouTube Import",
+      description: ytdlpReady
+        ? "yt-dlp ready"
+        : "Install yt-dlp for optional YouTube import",
+      done: ytdlpReady,
       required: false,
     },
     {

@@ -33,6 +33,7 @@ type UseSetupActionsOptions = {
   setLoadError: (message: string) => void;
   setModelUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   setRuntimeUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
+  setYtdlpUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   settingsDraft: AppSettings;
   updateSettings: (update: SettingsUpdate) => void;
 };
@@ -51,6 +52,7 @@ export function useSetupActions({
   setLoadError,
   setModelUpdateResult,
   setRuntimeUpdateResult,
+  setYtdlpUpdateResult,
   settingsDraft,
   updateSettings,
 }: UseSetupActionsOptions) {
@@ -100,6 +102,33 @@ export function useSetupActions({
       setBusyAction(null);
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+
+  const downloadRecommendedYtdlp = useCallback(async () => {
+    try {
+      setBusyAction("downloadYtdlp");
+      const nextBootstrap = await invoke<AppBootstrap>("download_recommended_ytdlp");
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("storage");
+    } catch (error) {
+      setLoadError(errorMessage(error, "yt-dlp could not be prepared."));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+
+  const checkYtdlpUpdate = useCallback(async () => {
+    try {
+      setBusyAction("checkYtdlpUpdate");
+      const result = await invoke<WhisperAssetUpdateResult>("check_ytdlp_update");
+      setYtdlpUpdateResult(result);
+    } catch (error) {
+      setLoadError(
+        errorMessage(error, "The yt-dlp update check could not be completed."),
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }, [setBusyAction, setLoadError, setYtdlpUpdateResult]);
 
   const downloadRecommendedModel = useCallback(async () => {
     try {
@@ -264,9 +293,11 @@ export function useSetupActions({
     cancelDownload,
     checkModelUpdate,
     checkRuntimeUpdate,
+    checkYtdlpUpdate,
     downloadRecommendedFfmpeg,
     downloadRecommendedModel,
     downloadRecommendedRuntime,
+    downloadRecommendedYtdlp,
     downloadRuntimeVersion,
     toggleDownloadPause,
     updateAnkiField,

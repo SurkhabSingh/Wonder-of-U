@@ -15,6 +15,7 @@ import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
 import { useSetupActions } from "./hooks/useSetupActions";
+import { useYoutubeQueue } from "./hooks/useYoutubeQueue";
 import type {
   AppPage,
   BusyAction,
@@ -46,7 +47,18 @@ function App() {
     useState<WhisperAssetUpdateResult | null>(null);
   const [modelUpdateResult, setModelUpdateResult] =
     useState<WhisperAssetUpdateResult | null>(null);
+  const [ytdlpUpdateResult, setYtdlpUpdateResult] =
+    useState<WhisperAssetUpdateResult | null>(null);
   const [recordingActionMessage, setRecordingActionMessage] = useState("");
+
+  // The Library status microcopy is never cleared by its setters, so it lingers
+  // on the page. Clear it ~6s after it becomes non-empty; the cleanup means each
+  // new message resets the timer rather than stacking timeouts.
+  useEffect(() => {
+    if (!recordingActionMessage) return;
+    const id = setTimeout(() => setRecordingActionMessage(""), 6000);
+    return () => clearTimeout(id);
+  }, [recordingActionMessage]);
 
   function showWarning(message: string) {
     toast.warning(message, { duration: 5000 });
@@ -184,9 +196,11 @@ function App() {
     cancelDownload,
     checkModelUpdate,
     checkRuntimeUpdate,
+    checkYtdlpUpdate,
     downloadRecommendedFfmpeg,
     downloadRecommendedModel,
     downloadRecommendedRuntime,
+    downloadRecommendedYtdlp,
     downloadRuntimeVersion,
     toggleDownloadPause,
     updateAnkiField,
@@ -200,6 +214,7 @@ function App() {
     setLoadError,
     setModelUpdateResult,
     setRuntimeUpdateResult,
+    setYtdlpUpdateResult,
     settingsDraft,
     updateSettings,
   });
@@ -218,6 +233,7 @@ function App() {
     deleteRecording,
     deleteRecordings,
     importMedia,
+    importYoutube,
     mineSegment,
     pushRecordingsToAnki,
     transcribeRecordings,
@@ -230,6 +246,18 @@ function App() {
     setRecordingActionMessage,
     showSuccess,
     showWarning,
+  });
+
+  // Sequential frontend queue over the single-URL YouTube import: a paste of
+  // many links fetches one at a time on the shared download slot. Navigation to
+  // the Library is deferred until the whole queue is done, not per URL.
+  const youtubeQueue = useYoutubeQueue({
+    importYoutube,
+    onAllComplete: (landed) => {
+      if (landed > 0) {
+        setActivePage("recordings");
+      }
+    },
   });
 
   // Sentence mining needs a mapped expression field to write to and a reachable
@@ -304,6 +332,14 @@ function App() {
                   }
                 });
               }}
+              isFetchingYoutube={youtubeQueue.activeCount > 0}
+              youtubeItems={youtubeQueue.items}
+              youtubeCurrentIndex={youtubeQueue.currentIndex}
+              youtubeTotal={youtubeQueue.total}
+              onEnqueueYoutube={youtubeQueue.enqueue}
+              onRemoveYoutube={youtubeQueue.remove}
+              youtubeActiveProgress={youtubeQueue.activeProgress}
+              onCancelYoutube={youtubeQueue.cancelActive}
               onView={openTranscriptViewer}
               onOpenLibrary={(filter) => {
                 if (filter) {
@@ -453,6 +489,7 @@ function App() {
             runtimeUpdateResult={runtimeUpdateResult}
             runtimeUpdateVersion={runtimeUpdateVersion}
             modelUpdateResult={modelUpdateResult}
+            ytdlpUpdateResult={ytdlpUpdateResult}
             runtimeInstalled={runtimeInstalled}
             modelInstalled={modelInstalled}
             resolvedCliPath={resolvedCliPath}
@@ -467,6 +504,8 @@ function App() {
             onCheckModelUpdate={checkModelUpdate}
             onDownloadRecommendedModel={downloadRecommendedModel}
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
+            onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
+            onCheckYtdlpUpdate={checkYtdlpUpdate}
             onToggleDownloadPause={toggleDownloadPause}
             onCancelDownload={cancelDownload}
             onRefreshAnkiCatalog={refreshAnkiCatalog}

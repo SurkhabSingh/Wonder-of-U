@@ -13,18 +13,22 @@ use crate::{
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
         download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
-        download_whisper_runtime_version_inner, toggle_whisper_model_download_pause_inner,
+        download_recommended_ytdlp_inner, download_whisper_runtime_version_inner,
+        toggle_whisper_model_download_pause_inner,
     },
     desktop_shell::{
         hide_main_window as hide_main_window_inner, show_main_window as show_main_window_inner,
     },
     recording_library::{
         convert_recordings_to_mp3_inner, delete_recording_inner, delete_recordings_inner,
-        import_media_inner, play_recording_inner, read_recording_texts_inner,
+        import_media_inner, import_youtube_inner, play_recording_inner, read_recording_texts_inner,
         transcribe_recordings_inner, translate_recordings_inner,
     },
     recording_session::{start_recording_inner, stop_recording_inner},
-    runtime_assets::{check_whisper_model_update_inner, check_whisper_runtime_update_inner},
+    runtime_assets::{
+        check_whisper_model_update_inner, check_whisper_runtime_update_inner,
+        check_ytdlp_update_inner,
+    },
     settings::save_settings_inner,
 };
 
@@ -61,6 +65,12 @@ pub(crate) fn download_recommended_ffmpeg(app: AppHandle) -> Result<AppBootstrap
 }
 
 #[tauri::command]
+pub(crate) fn download_recommended_ytdlp(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_ytdlp_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+#[tauri::command]
 pub(crate) async fn check_whisper_runtime_update(
     app: AppHandle,
 ) -> Result<WhisperAssetUpdateResult, String> {
@@ -82,6 +92,14 @@ pub(crate) async fn check_whisper_model_update(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn check_ytdlp_update(app: AppHandle) -> Result<WhisperAssetUpdateResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || check_ytdlp_update_inner(&app_for_blocking))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -281,6 +299,17 @@ pub(crate) async fn import_media(
 ) -> Result<RecordingBatchResult, String> {
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || import_media_inner(&app_for_blocking, paths))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn import_youtube(
+    app: AppHandle,
+    url: String,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || import_youtube_inner(&app_for_blocking, url))
         .await
         .map_err(|error| error.to_string())?
 }

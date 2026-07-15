@@ -75,12 +75,14 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     let already_transcribed =
         !recording.transcripts.is_empty() || recording.transcript_path.is_some();
 
-    // Imported media carries a meaningful original file name (a podcast/video
-    // title). Preserve it instead of renaming the audio from the transcript's
-    // first characters the way a mic capture is — for imports we only place the
-    // transcript beside the untouched audio, exactly like an additional language.
-    let is_import = recording.source.as_deref() == Some("import");
-    let preserve_audio_name = already_transcribed || is_import;
+    // Only a fresh mic capture (which has no meaningful title) gets a name derived
+    // from its transcript; every imported/downloaded recording keeps its original.
+    // Imported/downloaded media carries a meaningful title (a podcast/video name), so
+    // for those we only place the transcript beside the untouched audio, exactly like
+    // an additional language. Source values: "recording" (mic), "import", "youtube";
+    // legacy recordings with no source fall on the preserve side too.
+    let is_mic_capture = recording.source.as_deref() == Some("recording");
+    let preserve_audio_name = already_transcribed || !is_mic_capture;
 
     let final_transcript_path = if preserve_audio_name {
         match store_additional_language_transcript(&audio_path, &transcript_path, &language) {

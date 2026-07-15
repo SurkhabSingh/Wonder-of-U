@@ -12,11 +12,38 @@ import type {
   RecentRecording,
   RecorderPhase,
   RecordingFilter,
+  YoutubeQueueItem,
 } from "../../types";
 import { recorderStatusLabel } from "../recorder/RecorderPage";
 import { TooltipBadge } from "../ui/Tooltip";
 
 const SUPPORTED_FORMATS_HINT = IMPORT_MEDIA_EXTENSIONS.join(", ");
+
+// Unicode status glyphs for the YouTube queue rows. Decorative (aria-hidden);
+// each row carries an aria-label with the spelled-out status for the reader.
+const YOUTUBE_STATUS_GLYPH: Record<YoutubeQueueItem["status"], string> = {
+  queued: "•",
+  active: "⟳",
+  done: "✓",
+  failed: "!",
+  cancelled: "–",
+};
+
+const YOUTUBE_STATUS_LABEL: Record<YoutubeQueueItem["status"], string> = {
+  queued: "Queued",
+  active: "Fetching",
+  done: "Done",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
+const YOUTUBE_STATUS_CHIP: Record<YoutubeQueueItem["status"], string> = {
+  queued: "status-chip-neutral",
+  active: "status-chip-accent",
+  done: "status-chip-success",
+  failed: "status-chip-error",
+  cancelled: "status-chip-warning",
+};
 
 export function HomePage({
   elapsedMs,
@@ -38,6 +65,14 @@ export function HomePage({
   recordingPushedToCurrentAnkiDeck,
   isImporting,
   onImportMedia,
+  isFetchingYoutube,
+  youtubeItems,
+  youtubeCurrentIndex,
+  youtubeTotal,
+  onEnqueueYoutube,
+  onRemoveYoutube,
+  youtubeActiveProgress,
+  onCancelYoutube,
   onView,
   onOpenLibrary,
 }: {
@@ -60,6 +95,14 @@ export function HomePage({
   recordingPushedToCurrentAnkiDeck: (recording: RecentRecording) => boolean;
   isImporting: boolean;
   onImportMedia: (paths: string[]) => void;
+  isFetchingYoutube: boolean;
+  youtubeItems: YoutubeQueueItem[];
+  youtubeCurrentIndex: number;
+  youtubeTotal: number;
+  onEnqueueYoutube: (text: string) => void;
+  onRemoveYoutube: (id: string) => void;
+  youtubeActiveProgress: number | null;
+  onCancelYoutube: () => void | Promise<void>;
   onView: (filePath: string) => void;
   onOpenLibrary: (filter?: RecordingFilter) => void;
 }) {
@@ -70,6 +113,18 @@ export function HomePage({
   // An import must not be queued behind another one, and no import should start
   // while the recorder or another batch job is mid-flight.
   const importDisabled = isImporting || anyBusy;
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+
+  // Queuing is decoupled from `importDisabled` on purpose: you can keep adding
+  // links while a fetch runs. The queue itself serializes the downloads.
+  const handleAddYoutube = useCallback(() => {
+    const trimmed = youtubeUrl.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    onEnqueueYoutube(trimmed);
+    setYoutubeUrl("");
+  }, [onEnqueueYoutube, youtubeUrl]);
 
   const handleDroppedPaths = useCallback(
     (paths: string[]) => {
@@ -296,6 +351,109 @@ export function HomePage({
         ) : (
           <small>Supported: {SUPPORTED_FORMATS_HINT}</small>
         )}
+
+        <div className="home-youtube-row">
+          <span className="home-youtube-label">From YouTube</span>
+          <div className="input-with-action">
+            {/* Input + Add stay ENABLED while a fetch runs — you can keep
+                queuing links; the queue serializes the actual downloads. */}
+            <input
+              type="url"
+              value={youtubeUrl}
+              placeholder="Paste a YouTube link (or several)"
+              onChange={(event) => setYoutubeUrl(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleAddYoutube();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleAddYoutube}
+              disabled={youtubeUrl.trim().length === 0}
+            >
+              Add
+            </button>
+          </div>
+
+          {isFetchingYoutube && youtubeTotal > 0 ? (
+            <p className="home-youtube-progress">
+              Fetching {youtubeCurrentIndex} of {youtubeTotal}…
+            </p>
+          ) : null}
+
+          {youtubeItems.length > 0 ? (
+            <ul className="home-youtube-queue">
+              {youtubeItems.map((item) => {
+                const label = item.title ?? item.url;
+                return (
+                  <li className="home-youtube-queue-item" key={item.id}>
+                    <span
+                      className="home-youtube-glyph"
+                      aria-hidden="true"
+                    >
+                      {YOUTUBE_STATUS_GLYPH[item.status]}
+                    </span>
+                    <span
+                      className="home-youtube-title"
+                      title={item.message ?? label}
+                    >
+                      {label}
+                    </span>
+                    {item.status === "active" ? (
+                      <div className="home-youtube-active">
+                        {/* Completion is the awaited import resolving, not this
+                            bar hitting 100 — the bar is just live feedback fed
+                            by the youtube-progress event. */}
+                        <div className="progress-track" aria-hidden="true">
+                          <div
+                            className="progress-fill"
+                            style={{
+                              width: `${Math.max(
+                                0,
+                                Math.min(100, youtubeActiveProgress ?? 0),
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost home-youtube-cancel"
+                          onClick={() => void onCancelYoutube()}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <span
+                        className={`status-chip ${
+                          YOUTUBE_STATUS_CHIP[item.status]
+                        }`}
+                        aria-label={YOUTUBE_STATUS_LABEL[item.status]}
+                      >
+                        {YOUTUBE_STATUS_LABEL[item.status].toLowerCase()}
+                      </span>
+                    )}
+                    {item.status === "queued" ? (
+                      <button
+                        type="button"
+                        className="ghost home-youtube-remove"
+                        onClick={() => onRemoveYoutube(item.id)}
+                        aria-label="Remove from queue"
+                        title="Remove from queue"
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
       </div>
     </div>
   );

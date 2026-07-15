@@ -32,6 +32,8 @@ pub(crate) fn toggle_whisper_model_download_pause_inner<R: Runtime>(
         match snapshot.kind.as_deref() {
             Some("runtime") => "Runtime",
             Some("ffmpeg") => "FFmpeg",
+            Some("ytdlp") => "yt-dlp",
+            Some("youtube") => "YouTube",
             _ => "Model",
         }
     };
@@ -82,6 +84,8 @@ pub(crate) fn cancel_whisper_model_download_inner<R: Runtime>(
         match snapshot.kind.as_deref() {
             Some("runtime") => "runtime",
             Some("ffmpeg") => "FFmpeg",
+            Some("ytdlp") => "yt-dlp",
+            Some("youtube") => "YouTube",
             _ => "model",
         }
     };

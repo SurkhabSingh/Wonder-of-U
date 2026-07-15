@@ -6,3 +6,7 @@ pub(crate) const RECOMMENDED_FFMPEG_RUNTIME_FILE: &str =
     "ffmpeg-master-latest-win64-gpl-shared.zip";
 pub(crate) const RECOMMENDED_FFMPEG_RUNTIME_URL: &str =
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip";
+pub(crate) const YTDLP_RELEASE_DOWNLOAD_URL: &str =
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+pub(crate) const YTDLP_RELEASES_API_URL: &str =
+    "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";

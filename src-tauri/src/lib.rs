@@ -72,8 +72,10 @@ pub fn run() {
             download_recommended_whisper_runtime,
             download_whisper_runtime_version,
             download_recommended_ffmpeg,
+            download_recommended_ytdlp,
             check_whisper_runtime_update,
             check_whisper_model_update,
+            check_ytdlp_update,
             toggle_whisper_model_download_pause,
             cancel_whisper_model_download,
             save_settings,
@@ -92,6 +94,7 @@ pub fn run() {
             transcribe_recordings,
             convert_recordings_to_mp3,
             import_media,
+            import_youtube,
             show_main_window,
             hide_main_window
         ])

@@ -252,6 +252,12 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     managed: false,
     message: "Install app-managed FFmpeg to compress transcribed WAV recordings into MP3.",
   },
+  ytdlpDetection: {
+    status: "notFound",
+    executablePath: null,
+    managed: false,
+    message: "",
+  },
   modelDownload: {
     kind: null,
     status: "idle",

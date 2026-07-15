@@ -23,7 +23,7 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-pub(super) fn update_model_download_snapshot<R: Runtime, F>(
+pub(crate) fn update_model_download_snapshot<R: Runtime, F>(
     app: &AppHandle<R>,
     update: F,
 ) -> Result<(), String>
@@ -41,7 +41,7 @@ where
     Ok(())
 }
 
-pub(super) fn reset_model_download_control<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+pub(crate) fn reset_model_download_control<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let control_state = app.state::<ModelDownloadControlState>();
     let mut control = control_state
         .control

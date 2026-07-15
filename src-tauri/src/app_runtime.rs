@@ -13,7 +13,7 @@ use crate::{
         AppBootstrap, AppPathsState, ModelDownloadState, SharedPersistedState, SharedShellState,
         ShellSnapshot, WhisperDetectionState,
     },
-    runtime_assets::detect_local_ffmpeg,
+    runtime_assets::{detect_local_ffmpeg, detect_local_ytdlp},
 };
 
 pub(crate) fn now_ms() -> u64 {
@@ -69,6 +69,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         .map_err(|_| "Could not read the app settings.".to_string())?
         .clone();
     let ffmpeg_detection = detect_local_ffmpeg(&persisted.settings);
+    let ytdlp_detection = detect_local_ytdlp(&persisted.settings);
     let whisper_detection = app
         .state::<WhisperDetectionState>()
         .0
@@ -94,6 +95,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         recent_recordings: persisted.recent_recordings,
         whisper_detection,
         ffmpeg_detection,
+        ytdlp_detection,
         model_download,
         log_path,
     })

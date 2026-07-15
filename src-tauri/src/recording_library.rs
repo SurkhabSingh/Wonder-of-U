@@ -13,7 +13,7 @@ pub(crate) use actions::{
     play_recording_inner, playback_path, translate_recordings_inner,
 };
 pub(crate) use conversion::convert_recordings_to_mp3_inner;
-pub(crate) use import::import_media_inner;
+pub(crate) use import::{import_media_inner, import_youtube_inner};
 pub(crate) use texts::read_recording_texts_inner;
 pub(crate) use transcription::{
     rename_recording_outputs_from_transcript, store_segments_sidecar, transcribe_recordings_inner,

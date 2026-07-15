@@ -9,6 +9,8 @@ use std::os::windows::process::CommandExt;
 
 use crate::app_types::{AppSettings, FfmpegDetection};
 
+use super::ytdlp::managed_binary_is_present;
+
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -89,9 +91,12 @@ pub(crate) fn verify_ffmpeg_binary(executable_path: &Path) -> Result<(), String>
 
 pub(crate) fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
     let asset_directory = PathBuf::from(&settings.asset_directory);
+    // Managed binary: trust its presence (a non-empty file the app installed and
+    // verified at download time) instead of spawning `ffmpeg -version` on every
+    // app-snapshot emit — see `managed_binary_is_present`.
     if let Some(managed_path) = collect_managed_ffmpeg_candidates(&asset_directory)
         .into_iter()
-        .find(|candidate| candidate.exists() && verify_ffmpeg_binary(candidate).is_ok())
+        .find(|candidate| managed_binary_is_present(candidate))
     {
         return FfmpegDetection {
             status: "ready".into(),

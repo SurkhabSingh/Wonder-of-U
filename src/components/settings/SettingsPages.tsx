@@ -40,6 +40,7 @@ export function SettingsPages({
   runtimeUpdateResult,
   runtimeUpdateVersion,
   modelUpdateResult,
+  ytdlpUpdateResult,
   runtimeInstalled,
   modelInstalled,
   resolvedCliPath,
@@ -54,6 +55,8 @@ export function SettingsPages({
   onCheckModelUpdate,
   onDownloadRecommendedModel,
   onDownloadRecommendedFfmpeg,
+  onDownloadRecommendedYtdlp,
+  onCheckYtdlpUpdate,
   onToggleDownloadPause,
   onCancelDownload,
   onRefreshAnkiCatalog,
@@ -74,6 +77,7 @@ export function SettingsPages({
   runtimeUpdateResult: WhisperAssetUpdateResult | null;
   runtimeUpdateVersion: string | null;
   modelUpdateResult: WhisperAssetUpdateResult | null;
+  ytdlpUpdateResult: WhisperAssetUpdateResult | null;
   runtimeInstalled: boolean;
   modelInstalled: boolean;
   resolvedCliPath: string;
@@ -88,6 +92,8 @@ export function SettingsPages({
   onCheckModelUpdate: () => void | Promise<void>;
   onDownloadRecommendedModel: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
+  onDownloadRecommendedYtdlp: () => void | Promise<void>;
+  onCheckYtdlpUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
   onCancelDownload: () => void | Promise<void>;
   onRefreshAnkiCatalog: (
@@ -185,8 +191,11 @@ export function SettingsPages({
             bootstrap={bootstrap}
             busyAction={busyAction}
             downloadIsActive={downloadIsActive}
+            ytdlpUpdateResult={ytdlpUpdateResult}
             onCancelDownload={onCancelDownload}
             onDownloadRecommendedFfmpeg={onDownloadRecommendedFfmpeg}
+            onDownloadRecommendedYtdlp={onDownloadRecommendedYtdlp}
+            onCheckYtdlpUpdate={onCheckYtdlpUpdate}
             onToggleDownloadPause={onToggleDownloadPause}
           />
         </section>

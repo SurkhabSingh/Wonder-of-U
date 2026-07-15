@@ -266,6 +266,62 @@ export function useRecordingActions({
     ],
   );
 
+  // YouTube import: fetch a video's audio with yt-dlp and register it with NO
+  // transcript, exactly like importMedia — the file lands in the Library as
+  // "Needs transcript". Returns the batch result so the caller can navigate to
+  // the Library only when the single item actually landed.
+  const importYoutube = useCallback(
+    async (url: string): Promise<RecordingBatchResult | null> => {
+      const trimmed = url.trim();
+      if (trimmed.length === 0) {
+        return null;
+      }
+
+      try {
+        setBusyAction("importYoutube");
+        await persistSettingsIfNeeded();
+        const result = await invoke<RecordingBatchResult>("import_youtube", {
+          url: trimmed,
+        });
+        applyBootstrap(result.bootstrap);
+        const message = formatBatchToastMessage("youtube", result);
+        setRecordingActionMessage(message);
+        // A fetch that failed (private/blocked video, missing yt-dlp) can still
+        // come back with a non-error status. Nothing landed, so it is not a
+        // success — warn rather than show a green check.
+        const importedCount = result.items.filter(
+          (item) => item.status === "success",
+        ).length;
+        if (importedCount === 0) {
+          showWarning(message);
+        } else {
+          notifyBatchResult(result, message);
+        }
+        return result;
+      } catch (error) {
+        const message = errorMessage(
+          error,
+          "The YouTube link could not be imported.",
+        );
+        // Surface the failure as a transient toast only — matching transcription
+        // and translation. Avoid `setLoadError`, which pins a permanent banner
+        // (e.g. a rejected livestream would otherwise linger at the top).
+        showWarning(message);
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [
+      applyBootstrap,
+      notifyBatchResult,
+      persistSettingsIfNeeded,
+      setBusyAction,
+      setRecordingActionMessage,
+      showWarning,
+    ],
+  );
+
   const addFuriganaToAnki = useCallback(
     async (filePaths: string[]) => {
       try {
@@ -425,6 +481,7 @@ export function useRecordingActions({
     deleteRecording,
     deleteRecordings,
     importMedia,
+    importYoutube,
     mineSegment,
     playRecording,
     pushRecordingsToAnki,

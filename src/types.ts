@@ -162,6 +162,13 @@ export type FfmpegDetection = {
   message: string;
 };
 
+export type YtdlpDetection = {
+  status: string;
+  executablePath: string | null;
+  managed: boolean;
+  message: string;
+};
+
 export type WhisperAssetUpdateResult = {
   kind: string;
   status: string;
@@ -186,6 +193,7 @@ export type AppBootstrap = {
   recentRecordings: RecentRecording[];
   whisperDetection: WhisperDetection;
   ffmpegDetection: FfmpegDetection;
+  ytdlpDetection: YtdlpDetection;
   modelDownload: ModelDownloadSnapshot;
   logPath: string;
 };
@@ -213,6 +221,16 @@ export type RecordingBatchResult = {
   bootstrap: AppBootstrap;
 };
 
+// One row in the Home "From YouTube" queue. The backend import stays single-URL;
+// this is the shape of a frontend-only sequential queue built on top of it.
+export type YoutubeQueueItem = {
+  id: string;
+  url: string;
+  title?: string;
+  status: "queued" | "active" | "done" | "failed" | "cancelled";
+  message?: string;
+};
+
 export type BusyAction =
   | "start"
   | "stop"
@@ -221,6 +239,9 @@ export type BusyAction =
   | "downloadModel"
   | "downloadRuntime"
   | "downloadFfmpeg"
+  | "downloadYtdlp"
+  | "importYoutube"
+  | "checkYtdlpUpdate"
   | "checkRuntimeUpdate"
   | "checkModelUpdate"
   | "loadAnki"

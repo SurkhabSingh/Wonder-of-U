@@ -7,7 +7,8 @@ export type RecordingBatchAction =
   | "anki"
   | "furigana"
   | "convert"
-  | "import";
+  | "import"
+  | "youtube";
 
 export function formatBatchToastMessage(
   action: RecordingBatchAction,
@@ -91,6 +92,21 @@ export function formatBatchToastMessage(
     }
 
     return `${successCount} file${successCount === 1 ? "" : "s"} imported. Transcribe from the library when you are ready.`;
+  }
+
+  // A YouTube import is a single-item batch that, like a file import, deliberately
+  // stops short of transcribing — so a success is only half the job. A failed
+  // fetch (private/blocked video, missing yt-dlp) must name the reason.
+  if (action === "youtube") {
+    if (failedCount > 0 && successCount === 0) {
+      return firstFailure ?? "The YouTube link could not be imported.";
+    }
+
+    if (successCount === 0) {
+      return result.message;
+    }
+
+    return "Fetched from YouTube. Transcribe it from the Library when you are ready.";
   }
 
   if (failedCount > 0 && successCount === 0) {
