@@ -55,6 +55,12 @@ export type WhisperSettings = {
   language: string;
 };
 
+export type TranslationProvider = "google-translate" | "deepl";
+
+export type TranslationSettings = {
+  provider: TranslationProvider;
+};
+
 export type ThemePreference = "system" | "light" | "dark";
 
 export type AppSettings = {
@@ -63,6 +69,7 @@ export type AppSettings = {
   whisper: WhisperSettings;
   anki: AnkiSettings;
   features: FeatureSettings;
+  translation: TranslationSettings;
   theme: ThemePreference;
   launchAtLogin: boolean;
   startMinimized: boolean;

@@ -14,8 +14,9 @@ use persistence::{default_asset_directory, default_output_directory};
 
 use crate::{
     app_types::{
-        whisper_model_spec, AnkiFieldMapping, AnkiSettings, AppPathsState, AppSettings,
-        FeatureSettings, PersistedData, WhisperSettings,
+        default_translation_provider, whisper_model_spec, AnkiFieldMapping, AnkiSettings,
+        AppPathsState, AppSettings, FeatureSettings, PersistedData, TranslationSettings,
+        WhisperSettings,
     },
     runtime_assets::{all_managed_model_paths, collect_managed_whisper_cli_candidates},
 };
@@ -109,10 +110,23 @@ pub(crate) fn normalize_settings<R: Runtime>(
             auto_add_furigana_after_anki_push: settings.features.auto_add_furigana_after_anki_push,
             translate_after_transcription: settings.features.translate_after_transcription,
         },
+        translation: TranslationSettings {
+            provider: normalize_translation_provider(&settings.translation.provider),
+        },
         theme: theme.into(),
         launch_at_login: settings.launch_at_login,
         start_minimized: settings.start_minimized,
     })
+}
+
+/// Keep the persisted provider to the ids the extension actually routes on,
+/// falling back to the default for anything empty or unrecognized.
+fn normalize_translation_provider(provider: &str) -> String {
+    match provider.trim() {
+        "google-translate" => "google-translate".to_string(),
+        "deepl" => "deepl".to_string(),
+        _ => default_translation_provider(),
+    }
 }
 
 fn normalize_directory_input(input: &str, fallback: &Path) -> PathBuf {

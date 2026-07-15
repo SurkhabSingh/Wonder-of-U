@@ -76,6 +76,32 @@ pub(crate) fn default_theme_preference() -> String {
     "system".into()
 }
 
+/// Matches the browser extension's default provider id (`KNOWN_TRANSLATION_PROVIDERS`
+/// in the extension). Sent verbatim in each translation job; the extension routes
+/// on it, so the string must stay in lockstep with the extension's ids.
+pub(crate) fn default_translation_provider() -> String {
+    "google-translate".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TranslationSettings {
+    /// Which provider the extension should use for desktop-initiated translations:
+    /// `"google-translate"` or `"deepl"`. Passed through the bridge as the job's
+    /// `provider`; an unknown value simply lets the extension fall back to its own
+    /// selection.
+    #[serde(default = "default_translation_provider")]
+    pub(crate) provider: String,
+}
+
+impl Default for TranslationSettings {
+    fn default() -> Self {
+        Self {
+            provider: default_translation_provider(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FeatureSettings {
@@ -162,6 +188,8 @@ pub(crate) struct AppSettings {
     pub(crate) anki: AnkiSettings,
     #[serde(default)]
     pub(crate) features: FeatureSettings,
+    #[serde(default)]
+    pub(crate) translation: TranslationSettings,
     #[serde(default = "default_theme_preference")]
     pub(crate) theme: String,
     #[serde(default)]

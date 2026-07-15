@@ -21,6 +21,7 @@ import type {
   SettingsUpdate,
 } from "./settingsTypes";
 import { StorageSettingsPage } from "./StorageSettingsPage";
+import { TranslationSettingsPage } from "./TranslationSettingsPage";
 import { WhisperStatusSettingsPage } from "./WhisperStatusSettingsPage";
 
 export function SettingsPages({
@@ -168,6 +169,13 @@ export function SettingsPages({
             onToggleDownloadPause={onToggleDownloadPause}
             onUpdateSettings={onUpdateSettings}
             resolvedModelPath={resolvedModelPath}
+            settingsDraft={settingsDraft}
+          />
+        </section>
+
+        <section id="settings-translation" className="settings-section">
+          <TranslationSettingsPage
+            onUpdateSettings={onUpdateSettings}
             settingsDraft={settingsDraft}
           />
         </section>

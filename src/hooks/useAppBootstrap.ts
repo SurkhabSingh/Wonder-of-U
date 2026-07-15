@@ -10,12 +10,16 @@ import type {
   AppSettings,
   AutosaveState,
   FeatureSettings,
+  TranslationSettings,
   WhisperSettings,
 } from "../types";
 
-type SettingsUpdate = Partial<Omit<AppSettings, "features" | "whisper" | "anki">> & {
+type SettingsUpdate = Partial<
+  Omit<AppSettings, "features" | "whisper" | "anki" | "translation">
+> & {
   features?: Partial<FeatureSettings>;
   whisper?: Partial<WhisperSettings>;
+  translation?: Partial<TranslationSettings>;
   anki?: Partial<Omit<AnkiSettings, "fields">> & {
     fields?: Partial<AnkiFieldMapping>;
   };
@@ -231,6 +235,10 @@ export function useAppBootstrap() {
         ...current.whisper,
         ...(update.whisper ?? {}),
       };
+      const nextTranslation: TranslationSettings = {
+        ...current.translation,
+        ...(update.translation ?? {}),
+      };
       const nextAnki: AnkiSettings = {
         ...current.anki,
         ...(update.anki ?? {}),
@@ -244,6 +252,7 @@ export function useAppBootstrap() {
         ...current,
         ...update,
         whisper: nextWhisper,
+        translation: nextTranslation,
         anki: nextAnki,
         features: nextFeatures,
       };

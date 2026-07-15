@@ -130,7 +130,8 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
 
     // The translate-after-transcription path never forces a re-translate; `force`
     // is only for the manual re-translate command.
-    let item = translate_single_recording(app, bridge, recording, false);
+    let provider = configured_translation_provider(app);
+    let item = translate_single_recording(app, bridge, recording, false, &provider);
 
     match item.status.as_str() {
         "success" => Some("Translated.".to_string()),
@@ -139,11 +140,23 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
     }
 }
 
+/// The translation provider the user picked in Settings, sent with every job so
+/// the extension routes on it. Falls back to the default if the settings lock is
+/// somehow poisoned rather than failing the translation.
+fn configured_translation_provider<R: Runtime>(app: &AppHandle<R>) -> String {
+    app.state::<SharedPersistedState>()
+        .0
+        .lock()
+        .map(|persisted| persisted.settings.translation.provider.clone())
+        .unwrap_or_else(|_| crate::app_types::default_translation_provider())
+}
+
 fn translate_single_recording<R: Runtime>(
     app: &AppHandle<R>,
     bridge: &TranslationBridge,
     recording: RecentRecording,
     force: bool,
+    provider: &str,
 ) -> RecordingActionItem {
     // `force` re-translates even recordings that already have a translation,
     // deterministically overwriting {stem}.translation.{lang}.txt.
@@ -191,7 +204,7 @@ fn translate_single_recording<R: Runtime>(
         source_text,
         source_lang,
         TRANSLATION_TARGET_LANGUAGE.to_string(),
-        String::new(),
+        provider.to_string(),
     ) {
         Ok(id) => id,
         Err(error) => return failed_translation_item(&recording, error),
@@ -384,6 +397,7 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
         });
     }
 
+    let provider = configured_translation_provider(app);
     let mut items = Vec::new();
     for recording in recordings {
         // Each job blocks for up to TRANSLATION_TIMEOUT, so a batch that loses the
@@ -397,7 +411,9 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
             continue;
         }
 
-        items.push(translate_single_recording(app, bridge, recording, force));
+        items.push(translate_single_recording(
+            app, bridge, recording, force, &provider,
+        ));
     }
 
     let success_count = items.iter().filter(|item| item.status == "success").count();

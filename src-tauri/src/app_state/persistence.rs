@@ -4,7 +4,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::app_types::{
     default_theme_preference, AnkiSettings, AppPathsState, AppSettings, FeatureSettings,
-    PersistedData, WhisperSettings,
+    PersistedData, TranslationSettings, WhisperSettings,
 };
 
 use super::{
@@ -56,6 +56,7 @@ fn default_settings<R: Runtime>(
         whisper: WhisperSettings::default(),
         anki: AnkiSettings::default(),
         features: FeatureSettings::default(),
+        translation: TranslationSettings::default(),
         theme: default_theme_preference(),
         launch_at_login: false,
         start_minimized: false,

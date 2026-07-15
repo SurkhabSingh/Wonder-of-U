@@ -223,6 +223,9 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       autoAddFuriganaAfterAnkiPush: false,
       translateAfterTranscription: false,
     },
+    translation: {
+      provider: "google-translate",
+    },
     theme: "system",
     launchAtLogin: false,
     startMinimized: false,
