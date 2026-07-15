@@ -11,7 +11,7 @@ use crate::{
     },
     recording_library::{
         auto_translate_after_transcription, insert_recent_recording,
-        rename_recording_outputs_from_transcript,
+        rename_recording_outputs_from_transcript, store_segments_sidecar,
     },
     runtime_assets::refresh_whisper_detection_state,
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
@@ -143,11 +143,42 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                                     &transcript_path,
                                     &settings.whisper.language,
                                 );
+
+                            // Write the per-sentence segments sidecar so a
+                            // recording transcribed on stop gets timestamps just
+                            // like one transcribed from the library — otherwise it
+                            // would need a manual re-transcribe to gain them. The
+                            // audio path is final (renamed) here, so the sidecar
+                            // stem matches. Best-effort: a missing/unparseable json
+                            // simply leaves segments None.
+                            let language_key =
+                                transcript_language_key(&settings.whisper.language);
+                            let segments_path = match store_segments_sidecar(
+                                &recent_recording.file_path,
+                                &result.json_path,
+                                &language_key,
+                            ) {
+                                Ok(path) => path.map(|path| path.display().to_string()),
+                                Err(error) => {
+                                    log_event(
+                                        &app,
+                                        "ERROR",
+                                        "recording.store_segments_failed",
+                                        serde_json::json!({
+                                            "audioPath": recent_recording.file_path,
+                                            "message": error
+                                        }),
+                                    );
+                                    None
+                                }
+                            };
+                            let _ = fs::remove_file(&result.json_path);
+
                             recent_recording.transcripts.push(RecordingTranscript {
-                                language: transcript_language_key(&settings.whisper.language),
+                                language: language_key,
                                 file_path: transcript_path.display().to_string(),
                                 detected_language: recent_recording.transcript_language.clone(),
-                                segments_path: None,
+                                segments_path,
                             });
                             recent_recording.bytes_written = fs::metadata(&audio_path)
                                 .map(|metadata| metadata.len())

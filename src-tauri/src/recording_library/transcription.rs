@@ -75,7 +75,14 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     let already_transcribed =
         !recording.transcripts.is_empty() || recording.transcript_path.is_some();
 
-    let final_transcript_path = if already_transcribed {
+    // Imported media carries a meaningful original file name (a podcast/video
+    // title). Preserve it instead of renaming the audio from the transcript's
+    // first characters the way a mic capture is — for imports we only place the
+    // transcript beside the untouched audio, exactly like an additional language.
+    let is_import = recording.source.as_deref() == Some("import");
+    let preserve_audio_name = already_transcribed || is_import;
+
+    let final_transcript_path = if preserve_audio_name {
         match store_additional_language_transcript(&audio_path, &transcript_path, &language) {
             Ok(stored_transcript_path) => stored_transcript_path,
             Err(error) => {
@@ -202,7 +209,7 @@ fn store_additional_language_transcript(
 /// sidecar is named/placed. Returns `Ok(Some(path))` on success, `Ok(None)` when
 /// the json is absent or carries no parseable segments (a normal, non-fatal case),
 /// and `Err` only when the sidecar itself could not be written.
-fn store_segments_sidecar(
+pub(crate) fn store_segments_sidecar(
     audio_file_path: &str,
     json_path: &Path,
     language: &str,
