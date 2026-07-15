@@ -272,6 +272,18 @@ pub(crate) struct RecentRecording {
     pub(crate) duration_ms: u64,
     pub(crate) bytes_written: u64,
     pub(crate) created_at_ms: u64,
+    /// How this recording entered the library: `"recording"` (mic capture),
+    /// `"import"` (a local file the user brought in), or `None` for entries that
+    /// predate the field. Serialized as `source` in `src/types.ts`.
+    #[serde(default)]
+    pub(crate) source: Option<String>,
+    /// The origin URL for a future YouTube/network import. Always `None` today.
+    #[serde(default)]
+    pub(crate) source_url: Option<String>,
+    /// The original file name of an imported file, kept for display when the copy
+    /// on disk is renamed/sanitized. `None` for mic recordings.
+    #[serde(default)]
+    pub(crate) title: Option<String>,
 }
 
 impl RecentRecording {

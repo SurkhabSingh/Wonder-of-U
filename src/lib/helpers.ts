@@ -1,8 +1,22 @@
-import { LANGUAGE_OPTIONS } from "../constants";
+import { IMPORT_MEDIA_EXTENSIONS, LANGUAGE_OPTIONS } from "../constants";
 import type { RecentRecording, RecordingAnkiPush } from "../types";
 
 export function pathHasExtension(path: string, extension: string): boolean {
   return path.toLowerCase().endsWith(`.${extension.toLowerCase()}`);
+}
+
+// A dropped payload can contain anything the OS allows — folders, PDFs, a
+// screenshot. Both the drop handler and the file picker gate on this one list
+// so what the picker offers and what a drop accepts stay identical.
+export function isSupportedMediaPath(path: string): boolean {
+  const extension = path.trim().toLowerCase().split(".").pop() ?? "";
+  return (
+    path.includes(".") && IMPORT_MEDIA_EXTENSIONS.includes(extension)
+  );
+}
+
+export function filterSupportedMediaPaths(paths: string[]): string[] {
+  return paths.filter(isSupportedMediaPath);
 }
 
 export function normalizeTranscriptLanguage(language: string): string {
@@ -176,6 +190,18 @@ export function normalizeSelection(
   }
 
   return Array.isArray(selection) ? selection[0] ?? null : selection;
+}
+
+// Multi-select variant: the dialog plugin hands back a bare string when only one
+// file is picked, an array when several are, and null when the user cancels.
+export function normalizeSelections(
+  selection: string | string[] | null,
+): string[] {
+  if (!selection) {
+    return [];
+  }
+
+  return Array.isArray(selection) ? selection : [selection];
 }
 
 export function whisperStatusLabel(status: string): string {

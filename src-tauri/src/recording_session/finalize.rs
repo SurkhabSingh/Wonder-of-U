@@ -4,32 +4,18 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
     app_runtime::{log_event, update_shell_snapshot},
-    app_state::{derive_transcript_language_from_path, write_persisted_data},
+    app_state::derive_transcript_language_from_path,
     app_types::{
         transcript_language_key, ActiveRecording, RecentRecording, RecordingTranscript,
         SharedPersistedState,
     },
-    recording_library::{auto_translate_after_transcription, rename_recording_outputs_from_transcript},
+    recording_library::{
+        auto_translate_after_transcription, insert_recent_recording,
+        rename_recording_outputs_from_transcript,
+    },
     runtime_assets::refresh_whisper_detection_state,
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
-
-fn insert_recent_recording<R: Runtime>(
-    app: &AppHandle<R>,
-    recent_recording: RecentRecording,
-) -> Result<(), String> {
-    let persisted_snapshot = {
-        let persisted_state = app.state::<SharedPersistedState>();
-        let mut persisted = persisted_state
-            .0
-            .lock()
-            .map_err(|_| "Could not update the recording history.".to_string())?;
-        persisted.recent_recordings.insert(0, recent_recording);
-        persisted.clone()
-    };
-
-    write_persisted_data(app, &persisted_snapshot)
-}
 
 pub(super) fn finalize_recording_pipeline<R: Runtime>(
     app: AppHandle<R>,
@@ -64,6 +50,9 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                 duration_ms: capture.duration_ms,
                 bytes_written: capture.bytes_written,
                 created_at_ms: capture.created_at_ms,
+                source: Some("recording".into()),
+                source_url: None,
+                title: None,
             };
 
             log_event(

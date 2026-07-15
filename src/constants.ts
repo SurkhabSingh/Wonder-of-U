@@ -144,6 +144,35 @@ export const LANGUAGE_OPTIONS = [
   { code: "zh", label: "Chinese" },
 ] as const;
 
+/* Media import ---------------------------------------------------------------
+   ONE extension list, shared by the file-picker filter and the drag-drop
+   filter so the two can never drift apart.
+
+   whisper.cpp reads the "native" formats directly, so the backend copies those
+   into the recordings folder verbatim. The "convert" formats it cannot read, so
+   the backend transcodes them to MP3 with ffmpeg — which means importing one of
+   those requires ffmpeg to be installed (the backend fails that file with a
+   clear message if it is not). */
+export const IMPORT_NATIVE_EXTENSIONS = ["wav", "mp3", "flac", "ogg"] as const;
+
+export const IMPORT_CONVERT_EXTENSIONS = [
+  "m4a",
+  "opus",
+  "mp4",
+  "webm",
+  "aac",
+  "mkv",
+  "mov",
+  "m4v",
+  "wma",
+  "aiff",
+] as const;
+
+export const IMPORT_MEDIA_EXTENSIONS: readonly string[] = [
+  ...IMPORT_NATIVE_EXTENSIONS,
+  ...IMPORT_CONVERT_EXTENSIONS,
+];
+
 export const APP_SNAPSHOT_EVENT = "app://snapshot-changed";
 export const MP3_CONVERSION_WARNING =
   "MP3 reduces file size but uses lossy compression, so audio quality may be lower. Existing Anki cards are not affected.";

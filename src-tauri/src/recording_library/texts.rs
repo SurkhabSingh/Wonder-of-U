@@ -222,6 +222,9 @@ mod tests {
             duration_ms: 0,
             bytes_written: 0,
             created_at_ms: 0,
+            source: None,
+            source_url: None,
+            title: None,
         }
     }
 

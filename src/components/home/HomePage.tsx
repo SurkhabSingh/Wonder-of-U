@@ -1,8 +1,18 @@
+import { useCallback, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { IMPORT_MEDIA_EXTENSIONS } from "../../constants";
 import { formatDuration, formatTimestamp } from "../../lib/format";
-import { recordingChips } from "../../lib/helpers";
+import {
+  filterSupportedMediaPaths,
+  normalizeSelections,
+  recordingChips,
+} from "../../lib/helpers";
+import { useFileDrop } from "../../hooks/useFileDrop";
 import type { RecentRecording, RecorderPhase } from "../../types";
 import { recorderStatusLabel } from "../recorder/RecorderPage";
 import { TooltipBadge } from "../ui/Tooltip";
+
+const SUPPORTED_FORMATS_HINT = IMPORT_MEDIA_EXTENSIONS.join(", ");
 
 export function HomePage({
   elapsedMs,
@@ -22,6 +32,8 @@ export function HomePage({
   readyForAnkiCount,
   transcriptionLanguage,
   recordingPushedToCurrentAnkiDeck,
+  isImporting,
+  onImportMedia,
   onView,
   onOpenLibrary,
 }: {
@@ -42,10 +54,74 @@ export function HomePage({
   readyForAnkiCount: number;
   transcriptionLanguage: string;
   recordingPushedToCurrentAnkiDeck: (recording: RecentRecording) => boolean;
+  isImporting: boolean;
+  onImportMedia: (paths: string[]) => void;
   onView: (filePath: string) => void;
   onOpenLibrary: () => void;
 }) {
   const recent = recentRecordings.slice(0, 5);
+  // A rejected drop or a failed picker has to say so. Silently doing nothing is
+  // the one outcome the drop zone must never have.
+  const [importNote, setImportNote] = useState<string | null>(null);
+  // An import must not be queued behind another one, and no import should start
+  // while the recorder or another batch job is mid-flight.
+  const importDisabled = isImporting || anyBusy;
+
+  const handleDroppedPaths = useCallback(
+    (paths: string[]) => {
+      const supported = filterSupportedMediaPaths(paths);
+
+      if (supported.length === 0) {
+        setImportNote(
+          paths.length === 1
+            ? "That file is not a supported audio or video format."
+            : "None of those files are a supported audio or video format.",
+        );
+        return;
+      }
+
+      const rejectedCount = paths.length - supported.length;
+      setImportNote(
+        rejectedCount > 0
+          ? `${rejectedCount} unsupported file${
+              rejectedCount === 1 ? " was" : "s were"
+            } skipped.`
+          : null,
+      );
+      onImportMedia(supported);
+    },
+    [onImportMedia],
+  );
+
+  const { isDraggingOver } = useFileDrop({
+    enabled: !importDisabled,
+    onDrop: handleDroppedPaths,
+  });
+
+  const handleBrowse = useCallback(async () => {
+    try {
+      const paths = normalizeSelections(
+        await open({
+          multiple: true,
+          filters: [
+            {
+              name: "Audio & video",
+              // Same list the drop filter gates on — they cannot drift.
+              extensions: [...IMPORT_MEDIA_EXTENSIONS],
+            },
+          ],
+        }),
+      );
+
+      if (paths.length === 0) {
+        return;
+      }
+
+      handleDroppedPaths(paths);
+    } catch {
+      setImportNote("The file chooser could not be opened.");
+    }
+  }, [handleDroppedPaths]);
 
   return (
     <div className="home-view">
@@ -167,14 +243,34 @@ export function HomePage({
         )}
       </article>
 
-      <div className="home-dropzone">
+      <div
+        className={`home-dropzone${
+          isDraggingOver ? " is-dragging" : ""
+        }${importDisabled ? " is-busy" : ""}`}
+      >
         <span className="home-dropzone-icon" aria-hidden="true">
           ＋
         </span>
         <span className="home-dropzone-label">
-          Drop audio or video to transcribe
+          {isImporting
+            ? "Importing files…"
+            : isDraggingOver
+              ? "Drop to import"
+              : "Drop audio or video to import"}
         </span>
-        <small>Import is coming soon</small>
+        <button
+          type="button"
+          className="secondary home-dropzone-browse"
+          onClick={() => void handleBrowse()}
+          disabled={importDisabled}
+        >
+          Browse…
+        </button>
+        {importNote ? (
+          <small className="home-dropzone-note">{importNote}</small>
+        ) : (
+          <small>Supported: {SUPPORTED_FORMATS_HINT}</small>
+        )}
       </div>
     </div>
   );

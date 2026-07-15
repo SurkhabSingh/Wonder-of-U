@@ -6,7 +6,8 @@ export type RecordingBatchAction =
   | "delete"
   | "anki"
   | "furigana"
-  | "convert";
+  | "convert"
+  | "import";
 
 export function formatBatchToastMessage(
   action: RecordingBatchAction,
@@ -70,6 +71,26 @@ export function formatBatchToastMessage(
     }
 
     return `${successCount} recording${successCount === 1 ? "" : "s"} converted to MP3.`;
+  }
+
+  // Import deliberately does not transcribe, so a successful import is only a
+  // half-finished job — say where the files went and what is left to do. A file
+  // that needed ffmpeg and did not find it fails on its own without taking the
+  // rest of the batch down, so a partial result must name that failure.
+  if (action === "import") {
+    if (failedCount > 0 && successCount === 0) {
+      return firstFailure ?? "No files were imported.";
+    }
+
+    if (failedCount > 0) {
+      return `${successCount} file${successCount === 1 ? "" : "s"} imported. ${failedCount} failed: ${firstFailure ?? "check the file format."}`;
+    }
+
+    if (successCount === 0) {
+      return result.message;
+    }
+
+    return `${successCount} file${successCount === 1 ? "" : "s"} imported. Transcribe from the library when you are ready.`;
   }
 
   if (failedCount > 0 && successCount === 0) {

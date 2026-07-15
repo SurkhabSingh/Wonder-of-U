@@ -88,6 +88,9 @@ fn recording_from_audio_path(audio_path: &Path) -> Option<RecentRecording> {
         duration_ms: wav_duration_ms(audio_path).unwrap_or(0),
         bytes_written: metadata.len(),
         created_at_ms,
+        source: None,
+        source_url: None,
+        title: None,
     })
 }
 

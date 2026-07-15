@@ -91,6 +91,7 @@ pub fn run() {
             translate_recordings,
             transcribe_recordings,
             convert_recordings_to_mp3,
+            import_media,
             show_main_window,
             hide_main_window
         ])
@@ -300,6 +301,9 @@ mod tests {
             duration_ms: 123,
             bytes_written: 0,
             created_at_ms: 1,
+            source: None,
+            source_url: None,
+            title: None,
         };
         let mut state = PersistedData {
             settings: serde_json::from_value(serde_json::json!({
@@ -368,6 +372,9 @@ mod tests {
             duration_ms: 1,
             bytes_written: 1,
             created_at_ms: 1,
+            source: None,
+            source_url: None,
+            title: None,
         };
 
         assert!(recording_pushed_to_anki_target(&recording, &settings, "ja"));
@@ -408,6 +415,9 @@ mod tests {
             duration_ms: 1,
             bytes_written: 1,
             created_at_ms: 1,
+            source: None,
+            source_url: None,
+            title: None,
         };
 
         assert!(!recording_transcript_supports_furigana(

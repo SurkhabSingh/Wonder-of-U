@@ -14,7 +14,7 @@ use crate::{
     runtime_assets::detect_local_ffmpeg,
 };
 
-use super::{selected_recordings, update_recent_recording};
+use super::{selected_recordings, unique_path_with_suffix, update_recent_recording};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -23,29 +23,6 @@ fn hide_command_window(command: &mut Command) {
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW);
-    }
-}
-
-fn unique_path_with_suffix(directory: &Path, file_stem: &str, suffix: &str) -> PathBuf {
-    let sanitized_stem = if file_stem.is_empty() {
-        "recording".to_string()
-    } else {
-        file_stem.to_string()
-    };
-
-    let mut attempt = 0usize;
-    loop {
-        let candidate = if attempt == 0 {
-            directory.join(format!("{sanitized_stem}{suffix}"))
-        } else {
-            directory.join(format!("{sanitized_stem}_{attempt}{suffix}"))
-        };
-
-        if !candidate.exists() {
-            return candidate;
-        }
-
-        attempt += 1;
     }
 }
 

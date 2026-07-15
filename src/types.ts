@@ -71,6 +71,14 @@ export type AppSettings = {
 export type RecentRecording = {
   fileName: string;
   filePath: string;
+  // Provenance. Older state files predate these fields, so the backend
+  // serializes them with #[serde(default)] and they arrive as null for every
+  // recording captured before media import shipped.
+  // "import" for a file brought in from disk, null/"recording" for the mic.
+  source: string | null;
+  sourceUrl: string | null;
+  // The original file name of an imported file (the on-disk name can differ).
+  title: string | null;
   transcriptPath: string | null;
   transcriptLanguage: string | null;
   transcripts: RecordingTranscript[];
@@ -217,6 +225,7 @@ export type BusyAction =
   | "translateRecording"
   | "transcribeRecording"
   | "convertMp3"
+  | "importMedia"
   | null;
 
 export type AutosaveState = "idle" | "saving" | "error";

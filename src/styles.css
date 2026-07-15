@@ -2643,16 +2643,30 @@ input::placeholder {
   text-align: center;
 }
 
-/* Import drop-zone — visual placeholder only (no handlers yet). */
+/* Import drop-zone — a live drop target and file picker. */
 .home-dropzone {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-4);
   justify-items: center;
   padding: var(--space-9) var(--space-8);
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
   text-align: center;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+/* Dragging a file over the window lights the zone with the same accent tokens
+   the app uses for every other selected/active affordance. */
+.home-dropzone.is-dragging {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--accent-soft);
+}
+
+.home-dropzone.is-busy {
+  opacity: 0.7;
 }
 
 .home-dropzone-icon {
@@ -2661,15 +2675,28 @@ input::placeholder {
   line-height: 1;
 }
 
+.home-dropzone.is-dragging .home-dropzone-icon,
+.home-dropzone.is-dragging .home-dropzone-label {
+  color: var(--accent);
+}
+
 .home-dropzone-label {
   color: var(--text-muted);
   font-size: var(--text-sm);
   font-weight: var(--weight-mid);
 }
 
+.home-dropzone-browse {
+  min-height: 30px;
+}
+
 .home-dropzone small {
   color: var(--text-subtle);
   font-size: var(--text-2xs);
+}
+
+.home-dropzone-note {
+  color: var(--warning);
 }
 
 /* Library name search — sits in the panel header. */

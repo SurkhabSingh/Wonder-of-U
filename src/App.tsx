@@ -218,6 +218,7 @@ function App() {
     convertRecordingsToMp3,
     deleteRecording,
     deleteRecordings,
+    importMedia,
     mineSegment,
     pushRecordingsToAnki,
     transcribeRecordings,
@@ -291,6 +292,19 @@ function App() {
               readyForAnkiCount={pushableRecordings.length}
               transcriptionLanguage={settingsDraft.whisper.language}
               recordingPushedToCurrentAnkiDeck={recordingPushedToCurrentAnkiDeck}
+              isImporting={busyAction === "importMedia"}
+              onImportMedia={(paths) => {
+                void importMedia(paths).then((result) => {
+                  // Only jump to the Library when a file actually landed, so a
+                  // wholly-failed import leaves the user on Home to read why.
+                  const landed = result?.items.some(
+                    (item) => item.status === "success",
+                  );
+                  if (landed) {
+                    setActivePage("recordings");
+                  }
+                });
+              }}
               onView={openTranscriptViewer}
               onOpenLibrary={() => setActivePage("recordings")}
             />

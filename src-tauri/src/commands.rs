@@ -20,8 +20,8 @@ use crate::{
     },
     recording_library::{
         convert_recordings_to_mp3_inner, delete_recording_inner, delete_recordings_inner,
-        play_recording_inner, read_recording_texts_inner, transcribe_recordings_inner,
-        translate_recordings_inner,
+        import_media_inner, play_recording_inner, read_recording_texts_inner,
+        transcribe_recordings_inner, translate_recordings_inner,
     },
     recording_session::{start_recording_inner, stop_recording_inner},
     runtime_assets::{check_whisper_model_update_inner, check_whisper_runtime_update_inner},
@@ -272,6 +272,17 @@ pub(crate) async fn transcribe_recordings(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn import_media(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<RecordingBatchResult, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || import_media_inner(&app_for_blocking, paths))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

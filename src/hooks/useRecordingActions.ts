@@ -215,6 +215,57 @@ export function useRecordingActions({
     ],
   );
 
+  // Media import: acquire → normalize → register with NO transcript, so the file
+  // lands in the Library as "Needs transcript" and every existing action works
+  // on it unchanged. Returns the batch result so the caller can navigate to the
+  // Library only when something actually landed.
+  const importMedia = useCallback(
+    async (paths: string[]): Promise<RecordingBatchResult | null> => {
+      if (paths.length === 0) {
+        return null;
+      }
+
+      try {
+        setBusyAction("importMedia");
+        await persistSettingsIfNeeded();
+        const result = await invoke<RecordingBatchResult>("import_media", {
+          paths,
+        });
+        applyBootstrap(result.bootstrap);
+        const message = formatBatchToastMessage("import", result);
+        setRecordingActionMessage(message);
+        // A batch where every file failed (an unconvertible format, no ffmpeg)
+        // can still come back with a non-error status. Nothing landed, so it is
+        // not success — warn rather than show a green check.
+        const importedCount = result.items.filter(
+          (item) => item.status === "success",
+        ).length;
+        if (importedCount === 0) {
+          showWarning(message);
+        } else {
+          notifyBatchResult(result, message);
+        }
+        return result;
+      } catch (error) {
+        const message = errorMessage(error, "The files could not be imported.");
+        showWarning(message);
+        setLoadError(message);
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [
+      applyBootstrap,
+      notifyBatchResult,
+      persistSettingsIfNeeded,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+      showWarning,
+    ],
+  );
+
   const addFuriganaToAnki = useCallback(
     async (filePaths: string[]) => {
       try {
@@ -373,6 +424,7 @@ export function useRecordingActions({
     convertRecordingsToMp3,
     deleteRecording,
     deleteRecordings,
+    importMedia,
     mineSegment,
     playRecording,
     pushRecordingsToAnki,
