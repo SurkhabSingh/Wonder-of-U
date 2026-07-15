@@ -424,6 +424,12 @@ export function TranscriptViewerPage({
   const canReTranslate =
     onReTranslate !== undefined && recording.translationPath !== null;
 
+  // First-time translation for a recording that has never been translated. The
+  // two are mutually exclusive on `translationPath`: an untranslated recording
+  // shows "Translate" (force: false), a translated one shows "Re-translate".
+  const canTranslate =
+    onReTranslate !== undefined && recording.translationPath === null;
+
   return (
     <div className="transcript-viewer">
       <header className="transcript-viewer-header">
@@ -509,12 +515,14 @@ export function TranscriptViewerPage({
         />
       )}
 
-      {canEnablePerSentence || canReTranslate ? (
+      {canEnablePerSentence || canReTranslate || canTranslate ? (
         <div className="transcript-enable-timing">
           <span className="transcript-enable-timing-text">
             {canEnablePerSentence
               ? "Enable per-sentence playback — re-transcribe with timestamps."
-              : "Re-run the translation for this recording."}
+              : canTranslate
+                ? "Translate this recording with the browser extension."
+                : "Re-run the translation for this recording."}
           </span>
           <div className="transcript-enable-timing-buttons">
             {canEnablePerSentence ? (
@@ -525,6 +533,16 @@ export function TranscriptViewerPage({
                 disabled={isReTranscribing}
               >
                 {isReTranscribing ? "Re-transcribing…" : "Re-transcribe"}
+              </button>
+            ) : null}
+            {canTranslate ? (
+              <button
+                type="button"
+                className="transcript-enable-timing-action"
+                onClick={() => onReTranslate?.(false)}
+                disabled={isReTranslating}
+              >
+                {isReTranslating ? "Translating…" : "Translate"}
               </button>
             ) : null}
             {canReTranslate ? (
