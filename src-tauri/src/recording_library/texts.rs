@@ -175,7 +175,11 @@ fn resolve_within(root: &Path, candidate: &Path) -> Option<PathBuf> {
 
 /// Pull the `{lang}` out of a `{stem}.translation.{lang}.txt` sidecar name,
 /// defaulting to `"en"` when the name does not carry a language tag.
-fn parse_translation_language(path: &Path) -> String {
+///
+/// The filename is the only record of which language a translation is in, so this
+/// is also how the translate path decides whether an existing translation already
+/// matches the configured target and how history resolves which sidecar to show.
+pub(crate) fn parse_translation_language(path: &Path) -> String {
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
     let without_extension = file_name.strip_suffix(".txt").unwrap_or(file_name);
     match without_extension.rsplit_once(".translation.") {

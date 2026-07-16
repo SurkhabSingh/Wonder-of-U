@@ -5,12 +5,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::app_types::{
-    transcript_language_key, PersistedData, RecentRecording, RecordingAnkiPush, RecordingTranscript,
+use crate::{
+    app_types::{
+        transcript_language_key, PersistedData, RecentRecording, RecordingAnkiPush,
+        RecordingTranscript,
+    },
+    recording_library::parse_translation_language,
 };
 
 pub(crate) fn reconcile_recording_history(state: &mut PersistedData) {
     let output_directory = PathBuf::from(&state.settings.output_directory);
+    let target_language = state.settings.translation.target_language.clone();
     let Ok(entries) = fs::read_dir(&output_directory) else {
         return;
     };
@@ -37,7 +42,7 @@ pub(crate) fn reconcile_recording_history(state: &mut PersistedData) {
             continue;
         }
 
-        if let Some(recording) = recording_from_audio_path(&audio_path) {
+        if let Some(recording) = recording_from_audio_path(&audio_path, &target_language) {
             state.recent_recordings.push(recording);
         }
     }
@@ -60,7 +65,7 @@ fn normalized_path_key(path: &Path) -> String {
     path.to_string_lossy().to_lowercase()
 }
 
-fn recording_from_audio_path(audio_path: &Path) -> Option<RecentRecording> {
+fn recording_from_audio_path(audio_path: &Path, target_language: &str) -> Option<RecentRecording> {
     let metadata = fs::metadata(audio_path).ok()?;
     let parent = audio_path.parent()?;
     let stem = audio_path.file_stem()?.to_str()?;
@@ -68,7 +73,7 @@ fn recording_from_audio_path(audio_path: &Path) -> Option<RecentRecording> {
     let transcript_path = transcript_path
         .is_file()
         .then(|| transcript_path.display().to_string());
-    let translation_path = find_translation_path(parent, stem);
+    let translation_path = find_translation_path(parent, stem, target_language);
     let created_at_ms =
         earliest_file_timestamp_ms(audio_path, transcript_path.as_deref().map(Path::new));
 
@@ -94,13 +99,20 @@ fn recording_from_audio_path(audio_path: &Path) -> Option<RecentRecording> {
     })
 }
 
-fn find_translation_path(directory: &Path, stem: &str) -> Option<String> {
+/// Resolve the one translation to show for an adopted recording.
+///
+/// A recording can have a sidecar per language the user has ever targeted, and the
+/// library shows a single translation — so picking whichever one `read_dir` happens
+/// to yield first makes the displayed language depend on directory order. Prefer the
+/// configured target, and fall back to any match so a recording translated before the
+/// setting existed still resolves instead of silently losing its translation.
+fn find_translation_path(directory: &Path, stem: &str, target_language: &str) -> Option<String> {
     let prefix = format!("{stem}.translation.");
-    fs::read_dir(directory)
+    let candidates = fs::read_dir(directory)
         .ok()?
         .flatten()
         .map(|entry| entry.path())
-        .find(|path| {
+        .filter(|path| {
             path.is_file()
                 && path
                     .file_name()
@@ -108,6 +120,12 @@ fn find_translation_path(directory: &Path, stem: &str) -> Option<String> {
                     .map(|name| name.starts_with(&prefix) && name.ends_with(".txt"))
                     .unwrap_or(false)
         })
+        .collect::<Vec<_>>();
+
+    candidates
+        .iter()
+        .find(|path| parse_translation_language(path) == target_language)
+        .or_else(|| candidates.first())
         .map(|path| path.display().to_string())
 }
 
@@ -253,4 +271,52 @@ pub(crate) fn is_japanese_transcript_language(language: Option<&str>) -> bool {
     language
         .map(normalize_transcript_language_code)
         .is_some_and(|normalized| normalized.as_deref() == Some("ja"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_translation_path;
+    use std::fs;
+
+    #[test]
+    fn the_configured_target_language_wins_over_other_translations_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        // Two languages on disk: without a preference, which one resolves depends
+        // on the order read_dir happens to return them in.
+        let english = dir.path().join("lesson.translation.en.txt");
+        let spanish = dir.path().join("lesson.translation.es.txt");
+        fs::write(&english, "hello").unwrap();
+        fs::write(&spanish, "hola").unwrap();
+
+        assert_eq!(
+            find_translation_path(dir.path(), "lesson", "es"),
+            Some(spanish.display().to_string())
+        );
+        assert_eq!(
+            find_translation_path(dir.path(), "lesson", "en"),
+            Some(english.display().to_string())
+        );
+    }
+
+    #[test]
+    fn a_translation_in_another_language_still_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        // Translated before the setting existed; it must still be found rather than
+        // the recording appearing untranslated.
+        let english = dir.path().join("lesson.translation.en.txt");
+        fs::write(&english, "hello").unwrap();
+
+        assert_eq!(
+            find_translation_path(dir.path(), "lesson", "es"),
+            Some(english.display().to_string())
+        );
+    }
+
+    #[test]
+    fn only_the_recordings_own_translations_are_considered() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("other.translation.en.txt"), "hello").unwrap();
+
+        assert_eq!(find_translation_path(dir.path(), "lesson", "en"), None);
+    }
 }

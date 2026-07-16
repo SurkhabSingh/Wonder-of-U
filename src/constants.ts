@@ -1,4 +1,4 @@
-import type { AnkiCatalog, AppBootstrap } from "./types";
+import type { AnkiCatalog, AppBootstrap, LanguageOption } from "./types";
 
 export const MODEL_OPTIONS = [
   {
@@ -144,6 +144,67 @@ export const LANGUAGE_OPTIONS = [
   { code: "zh", label: "Chinese" },
 ] as const;
 
+/* Translation targets ---------------------------------------------------------
+   The UI owns these menus: the backend only normalizes the format (trim +
+   lowercase + fall back to "en") and deliberately does not check the code
+   against any list, so an unsupported code survives all the way to the
+   extension and surfaces as a confusing bridge error at translate time.
+
+   Codes stay lowercase ISO 639-1 because the extension interpolates them into a
+   provider URL verbatim (Google's ?tl=, DeepL's #<src>/<tgt>/<text> fragment).
+
+   "auto" is dropped for both: it is a Whisper source-detection sentinel and is
+   meaningless as a translation target. */
+export const GOOGLE_TARGET_LANGUAGE_OPTIONS: readonly LanguageOption[] =
+  LANGUAGE_OPTIONS.filter((option) => option.code !== "auto");
+
+/* DeepL translates into roughly a third of what Google does, so it needs its own
+   list rather than a filter over the Whisper one. Entries are limited to the
+   long-standing DeepL API v2 target set; anything newer or beta-only is left out
+   on purpose, since a wrong entry here fails at translate time rather than here.
+
+   Bare en/pt are correct despite DeepL wanting EN-US/PT-PT — the extension holds
+   that mapping itself (deepl-api-provider.js TARGET_LANGUAGE_OVERRIDES) and
+   upper-cases everything else, so regional variants must NOT be added.
+
+   Norwegian is "nb" (Bokmal), not the "no" the Whisper list uses: DeepL rejects
+   NO. That is why switching providers re-checks the persisted code both ways
+   instead of assuming Google's list is a superset of this one. */
+export const DEEPL_TARGET_LANGUAGE_OPTIONS: readonly LanguageOption[] = [
+  { code: "ar", label: "Arabic" },
+  { code: "bg", label: "Bulgarian" },
+  { code: "cs", label: "Czech" },
+  { code: "da", label: "Danish" },
+  { code: "de", label: "German" },
+  { code: "el", label: "Greek" },
+  { code: "en", label: "English" },
+  { code: "es", label: "Spanish" },
+  { code: "et", label: "Estonian" },
+  { code: "fi", label: "Finnish" },
+  { code: "fr", label: "French" },
+  { code: "hu", label: "Hungarian" },
+  { code: "id", label: "Indonesian" },
+  { code: "it", label: "Italian" },
+  { code: "ja", label: "Japanese" },
+  { code: "ko", label: "Korean" },
+  { code: "lt", label: "Lithuanian" },
+  { code: "lv", label: "Latvian" },
+  { code: "nb", label: "Norwegian Bokmal" },
+  { code: "nl", label: "Dutch" },
+  { code: "pl", label: "Polish" },
+  { code: "pt", label: "Portuguese" },
+  { code: "ro", label: "Romanian" },
+  { code: "ru", label: "Russian" },
+  { code: "sk", label: "Slovak" },
+  { code: "sl", label: "Slovenian" },
+  { code: "sv", label: "Swedish" },
+  { code: "tr", label: "Turkish" },
+  { code: "uk", label: "Ukrainian" },
+  { code: "zh", label: "Chinese" },
+];
+
+export const DEFAULT_TRANSLATION_TARGET_LANGUAGE = "en";
+
 /* Media import ---------------------------------------------------------------
    ONE extension list, shared by the file-picker filter and the drag-drop
    filter so the two can never drift apart.
@@ -225,6 +286,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     },
     translation: {
       provider: "google-translate",
+      targetLanguage: DEFAULT_TRANSLATION_TARGET_LANGUAGE,
     },
     theme: "system",
     launchAtLogin: false,

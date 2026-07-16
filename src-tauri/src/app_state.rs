@@ -14,9 +14,9 @@ use persistence::{default_asset_directory, default_output_directory};
 
 use crate::{
     app_types::{
-        default_translation_provider, whisper_model_spec, AnkiFieldMapping, AnkiSettings,
-        AppPathsState, AppSettings, FeatureSettings, PersistedData, TranslationSettings,
-        WhisperSettings,
+        default_translation_provider, default_translation_target_language, whisper_model_spec,
+        AnkiFieldMapping, AnkiSettings, AppPathsState, AppSettings, FeatureSettings, PersistedData,
+        TranslationSettings, WhisperSettings,
     },
     runtime_assets::{all_managed_model_paths, collect_managed_whisper_cli_candidates},
 };
@@ -112,6 +112,9 @@ pub(crate) fn normalize_settings<R: Runtime>(
         },
         translation: TranslationSettings {
             provider: normalize_translation_provider(&settings.translation.provider),
+            target_language: normalize_translation_target_language(
+                &settings.translation.target_language,
+            ),
         },
         theme: theme.into(),
         launch_at_login: settings.launch_at_login,
@@ -126,6 +129,25 @@ fn normalize_translation_provider(provider: &str) -> String {
         "google-translate" => "google-translate".to_string(),
         "deepl" => "deepl".to_string(),
         _ => default_translation_provider(),
+    }
+}
+
+/// Force the target language into the one shape the extension's page providers can
+/// consume: this code is interpolated straight into a provider URL — Google's
+/// `?sl=..&tl=<code>` query and DeepL's `#<src>/<tgt>/<text>` fragment — so a
+/// stored `"JA"` or `" en "` loads a page that translates into nothing. Trimmed
+/// lowercase, falling back to English when empty.
+///
+/// Deliberately not validated against a language list: the UI owns which codes it
+/// offers, Rust owns the format. Same split as `whisper.language`, which is only
+/// normalized here as empty -> `"auto"` while the TS `LANGUAGE_OPTIONS` drives the
+/// picker.
+fn normalize_translation_target_language(language: &str) -> String {
+    let normalized = language.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        default_translation_target_language()
+    } else {
+        normalized
     }
 }
 
@@ -267,5 +289,33 @@ pub(crate) fn unique_wav_path(directory: &Path, file_stem: &str) -> PathBuf {
         }
 
         attempt += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_translation_target_language;
+
+    #[test]
+    fn translation_target_language_is_normalized_to_a_url_safe_code() {
+        // The extension interpolates this straight into a provider URL, so the
+        // shape matters more than the value.
+        assert_eq!(normalize_translation_target_language("EN-US"), "en-us");
+        assert_eq!(normalize_translation_target_language("  Ja  "), "ja");
+        assert_eq!(normalize_translation_target_language("es"), "es");
+    }
+
+    #[test]
+    fn an_empty_translation_target_language_falls_back_to_english() {
+        assert_eq!(normalize_translation_target_language(""), "en");
+        assert_eq!(normalize_translation_target_language("   "), "en");
+    }
+
+    #[test]
+    fn an_unknown_translation_target_language_is_kept() {
+        // The UI owns which codes it offers; Rust only owns the format. Rejecting
+        // anything not on a Rust-side list would mean a new UI language silently
+        // translating to English.
+        assert_eq!(normalize_translation_target_language("zh-Hans"), "zh-hans");
     }
 }

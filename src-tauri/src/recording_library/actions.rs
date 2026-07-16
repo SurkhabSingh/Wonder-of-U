@@ -16,12 +16,28 @@ use crate::{
     translation_bridge::TranslationBridge,
 };
 
-use super::{find_recent_recording, selected_recordings, update_recent_recording};
+use super::{
+    find_recent_recording, parse_translation_language, selected_recordings, update_recent_recording,
+};
 
-/// Target language for the current translation pass. The bridge sends an empty
-/// provider so the extension uses its own selected provider (Google/DeepL).
-/// TODO: promote this to a user-configurable setting.
-const TRANSLATION_TARGET_LANGUAGE: &str = "en";
+/// Where a translation job is headed: the extension provider that will run it, and
+/// the language it translates into. Both come from Settings and are always read
+/// together, and passing them as two bare `&str` in a row is one argument swap away
+/// from sending `"en"` as the provider — so they travel as one value.
+struct TranslationTarget {
+    provider: String,
+    language: String,
+}
+
+impl TranslationTarget {
+    fn configured<R: Runtime>(app: &AppHandle<R>) -> Self {
+        Self {
+            provider: configured_translation_provider(app),
+            language: configured_translation_target_language(app),
+        }
+    }
+}
+
 /// Long enough to cover a chunked transcript (the extension translates a long
 /// transcript in several passes) plus one lease requeue if the extension dies
 /// mid-job. See `translation_bridge::LEASE_TIMEOUT`.
@@ -77,17 +93,19 @@ fn delete_recording_files(
             recording.translation_path.as_deref(),
         ]
         .into_iter()
-        .flatten(),
+        .flatten()
+        .map(str::to_string),
     );
     paths.extend(
         recording
             .transcripts
             .iter()
-            .map(|transcript| transcript.file_path.as_str()),
+            .map(|transcript| transcript.file_path.clone()),
     );
+    paths.extend(sibling_translation_paths(recording));
 
     for path in paths {
-        let candidate = Path::new(path);
+        let candidate = Path::new(&path);
         if !candidate.exists() {
             continue;
         }
@@ -106,6 +124,47 @@ fn delete_recording_files(
     }
 
     Ok(())
+}
+
+/// Every `{stem}.translation.*.txt` sitting beside the recording's audio.
+///
+/// `translation_path` names only the language translated most recently, so once the
+/// target language can change, the earlier languages' sidecars are files nothing
+/// references any more — deleting the entry would strand them on disk forever.
+///
+/// This widens WHAT may be unlinked, never WHERE: the names are built from the
+/// recording's own stem in the recording's own folder, and each one is returned as a
+/// plain candidate that `delete_recording_files` puts through the same containment
+/// check as the audio itself. A folder that cannot be read yields nothing rather than
+/// failing the delete — a translation left behind is recoverable, a failed delete of
+/// the audio is what the user actually asked for.
+fn sibling_translation_paths(recording: &RecentRecording) -> Vec<String> {
+    let audio_path = Path::new(&recording.file_path);
+    let (Some(parent), Some(stem)) = (
+        audio_path.parent(),
+        audio_path.file_stem().and_then(|stem| stem.to_str()),
+    ) else {
+        return Vec::new();
+    };
+
+    let prefix = format!("{stem}.translation.");
+    let Ok(entries) = fs::read_dir(parent) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with(&prefix) && name.ends_with(".txt"))
+                    .unwrap_or(false)
+        })
+        .map(|path| path.display().to_string())
+        .collect()
 }
 
 pub(crate) fn playback_path(recording: &RecentRecording) -> Result<PathBuf, String> {
@@ -160,15 +219,15 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
     // The audio is renamed when its first transcript lands, so the caller's path
     // is the only one that still resolves.
     let recording = find_recent_recording(app, file_path).ok()?;
+    let target = TranslationTarget::configured(app);
 
-    if recording.translation_path.is_some() {
+    if translation_matches_target(recording.translation_path.as_deref(), &target.language) {
         return None;
     }
 
     // The translate-after-transcription path never forces a re-translate; `force`
     // is only for the manual re-translate command.
-    let provider = configured_translation_provider(app);
-    let item = translate_single_recording(app, bridge, recording, false, &provider);
+    let item = translate_single_recording(app, bridge, recording, false, &target);
 
     match item.status.as_str() {
         "success" => Some("Translated.".to_string()),
@@ -188,16 +247,39 @@ fn configured_translation_provider<R: Runtime>(app: &AppHandle<R>) -> String {
         .unwrap_or_else(|_| crate::app_types::default_translation_provider())
 }
 
+/// The language the user picked in Settings. Same poisoned-lock treatment as the
+/// provider: fall back to the default rather than fail the translation.
+fn configured_translation_target_language<R: Runtime>(app: &AppHandle<R>) -> String {
+    app.state::<SharedPersistedState>()
+        .0
+        .lock()
+        .map(|persisted| persisted.settings.translation.target_language.clone())
+        .unwrap_or_else(|_| crate::app_types::default_translation_target_language())
+}
+
+/// Whether the translation already on disk can stand in for the configured target.
+///
+/// "Already translated" is not a property of the recording, it is a property of the
+/// recording AND the target language: the sidecar's name is the only record of which
+/// language it holds, so a transcript translated to English before the user switched
+/// to Spanish has no Spanish translation and must be re-translated, not skipped.
+fn translation_matches_target(translation_path: Option<&str>, target_language: &str) -> bool {
+    translation_path
+        .map(|path| parse_translation_language(Path::new(path)) == target_language)
+        .unwrap_or(false)
+}
+
 fn translate_single_recording<R: Runtime>(
     app: &AppHandle<R>,
     bridge: &TranslationBridge,
     recording: RecentRecording,
     force: bool,
-    provider: &str,
+    target: &TranslationTarget,
 ) -> RecordingActionItem {
-    // `force` re-translates even recordings that already have a translation,
-    // deterministically overwriting {stem}.translation.{lang}.txt.
-    if !force && recording.translation_path.is_some() {
+    // `force` re-translates even recordings that already have a translation in the
+    // target language, deterministically overwriting {stem}.translation.{lang}.txt.
+    if !force && translation_matches_target(recording.translation_path.as_deref(), &target.language)
+    {
         return RecordingActionItem {
             file_path: recording.file_path,
             status: "skipped".into(),
@@ -240,8 +322,8 @@ fn translate_single_recording<R: Runtime>(
     let job_id = match bridge.submit(
         source_text,
         source_lang,
-        TRANSLATION_TARGET_LANGUAGE.to_string(),
-        provider.to_string(),
+        target.language.clone(),
+        target.provider.clone(),
     ) {
         Ok(id) => id,
         Err(error) => return failed_translation_item(&recording, error),
@@ -256,7 +338,7 @@ fn translate_single_recording<R: Runtime>(
         return failed_translation_item(&recording, "The extension returned an empty translation.");
     }
 
-    let output_path = translation_output_path(&recording.file_path, TRANSLATION_TARGET_LANGUAGE);
+    let output_path = translation_output_path(&recording.file_path, &target.language);
     if let Err(error) = fs::write(&output_path, translated.trim().as_bytes()) {
         return failed_translation_item(&recording, format!("Could not save the translation: {error}"));
     }
@@ -281,7 +363,7 @@ fn translate_single_recording<R: Runtime>(
         app,
         "INFO",
         "recording.translated",
-        serde_json::json!({ "filePath": file_path, "language": TRANSLATION_TARGET_LANGUAGE }),
+        serde_json::json!({ "filePath": file_path, "language": target.language }),
     );
 
     RecordingActionItem {
@@ -509,7 +591,7 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
         });
     }
 
-    let provider = configured_translation_provider(app);
+    let target = TranslationTarget::configured(app);
     let mut items = Vec::new();
     for recording in recordings {
         // Each job blocks for up to TRANSLATION_TIMEOUT, so a batch that loses the
@@ -524,7 +606,7 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
         }
 
         items.push(translate_single_recording(
-            app, bridge, recording, force, &provider,
+            app, bridge, recording, force, &target,
         ));
     }
 
@@ -552,7 +634,7 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_recording_files, path_is_within};
+    use super::{delete_recording_files, path_is_within, translation_matches_target};
     use crate::app_types::{RecentRecording, RecordingTranscript};
     use std::{fs, path::Path};
 
@@ -658,6 +740,71 @@ mod tests {
         delete_recording_files(&recording, dir.path()).unwrap();
 
         assert!(!transcript.exists());
+    }
+
+    #[test]
+    fn every_language_of_translation_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("lesson.wav");
+        // What switching the target language leaves behind: the entry points at the
+        // Spanish sidecar, and nothing at all references the English one.
+        let english = dir.path().join("lesson.translation.en.txt");
+        let spanish = dir.path().join("lesson.translation.es.txt");
+        fs::write(&audio, b"audio").unwrap();
+        fs::write(&english, "hello").unwrap();
+        fs::write(&spanish, "hola").unwrap();
+
+        // A different recording's sidecar in the same folder must survive.
+        let other = dir.path().join("other.translation.en.txt");
+        fs::write(&other, "not mine").unwrap();
+
+        let mut recording = recording_at(&audio);
+        recording.translation_path = Some(spanish.display().to_string());
+
+        delete_recording_files(&recording, dir.path()).unwrap();
+
+        assert!(!audio.exists());
+        assert!(!spanish.exists());
+        assert!(!english.exists(), "a stale-language translation must not be left on disk");
+        assert!(other.exists(), "another recording's translation must be untouched");
+    }
+
+    #[test]
+    fn the_widened_translation_sweep_stays_inside_the_recordings_folder() {
+        let recordings_dir = tempfile::tempdir().unwrap();
+        let music_dir = tempfile::tempdir().unwrap();
+        // An adopted entry whose folder is outside the recordings directory: the
+        // sweep may name its siblings, but must never unlink one.
+        let track = music_dir.path().join("track.wav");
+        let translation = music_dir.path().join("track.translation.en.txt");
+        fs::write(&track, b"music").unwrap();
+        fs::write(&translation, "translation").unwrap();
+
+        let error = delete_recording_files(&recording_at(&track), recordings_dir.path())
+            .expect_err("nothing outside the recordings folder may be deleted");
+
+        assert!(error.contains("outside the recordings folder"));
+        assert!(track.exists());
+        assert!(translation.exists());
+    }
+
+    #[test]
+    fn an_existing_translation_only_matches_its_own_language() {
+        // Switching the target language must re-translate, not report "already
+        // translated" — the filename is the only record of what language it is in.
+        assert!(translation_matches_target(
+            Some("lesson.translation.es.txt"),
+            "es"
+        ));
+        assert!(!translation_matches_target(
+            Some("lesson.translation.en.txt"),
+            "es"
+        ));
+        // A sidecar with no language tag is English by convention, as the reader
+        // view already assumes.
+        assert!(translation_matches_target(Some("lesson.translation.txt"), "en"));
+        // Never translated: nothing can stand in.
+        assert!(!translation_matches_target(None, "en"));
     }
 
     #[test]

@@ -83,6 +83,13 @@ pub(crate) fn default_translation_provider() -> String {
     "google-translate".into()
 }
 
+/// English, matching what every translation written before the target language was
+/// configurable used. Also the fallback whenever a stored code is unusable, so a
+/// broken setting degrades to the old behaviour instead of a broken provider URL.
+pub(crate) fn default_translation_target_language() -> String {
+    "en".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TranslationSettings {
@@ -92,12 +99,19 @@ pub(crate) struct TranslationSettings {
     /// selection.
     #[serde(default = "default_translation_provider")]
     pub(crate) provider: String,
+    /// The language transcripts are translated INTO, as a lowercase ISO 639-1 code.
+    /// Sent as the job's `targetLang` and used to name the `{stem}.translation.{lang}.txt`
+    /// sidecar. The UI owns which codes are offered; see
+    /// `normalize_translation_target_language` for why only the format is enforced here.
+    #[serde(default = "default_translation_target_language")]
+    pub(crate) target_language: String,
 }
 
 impl Default for TranslationSettings {
     fn default() -> Self {
         Self {
             provider: default_translation_provider(),
+            target_language: default_translation_target_language(),
         }
     }
 }

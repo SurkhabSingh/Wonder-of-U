@@ -59,6 +59,9 @@ export type TranslationProvider = "google-translate" | "deepl";
 
 export type TranslationSettings = {
   provider: TranslationProvider;
+  // Lowercase ISO 639-1. The extension interpolates this straight into a
+  // provider URL, so an uppercase or regional code (EN-US) breaks the request.
+  targetLanguage: string;
 };
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -286,5 +289,10 @@ export type RecordingFilter =
 
 export type SelectOption = {
   value: string;
+  label: string;
+};
+
+export type LanguageOption = {
+  code: string;
   label: string;
 };
