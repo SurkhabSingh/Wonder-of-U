@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    io::Read,
     sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
@@ -39,6 +40,14 @@ const MAX_ATTEMPTS: u32 = 2;
 /// Back-pressure. A caller submits one job and blocks on it, so the queue only
 /// grows past a handful if something is badly wrong.
 const MAX_QUEUE_DEPTH: usize = 64;
+/// Ceiling on a `/complete` or `/fail` body. Everything else the broker owns is
+/// bounded — the queue, the lease bookkeeping, every map — and this was the one
+/// that was not: the body was read straight into a `String` with no limit, so a
+/// local process could hand a worker thread a multi-gigabyte POST and have it
+/// faithfully buffer the lot. A translation of a transcript sentence is a few
+/// hundred bytes; 1 MiB is already absurdly generous for one, and the source
+/// text it answers had to fit through `submit` in the first place.
+const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -348,20 +357,40 @@ struct FailBody {
     error: String,
 }
 
-/// Only our own local client may talk to the bridge.
+/// Keeps browsers off the bridge. Three checks, none of which authenticates:
 ///
-/// The client is the native messaging host, a plain Node process: it sends no
-/// `Origin`. A browser page can reach loopback, but it cannot suppress `Origin` —
-/// so the presence of one means the caller is a web page, and a web page has no
-/// business claiming translation jobs (it would be reading transcript text) or
-/// injecting results. The `Host` check is the usual DNS-rebinding guard: a name
-/// that resolves to 127.0.0.1 still arrives with its own Host header.
+///   * **Fetch Metadata.** Browsers attach `Sec-Fetch-Site`/`-Mode`/`-Dest` to
+///     every request they make, loopback subresources included; a plain Node
+///     `http.request` — which is all our client is (`native-host.js` sends only
+///     `Accept`, plus `Content-Type`/`Content-Length` on a POST, and whatever
+///     Node adds: `Host` and `Connection`) — sends none. So any `Sec-Fetch-*`
+///     header at all means a browser made the request, and it is refused.
+///   * **Origin.** Kept, but it is not the load-bearing check and never was. The
+///     docstring here used to claim a page "cannot suppress `Origin`", and that
+///     is simply false: `Origin` rides on fetch/XHR and CORS-relevant requests,
+///     not on subresource GETs. `<img src="http://127.0.0.1:8791/v1/translation
+///     /next?wait=30">` on any page the user visits arrives with no `Origin` at
+///     all. The page cannot read the reply — but `claim_next` has already popped
+///     the job, so the user's translation dies waiting, and four such tags
+///     occupy every worker thread we have.
+///   * **Host.** The usual DNS-rebinding guard: a name that resolves to
+///     127.0.0.1 still arrives carrying its own `Host`.
+///
+/// What this does NOT do is prove identity. It separates "a browser sent this"
+/// from "our Node client did"; any other local process can still speak the
+/// contract and be believed. That is the bridge's pre-existing trust boundary —
+/// closing it needs a shared secret negotiated over the native-messaging port,
+/// which is a change to `native-host.js` and not to this file.
 fn is_authorized(request: &Request) -> bool {
     let mut host_ok = false;
 
     for header in request.headers() {
         let field = header.field.as_str().as_str().to_ascii_lowercase();
         let value = header.value.as_str();
+
+        if field.starts_with("sec-fetch-") {
+            return false;
+        }
 
         if field == "origin" && !value.trim().is_empty() {
             return false;
@@ -416,7 +445,10 @@ fn handle_request(bridge: &TranslationBridge, version: &str, mut request: Reques
     // whether the result was actually recorded.
     if method == Method::Post {
         if let Some(id) = job_id_for(&path, "/complete") {
-            let body = read_body(&mut request);
+            let Some(body) = read_body(&mut request) else {
+                let _ = request.respond(Response::empty(413));
+                return;
+            };
             let translated = serde_json::from_str::<CompleteBody>(&body)
                 .map(|parsed| parsed.translated_text)
                 .unwrap_or_default();
@@ -430,7 +462,10 @@ fn handle_request(bridge: &TranslationBridge, version: &str, mut request: Reques
         }
 
         if let Some(id) = job_id_for(&path, "/fail") {
-            let body = read_body(&mut request);
+            let Some(body) = read_body(&mut request) else {
+                let _ = request.respond(Response::empty(413));
+                return;
+            };
             let error = serde_json::from_str::<FailBody>(&body)
                 .map(|parsed| parsed.error)
                 .unwrap_or_default();
@@ -471,10 +506,36 @@ fn parse_wait_seconds(query: &str) -> u64 {
         .clamp(1, MAX_LONG_POLL_SECONDS)
 }
 
-fn read_body(request: &mut Request) -> String {
+/// Reads a request body, refusing anything over `MAX_BODY_BYTES`.
+///
+/// The declared `Content-Length` is checked first so an oversized POST is
+/// rejected before a single byte is buffered, but it is only a hint — a chunked
+/// or lying client sends no usable length — so the read itself is capped too,
+/// with one byte of headroom to tell "exactly at the limit" apart from "over
+/// it". Reading is `take`n rather than aborted outright because the reply still
+/// has to go back down the same connection.
+fn read_body(request: &mut Request) -> Option<String> {
+    if request
+        .body_length()
+        .is_some_and(|length| length > MAX_BODY_BYTES)
+    {
+        return None;
+    }
+
     let mut content = String::new();
-    let _ = request.as_reader().read_to_string(&mut content);
-    content
+    let read = request
+        .as_reader()
+        .take(MAX_BODY_BYTES as u64 + 1)
+        .read_to_string(&mut content);
+
+    match read {
+        // A body that fills the headroom byte had more behind it.
+        Ok(_) if content.len() > MAX_BODY_BYTES => None,
+        Ok(_) => Some(content),
+        // Non-UTF-8 or a truncated read. Either way there is no JSON here, and
+        // the caller answers the same way it would for an unparseable body.
+        Err(_) => Some(String::new()),
+    }
 }
 
 fn respond_json<V: Serialize>(request: Request, status: u16, body: &V) {
@@ -829,10 +890,8 @@ mod tests {
         assert_eq!(error, "The extension reported a translation failure.");
     }
 
-    /// A web page can reach 127.0.0.1, but it cannot suppress its `Origin` header.
-    /// Our only client is a native process, which sends none — so an `Origin` means
-    /// a page is calling, and a page must not be able to claim jobs (that would read
-    /// the user's transcripts) or inject results.
+    /// The fetch shape: a page calling us from script sends an `Origin`, and a page
+    /// has no business claiming jobs or injecting results.
     #[test]
     fn requests_from_a_web_page_are_refused() {
         let bridge = Arc::new(TranslationBridge::new());
@@ -842,6 +901,9 @@ mod tests {
         let response = client
             .get(format!("{base}/v1/health"))
             .header("Origin", "https://evil.example")
+            .header("Sec-Fetch-Site", "cross-site")
+            .header("Sec-Fetch-Mode", "cors")
+            .header("Sec-Fetch-Dest", "empty")
             .send()
             .unwrap();
         assert_eq!(response.status().as_u16(), 403);
@@ -849,6 +911,86 @@ mod tests {
         // And the native client, which sends no Origin, still gets through.
         let allowed = client.get(format!("{base}/v1/health")).send().unwrap();
         assert!(allowed.status().is_success());
+    }
+
+    /// The shape the `Origin` check never covered, and the reason it gave false
+    /// confidence: `<img src="http://127.0.0.1:8791/v1/translation/next?wait=30">`
+    /// on any page the user visits. A subresource GET carries no `Origin` and a
+    /// loopback `Host`, so it used to be authorized — and `claim_next` pops the job,
+    /// so the page silently steals the user's translation and never answers for it.
+    /// Fetch Metadata is what catches it: the browser attaches these, our Node
+    /// client does not.
+    #[test]
+    fn subresource_loads_from_a_web_page_are_refused() {
+        let bridge = Arc::new(TranslationBridge::new());
+        let base = spawn_bridge_server(Arc::clone(&bridge));
+        let client = reqwest::blocking::Client::new();
+
+        for dest in ["image", "script", "iframe", "style"] {
+            let response = client
+                .get(format!("{base}/v1/translation/next?wait=1"))
+                .header("Sec-Fetch-Site", "cross-site")
+                .header("Sec-Fetch-Mode", "no-cors")
+                .header("Sec-Fetch-Dest", dest)
+                .send()
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                403,
+                "a <{dest}> subresource load must not reach the bridge"
+            );
+        }
+
+        // A single Sec-Fetch header is enough on its own: only a browser sends any.
+        let response = client
+            .get(format!("{base}/v1/health"))
+            .header("Sec-Fetch-Dest", "empty")
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 403);
+    }
+
+    /// The exact header set `native-host.js` sends must still be authorized, or the
+    /// guard above has locked out the only real client.
+    #[test]
+    fn the_native_client_is_still_authorized() {
+        let bridge = Arc::new(TranslationBridge::new());
+        let base = spawn_bridge_server(Arc::clone(&bridge));
+        let client = reqwest::blocking::Client::new();
+
+        let response = client
+            .get(format!("{base}/v1/health"))
+            .header("Accept", "application/json")
+            .send()
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+
+    /// `read_body` used to read a POST into a String with no ceiling at all, so a
+    /// local process could hand a worker thread a body of any size and have it
+    /// buffer the whole thing.
+    #[test]
+    fn oversized_bodies_are_refused_not_buffered() {
+        let bridge = Arc::new(TranslationBridge::new());
+        let base = spawn_bridge_server(Arc::clone(&bridge));
+        let client = reqwest::blocking::Client::new();
+
+        let response = client
+            .post(format!("{base}/v1/translation/jobs/job-7/complete"))
+            .header("Content-Type", "application/json")
+            .body("x".repeat(MAX_BODY_BYTES + 1))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 413);
+
+        // A body inside the ceiling is still read and answered normally.
+        let response = client
+            .post(format!("{base}/v1/translation/jobs/job-7/complete"))
+            .header("Content-Type", "application/json")
+            .body(serde_json::json!({ "translatedText": "hello" }).to_string())
+            .send()
+            .unwrap();
+        assert!(response.status().is_success());
     }
 
     #[test]

@@ -11,10 +11,11 @@ use tauri::{AppHandle, Manager, Runtime};
 use super::{
     client::{anki_connect_request, anki_offline_message},
     fields::{
-        anki_media_file_name, html_escape, prepend_anki_field_value, preserve_anki_sound_tags,
-        user_friendly_anki_error,
+        anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
     },
-    furigana::{recording_transcript_supports_furigana, request_furigana_html},
+    furigana::{
+        insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
+    },
 };
 use crate::{
     app_runtime::{build_app_bootstrap, update_shell_snapshot},
@@ -22,7 +23,7 @@ use crate::{
         AppSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
     },
-    recording_library::{find_recent_recording, playback_path},
+    recording_library::{find_recent_recording, playback_path, unique_path_with_suffix},
     runtime_assets::detect_local_ffmpeg,
 };
 
@@ -37,29 +38,6 @@ fn hide_command_window(command: &mut Command) {
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW);
-    }
-}
-
-fn unique_path_with_suffix(directory: &Path, file_stem: &str, suffix: &str) -> PathBuf {
-    let sanitized_stem = if file_stem.is_empty() {
-        "recording".to_string()
-    } else {
-        file_stem.to_string()
-    };
-
-    let mut attempt = 0usize;
-    loop {
-        let candidate = if attempt == 0 {
-            directory.join(format!("{sanitized_stem}{suffix}"))
-        } else {
-            directory.join(format!("{sanitized_stem}_{attempt}{suffix}"))
-        };
-
-        if !candidate.exists() {
-            return candidate;
-        }
-
-        attempt += 1;
     }
 }
 
@@ -177,16 +155,7 @@ fn maybe_merge_furigana(
         return;
     };
 
-    let target_field = settings.fields.transcription.as_str();
-    let existing_value = fields.get(target_field).and_then(|value| value.as_str());
-    let fallback_sound_tag =
-        if !settings.fields.audio.is_empty() && settings.fields.audio == target_field {
-            Some(format!("[sound:{clip_media_file_name}]"))
-        } else {
-            None
-        };
-    let merged = preserve_anki_sound_tags(existing_value, &furigana_html, fallback_sound_tag.as_deref());
-    fields.insert(target_field.to_string(), serde_json::Value::String(merged));
+    insert_furigana_field(settings, &furigana_html, clip_media_file_name, fields);
 }
 
 /// Runs the whole mine for one sentence and returns the single action item plus

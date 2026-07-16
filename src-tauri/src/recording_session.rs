@@ -1,6 +1,7 @@
 use std::{
-    path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
+    fs,
+    path::{Path, PathBuf},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -18,10 +19,134 @@ use crate::{
     recording::capture_system_audio_loopback,
 };
 
+/// Set for as long as a `start_recording` call is between claiming the recorder
+/// slot and storing the `ActiveRecording` in it.
+static RECORDER_START_CLAIM: Mutex<bool> = Mutex::new(false);
+
+/// Held across the probe for a free WAV name and the create that reserves it.
+static WAV_PATH_RESERVATION_LOCK: Mutex<()> = Mutex::new(());
+
+/// Owns the recorder slot for the whole of `start_recording_inner`.
+///
+/// The slot itself is `Mutex<Option<ActiveRecording>>`, and an `ActiveRecording`
+/// cannot exist until its worker thread does — so the check ("is a recording
+/// running?") and the claim (storing the handle) are unavoidably separated by the
+/// name reservation, a persisted-state write, two snapshot emits and the spawn.
+/// Two concurrent commands used to both pass the check and the second assignment
+/// then dropped the first `stop_signal` on the floor, leaving its capture thread
+/// running until process exit with no way to join it.
+///
+/// This flag closes that window without holding either mutex across the gap:
+/// `acquire` takes both locks, decides, and releases them before returning. That
+/// matters because `update_shell_snapshot` emits, and the emit re-locks the same
+/// state to rebuild the bootstrap — `std::sync::Mutex` is not reentrant, so a
+/// guard held across an emit would deadlock the app instantly. Dropping this guard
+/// clears the flag, so every `?` between the claim and the spawn releases the slot
+/// rather than wedging recording until restart.
+struct RecorderStartClaim;
+
+impl RecorderStartClaim {
+    fn acquire<R: Runtime>(app: &AppHandle<R>) -> Result<Self, String> {
+        Self::acquire_with(|| {
+            // Nested under the claim, never the other way round: `stop_recording`
+            // only ever takes the recorder lock, so this ordering cannot cycle.
+            let recorder_state = app.state::<RecorderState>();
+            let recorder = recorder_state
+                .0
+                .lock()
+                .map_err(|_| "Could not inspect the recorder state.".to_string())?;
+            Ok(recorder.is_some())
+        })
+    }
+
+    /// The claim itself, taking the "is a recording already running?" answer as a
+    /// closure so the flag's behavior can be tested without an `AppHandle` (the
+    /// Tauri mock runtime does not run on Windows). The closure is called with the
+    /// flag held, which is what makes the check and the claim inseparable.
+    fn acquire_with<F>(recording_is_active: F) -> Result<Self, String>
+    where
+        F: FnOnce() -> Result<bool, String>,
+    {
+        let mut claimed = RECORDER_START_CLAIM
+            .lock()
+            .map_err(|_| "Could not inspect the recorder state.".to_string())?;
+        if *claimed || recording_is_active()? {
+            return Err("A recording is already in progress.".into());
+        }
+
+        *claimed = true;
+        Ok(Self)
+    }
+}
+
+impl Drop for RecorderStartClaim {
+    fn drop(&mut self) {
+        if let Ok(mut claimed) = RECORDER_START_CLAIM.lock() {
+            *claimed = false;
+        }
+    }
+}
+
+/// Removes the placeholder WAV that `reserve_wav_path` created, unless the worker
+/// thread took ownership of it. Without this a start that fails after reserving
+/// leaves an empty file behind that every later recording then has to skip past.
+struct ReservedWavPath {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl ReservedWavPath {
+    /// Gives up responsibility for the file: the capture worker owns it from here
+    /// on, and removes it itself if the capture fails.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ReservedWavPath {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Picks a free WAV name and creates it in the same breath.
+///
+/// `unique_wav_path` only probes: the worker thread does not open the file until
+/// much later, so on its own the probe reserves nothing and two starts landing in
+/// the same millisecond can pick the same name — the second `WavWriter::create`
+/// truncates and one recording is silently lost. Creating the file under the lock
+/// makes the name taken as far as any later probe is concerned. `create_new` is
+/// atomic, so it also holds against another process racing us, and the empty
+/// placeholder is harmless: `WavWriter::create` truncates it anyway.
+fn reserve_wav_path(directory: &Path, file_stem: &str) -> Result<PathBuf, String> {
+    let _reservation_guard = WAV_PATH_RESERVATION_LOCK
+        .lock()
+        .map_err(|_| "Could not reserve a recording output name.".to_string())?;
+    let output_path = unique_wav_path(directory, file_stem);
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output_path)
+        .map_err(|error| {
+            format!(
+                "Could not reserve the recording file {}: {error}",
+                output_path.display()
+            )
+        })?;
+
+    Ok(output_path)
+}
+
 pub(crate) fn start_recording_inner<R: Runtime>(
     app: &AppHandle<R>,
     requested_name: Option<String>,
 ) -> Result<(), String> {
+    // Claimed before the phase check so that two concurrent starts cannot both
+    // read an idle shell and proceed.
+    let _slot_claim = RecorderStartClaim::acquire(app)?;
+
     {
         let shell_state = app.state::<SharedShellState>();
         let shell = shell_state
@@ -30,17 +155,6 @@ pub(crate) fn start_recording_inner<R: Runtime>(
             .map_err(|_| "Could not inspect the shell state.".to_string())?;
         if shell.phase != "idle" && shell.phase != "error" {
             return Err("The app is still busy with the previous recording task.".into());
-        }
-    }
-
-    {
-        let recorder_state = app.state::<RecorderState>();
-        let recorder = recorder_state
-            .0
-            .lock()
-            .map_err(|_| "Could not inspect the recorder state.".to_string())?;
-        if recorder.is_some() {
-            return Err("A recording is already in progress.".into());
         }
     }
 
@@ -59,9 +173,13 @@ pub(crate) fn start_recording_inner<R: Runtime>(
         ensure_directory_exists(&output_directory)?;
 
         let file_stem = next_recording_stem(&mut persisted, requested_name.as_deref());
-        let output_path = unique_wav_path(&output_directory, &file_stem);
+        let output_path = reserve_wav_path(&output_directory, &file_stem)?;
         let snapshot = persisted.clone();
         (output_path, file_stem, snapshot)
+    };
+    let reserved_output = ReservedWavPath {
+        path: output_path.clone(),
+        armed: true,
     };
 
     write_persisted_data(app, &persisted_snapshot)?;
@@ -102,6 +220,7 @@ pub(crate) fn start_recording_inner<R: Runtime>(
             });
             message
         })?;
+    reserved_output.disarm();
 
     {
         let recorder_state = app.state::<RecorderState>();
@@ -191,4 +310,43 @@ pub(crate) fn stop_recording_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(),
         .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reserve_wav_path, RecorderStartClaim};
+
+    #[test]
+    fn reserving_a_wav_name_takes_it_from_the_next_start() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let first = reserve_wav_path(temp_dir.path(), "sample").unwrap();
+        // The probe alone would hand back "sample.wav" twice, because the worker
+        // thread does not create the file until much later.
+        let second = reserve_wav_path(temp_dir.path(), "sample").unwrap();
+
+        assert_eq!(first.file_name().unwrap(), "sample.wav");
+        assert_eq!(second.file_name().unwrap(), "sample_1.wav");
+        assert!(first.exists());
+        assert!(second.exists());
+    }
+
+    #[test]
+    fn a_second_start_cannot_claim_the_recorder_slot() {
+        let claim = RecorderStartClaim::acquire_with(|| Ok(false)).unwrap();
+
+        // The first start is still between its check and storing the handle, so
+        // the second must be turned away rather than overwrite the first.
+        assert!(RecorderStartClaim::acquire_with(|| Ok(false)).is_err());
+
+        // A failed setup step between the claim and the spawn must not wedge
+        // recording until the app restarts.
+        drop(claim);
+        assert!(RecorderStartClaim::acquire_with(|| Ok(false)).is_ok());
+    }
+
+    #[test]
+    fn an_already_running_recording_blocks_a_new_start() {
+        assert!(RecorderStartClaim::acquire_with(|| Ok(true)).is_err());
+    }
 }

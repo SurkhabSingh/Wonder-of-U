@@ -5,10 +5,12 @@ use tauri::{AppHandle, Manager, Runtime};
 use super::{
     client::{anki_connect_request, anki_offline_message},
     fields::{
-        anki_media_file_name, html_escape, prepend_anki_field_value, preserve_anki_sound_tags,
+        anki_media_file_name, html_escape, prepend_anki_field_value,
         recording_pushed_to_anki_target, user_friendly_anki_error,
     },
-    furigana::{recording_transcript_supports_furigana, request_furigana_html},
+    furigana::{
+        insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
+    },
     references::refresh_recording_anki_reference,
 };
 use crate::{
@@ -205,23 +207,7 @@ fn maybe_insert_automatic_furigana_field(
 
     match request_furigana_html(transcript) {
         Ok(furigana_html) => {
-            let target_field = settings.fields.transcription.as_str();
-            let existing_value = fields.get(target_field).and_then(|value| value.as_str());
-            let fallback_sound_tag =
-                if !settings.fields.audio.is_empty() && settings.fields.audio == target_field {
-                    Some(format!("[sound:{media_file_name}]"))
-                } else {
-                    None
-                };
-            let furigana_html = preserve_anki_sound_tags(
-                existing_value,
-                &furigana_html,
-                fallback_sound_tag.as_deref(),
-            );
-            fields.insert(
-                target_field.to_string(),
-                serde_json::Value::String(furigana_html),
-            );
+            insert_furigana_field(settings, &furigana_html, media_file_name, fields);
             (Some("Furigana was added automatically.".into()), true)
         }
         Err(error) => (Some(format!("Furigana was skipped because {error}")), false),

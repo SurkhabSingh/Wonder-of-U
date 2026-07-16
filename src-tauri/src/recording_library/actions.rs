@@ -2,12 +2,11 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::Duration,
 };
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+#[cfg(not(target_os = "windows"))]
+use std::process::Command;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
@@ -18,9 +17,6 @@ use crate::{
 };
 
 use super::{find_recent_recording, selected_recordings, update_recent_recording};
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Target language for the current translation pass. The bridge sends an empty
 /// provider so the extension uses its own selected provider (Google/DeepL).
@@ -42,7 +38,37 @@ fn remove_recording_from_history(
     Ok(recordings.remove(index))
 }
 
-fn delete_recording_files(recording: &RecentRecording) -> Result<(), String> {
+/// True when `candidate` resolves to a location inside `root`. Both sides are
+/// canonicalized (resolving `..`, symlinks, and Windows verbatim prefixes) so no
+/// stored path can name a file outside the recordings folder by spelling. A side
+/// that cannot be canonicalized is treated as outside — refused, not deleted.
+///
+/// Deliberately a copy of `import::path_is_within` rather than a shared helper:
+/// that one guards where yt-dlp may WRITE, this one guards what we may UNLINK, and
+/// the two must be able to tighten independently.
+fn path_is_within(root: &Path, candidate: &Path) -> bool {
+    match (root.canonicalize(), candidate.canonicalize()) {
+        (Ok(root), Ok(candidate)) => candidate.starts_with(&root),
+        _ => false,
+    }
+}
+
+/// Unlinks a removed entry's files, refusing anything outside the recordings folder.
+///
+/// `reconcile_recording_history` adopts every audio file it finds in the recordings
+/// folder, and that folder is a user-picked one: point it at a music library and
+/// those tracks become entries. Nothing here can tell an adopted file from one we
+/// created, and there is no recycle bin behind `remove_file` — so the containment
+/// check is what bounds the blast radius of a stale entry, a hand-edited state file,
+/// or an `output_directory` that has since moved, to the folder the user pointed us
+/// at.
+///
+/// A path that is already gone is not an error (the delete has nothing to do) and
+/// is not confined either — there is nothing left to protect.
+fn delete_recording_files(
+    recording: &RecentRecording,
+    recordings_directory: &Path,
+) -> Result<(), String> {
     let mut paths = HashSet::new();
     paths.extend(
         [
@@ -61,7 +87,18 @@ fn delete_recording_files(recording: &RecentRecording) -> Result<(), String> {
     );
 
     for path in paths {
-        match fs::remove_file(path) {
+        let candidate = Path::new(path);
+        if !candidate.exists() {
+            continue;
+        }
+
+        if !path_is_within(recordings_directory, candidate) {
+            return Err(format!(
+                "Could not delete {path}: it is outside the recordings folder. It was removed from the library and left on disk."
+            ));
+        }
+
+        match fs::remove_file(candidate) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("Could not delete {path}: {error}")),
@@ -259,20 +296,23 @@ pub(crate) fn delete_recording_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
 ) -> Result<(), String> {
-    let removed_recording = {
+    // The recordings folder is read under the same lock that removes the entry, so
+    // the containment check below cannot be racing a settings change.
+    let (removed_recording, recordings_directory) = {
         let persisted_state = app.state::<SharedPersistedState>();
         let mut persisted = persisted_state
             .0
             .lock()
             .map_err(|_| "Could not update the recording history.".to_string())?;
         let removed = remove_recording_from_history(&mut persisted.recent_recordings, file_path)?;
+        let recordings_directory = PathBuf::from(&persisted.settings.output_directory);
         let snapshot = persisted.clone();
         drop(persisted);
         write_persisted_data(app, &snapshot)?;
-        removed
+        (removed, recordings_directory)
     };
 
-    delete_recording_files(&removed_recording)?;
+    delete_recording_files(&removed_recording, &recordings_directory)?;
 
     log_event(
         app,
@@ -329,6 +369,81 @@ pub(crate) fn delete_recordings_inner<R: Runtime>(
     })
 }
 
+/// Opens a path in the user's default application, passing it to Win32 as DATA.
+///
+/// This used to be `cmd /C start "" <path>`, which was the only place in the app
+/// where an argv element was handed back to a shell to re-parse. The name in that
+/// path is attacker-chosen — the app records system audio, so a video the user
+/// plays writes the transcript that `derive_transcript_stem` turns into the
+/// filename — and Rust only quotes a Windows argv element that contains a space or
+/// tab, so a stem like `a&calc&` reached `cmd` live and `calc` ran. Only the
+/// default recordings folder having a space in its name stopped that today.
+///
+/// `ShellExecuteW` takes the path as one counted string and never parses it, so the
+/// whole class is gone rather than one more character being added to a denylist.
+/// It resolves the default verb exactly as `start` did, returns as soon as the
+/// player is launched, and involves no console to hide.
+///
+/// A null `lpOperation` is what `start` uses: the file type's own default verb,
+/// rather than an "open" that a type may not register.
+///
+/// COM: `ShellExecuteW` can delegate to a Shell extension that expects an
+/// initialized apartment, and a Tauri command is not guaranteed to run on the
+/// already-initialized main thread. `RPC_E_CHANGED_MODE` means this thread is
+/// already in a different apartment — fine to proceed on, and it must NOT be
+/// balanced with a `CoUninitialize`, which is why the flag is tracked.
+#[cfg(target_os = "windows")]
+fn open_with_default_application(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
+        System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
+        UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+    };
+
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
+
+    // SAFETY: `wide_path` is null-terminated and outlives the call; every other
+    // pointer is null, which each parameter documents as valid.
+    let result = unsafe {
+        let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        let owns_com = com != RPC_E_CHANGED_MODE;
+
+        let instance = ShellExecuteW(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            wide_path.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL as i32,
+        );
+
+        if owns_com {
+            CoUninitialize();
+        }
+
+        instance as isize
+    };
+
+    // ShellExecuteW's legacy contract: a value greater than 32 is success, and
+    // anything at or below it is an error code rather than an instance handle.
+    if result > 32 {
+        return Ok(());
+    }
+
+    // SE_ERR_NOASSOC (31) is the one a user can actually act on; the rest are
+    // indistinguishable to them, so the code goes in the message for the log.
+    Err(match result {
+        31 => "No app is set up to play this file. Choose a default player for it in Windows.".to_string(),
+        2 | 3 => "The audio file is missing from disk.".to_string(),
+        code => format!("Windows could not open the recording (error {code})."),
+    })
+}
+
 pub(crate) fn play_recording_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
@@ -338,10 +453,7 @@ pub(crate) fn play_recording_inner<R: Runtime>(
 
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("cmd");
-        command.creation_flags(CREATE_NO_WINDOW);
-        command.arg("/C").arg("start").arg("").arg(&path);
-        command.spawn().map_err(|error| error.to_string())?;
+        open_with_default_application(&path)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -436,4 +548,126 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
         items,
         bootstrap: build_app_bootstrap(app)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{delete_recording_files, path_is_within};
+    use crate::app_types::{RecentRecording, RecordingTranscript};
+    use std::{fs, path::Path};
+
+    fn recording_at(audio_path: &Path) -> RecentRecording {
+        RecentRecording {
+            file_name: audio_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string(),
+            file_path: audio_path.display().to_string(),
+            transcript_path: None,
+            transcript_language: None,
+            transcripts: Vec::new(),
+            translation_path: None,
+            anki_note_id: None,
+            anki_deck_name: None,
+            anki_note_type: None,
+            anki_pushes: Vec::new(),
+            furigana_applied: false,
+            audio_deleted: false,
+            duration_ms: 0,
+            bytes_written: 0,
+            created_at_ms: 0,
+            source: None,
+            source_url: None,
+            title: None,
+        }
+    }
+
+    #[test]
+    fn a_recordings_own_files_are_all_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("lesson.wav");
+        let transcript = dir.path().join("lesson.transcript.txt");
+        let translation = dir.path().join("lesson.translation.en.txt");
+        fs::write(&audio, b"audio").unwrap();
+        fs::write(&transcript, "transcript").unwrap();
+        fs::write(&translation, "translation").unwrap();
+
+        let mut recording = recording_at(&audio);
+        recording.transcript_path = Some(transcript.display().to_string());
+        recording.translation_path = Some(translation.display().to_string());
+        recording.transcripts.push(RecordingTranscript {
+            language: "ja".into(),
+            file_path: transcript.display().to_string(),
+            detected_language: Some("ja".into()),
+            segments_path: None,
+        });
+
+        delete_recording_files(&recording, dir.path()).unwrap();
+
+        assert!(!audio.exists());
+        assert!(!transcript.exists());
+        assert!(!translation.exists());
+    }
+
+    #[test]
+    fn a_file_outside_the_recordings_folder_is_never_unlinked() {
+        let recordings_dir = tempfile::tempdir().unwrap();
+        let music_dir = tempfile::tempdir().unwrap();
+        // What adoption plus a since-changed output_directory produces: an entry
+        // whose audio is somebody's music library.
+        let track = music_dir.path().join("track.mp3");
+        fs::write(&track, b"music").unwrap();
+
+        let error = delete_recording_files(&recording_at(&track), recordings_dir.path())
+            .expect_err("a file outside the recordings folder must not be deleted");
+
+        assert!(error.contains("outside the recordings folder"));
+        assert!(track.exists());
+    }
+
+    #[test]
+    fn a_traversal_path_does_not_escape_the_recordings_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let recordings_dir = root.path().join("recordings");
+        fs::create_dir(&recordings_dir).unwrap();
+        let outside = root.path().join("private.wav");
+        fs::write(&outside, b"audio").unwrap();
+
+        // Spelled as if it were inside the recordings folder; canonicalization is
+        // what refuses it.
+        let traversal = recordings_dir.join("..").join("private.wav");
+        let error = delete_recording_files(&recording_at(&traversal), &recordings_dir)
+            .expect_err("a traversal path must not escape the recordings folder");
+
+        assert!(error.contains("outside the recordings folder"));
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn an_already_missing_file_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // Audio deleted after an Anki push, transcript still there.
+        let audio = dir.path().join("gone.wav");
+        let transcript = dir.path().join("gone.transcript.txt");
+        fs::write(&transcript, "transcript").unwrap();
+
+        let mut recording = recording_at(&audio);
+        recording.transcript_path = Some(transcript.display().to_string());
+
+        delete_recording_files(&recording, dir.path()).unwrap();
+
+        assert!(!transcript.exists());
+    }
+
+    #[test]
+    fn containment_refuses_paths_it_cannot_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        // A root that does not exist cannot be canonicalized, so nothing may be
+        // judged inside it.
+        assert!(!path_is_within(
+            &dir.path().join("absent"),
+            &dir.path().join("absent").join("file.wav")
+        ));
+    }
 }

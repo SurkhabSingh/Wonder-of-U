@@ -143,26 +143,78 @@ fn normalize_directory_input(input: &str, fallback: &Path) -> PathBuf {
     }
 }
 
+/// Longest name we let through, in characters.
+///
+/// This is only ever the START of a path: callers append `_{recording_id}`,
+/// `.transcript.txt`, `.translation.en.txt`, and a `_N` uniqueness suffix on top
+/// of a recordings folder the user chose and that may itself be deep. Windows
+/// caps a single component at 255 UTF-16 units and a whole path at 260 unless the
+/// long-path opt-in is active, so an uncapped `requested_name` from the start
+/// command builds a path that simply cannot be created. 80 leaves room for every
+/// suffix above and still fits a real transcript title.
+const MAX_RECORDING_NAME_CHARS: usize = 80;
+
+/// Names Windows resolves to a DOS device instead of a file, with or without an
+/// extension — `NUL.wav` is the device just as `NUL` is. A recording named after
+/// one either fails to create or writes into the device and is gone, so the name
+/// is pushed out of the reserved namespace rather than rejected.
+const WINDOWS_RESERVED_DEVICE_NAMES: [&str; 24] = [
+    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+    "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Matches on the segment before the first dot, and trims it: Windows ignores
+/// trailing spaces when resolving a device, so `NUL .wav` is `NUL` too.
+fn is_windows_reserved_device_name(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or(name).trim();
+    WINDOWS_RESERVED_DEVICE_NAMES
+        .iter()
+        .any(|reserved| base.eq_ignore_ascii_case(reserved))
+}
+
+/// The single chokepoint every filename in the app passes through: recording
+/// stems, transcript-derived titles, imported and YouTube titles, and Anki media
+/// names.
+///
+/// `&`, `^`, `%`, `(`, `)` and `!` are stripped alongside the characters Windows
+/// forbids outright. They are legal in a filename, but the name is attacker-chosen
+/// — a recording is named after the transcript of whatever system audio was
+/// playing — and shell metacharacters in a filename have exactly one use. This is
+/// defense in depth only: nothing downstream may rely on it, and nothing does
+/// (`play_recording_inner` hands the path to Win32 as data, and every other
+/// spawn passes argv directly).
 pub(crate) fn sanitize_recording_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return String::new();
     }
 
-    trimmed
+    let collapsed = trimmed
         .chars()
         .map(|character| match character {
             '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => ' ',
+            '&' | '^' | '%' | '(' | ')' | '!' => ' ',
             c if c.is_control() => ' ',
             c => c,
         })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join(" ")
-        .trim_end_matches('.')
-        .trim()
-        .to_string()
+        .join(" ");
+
+    // Cap before the final trim: truncation can expose a trailing space or dot
+    // that was interior a moment ago, and Windows drops both silently.
+    let capped = collapsed
+        .chars()
+        .take(MAX_RECORDING_NAME_CHARS)
+        .collect::<String>();
+    let cleaned = capped.trim_end_matches('.').trim();
+
+    if is_windows_reserved_device_name(cleaned) {
+        return format!("_{cleaned}");
+    }
+
+    cleaned.to_string()
 }
 
 pub(crate) fn sanitize_runtime_version(version: &str) -> String {

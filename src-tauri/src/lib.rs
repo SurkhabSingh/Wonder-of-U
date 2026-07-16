@@ -173,6 +173,59 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_recording_name_strips_shell_metacharacters() {
+        // The transcript of whatever system audio was playing names the file, so
+        // this is attacker-chosen text. Nothing downstream re-parses a filename,
+        // but a name that reads as shell syntax has no legitimate use either.
+        assert_eq!(sanitize_recording_name("a&calc&"), "a calc");
+        assert_eq!(
+            sanitize_recording_name("lesson^1 %PATH% (take!)"),
+            "lesson 1 PATH take"
+        );
+        // Japanese titles are the normal case and must survive intact.
+        assert_eq!(sanitize_recording_name("日本語を食べる"), "日本語を食べる");
+    }
+
+    #[test]
+    fn sanitize_recording_name_pushes_reserved_device_names_out_of_the_way() {
+        // `NUL` and `NUL.wav` are both the device, not a file.
+        assert_eq!(sanitize_recording_name("NUL"), "_NUL");
+        assert_eq!(sanitize_recording_name("nul.wav"), "_nul.wav");
+        assert_eq!(sanitize_recording_name("  CON  "), "_CON");
+        assert_eq!(sanitize_recording_name("COM1"), "_COM1");
+        assert_eq!(sanitize_recording_name("LPT9.transcript"), "_LPT9.transcript");
+        // Windows ignores the trailing space when resolving the device.
+        assert_eq!(sanitize_recording_name("AUX .wav"), "_AUX .wav");
+        // A reserved name is only reserved on its own: these are ordinary files.
+        assert_eq!(sanitize_recording_name("CONSOLE"), "CONSOLE");
+        assert_eq!(sanitize_recording_name("my NUL notes"), "my NUL notes");
+        assert_eq!(sanitize_recording_name("COM10"), "COM10");
+    }
+
+    #[test]
+    fn sanitize_recording_name_caps_length_without_leaving_a_trailing_dot() {
+        // `requested_name` reaches here uncapped from the start command, and the
+        // result is only the stem: suffixes and the recordings folder come on top.
+        let capped = sanitize_recording_name(&"a".repeat(400));
+        assert_eq!(capped.chars().count(), 80);
+
+        // Truncation must not expose a trailing dot or space Windows would drop.
+        let dotted = format!("{}...tail", "b".repeat(78));
+        assert_eq!(sanitize_recording_name(&dotted), "b".repeat(78));
+
+        // Multi-byte titles are capped by character, never sliced mid-character.
+        let japanese = sanitize_recording_name(&"あ".repeat(200));
+        assert_eq!(japanese.chars().count(), 80);
+    }
+
+    #[test]
+    fn sanitize_recording_name_keeps_empty_input_empty() {
+        // Callers branch on emptiness to pick their own fallback stem.
+        assert_eq!(sanitize_recording_name("   "), "");
+        assert_eq!(sanitize_recording_name("???"), "");
+    }
+
+    #[test]
     fn unique_wav_path_appends_suffix_when_file_exists() {
         let temp_dir = tempfile::tempdir().unwrap();
         let first = temp_dir.path().join("sample.wav");

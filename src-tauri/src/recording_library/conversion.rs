@@ -100,15 +100,46 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
             .map(|metadata| metadata.len())
             .unwrap_or(updated_recording.bytes_written);
 
-        update_recent_recording(app, &original_file_path, |recording| {
-            *recording = updated_recording.clone();
-        })?;
+        let converted_file_path = updated_recording.file_path.clone();
+        let note_id = updated_recording.anki_note_id;
+
+        // Commit the history update BEFORE unlinking the WAV, and treat a failure as
+        // this file's failure rather than the batch's. If the commit cannot land (a
+        // concurrent rename moved the key, the state file could not be written) the
+        // recording has to stay exactly as it was: the WAV is still the file history
+        // names, so drop the orphan MP3 and keep going down the list.
+        if let Err(error) = update_recent_recording(app, &original_file_path, move |recording| {
+            *recording = updated_recording;
+        }) {
+            let _ = fs::remove_file(&converted_path);
+            log_event(
+                app,
+                "WARN",
+                "audio.compression_not_committed",
+                serde_json::json!({
+                    "audioPath": audio_path,
+                    "targetPath": converted_path,
+                    "message": error
+                }),
+            );
+            items.push(RecordingActionItem {
+                file_path: original_file_path,
+                status: "failed".into(),
+                message: format!(
+                    "Converted to MP3, but the history could not be updated, so the WAV was kept: {error}"
+                ),
+                note_id,
+            });
+            continue;
+        }
+
+        remove_converted_source(app, &audio_path, &converted_path);
 
         items.push(RecordingActionItem {
-            file_path: updated_recording.file_path,
+            file_path: converted_file_path,
             status: "success".into(),
             message: "Recording converted to MP3.".into(),
-            note_id: updated_recording.anki_note_id,
+            note_id,
         });
     }
 
@@ -257,6 +288,27 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
         return audio_path.to_path_buf();
     }
 
+    log_event(
+        app,
+        "INFO",
+        "audio.compressed",
+        serde_json::json!({
+            "sourcePath": audio_path,
+            "targetPath": mp3_path
+        }),
+    );
+    mp3_path
+}
+
+/// Unlinks the WAV an MP3 replaced. Deliberately NOT part of the compression step:
+/// the MP3 only becomes the recording once history says it is, and deleting the
+/// source the moment ffmpeg produced a file meant a failed history commit left the
+/// library pointing at a WAV that no longer existed, with the MP3 orphaned beside
+/// it and the audio unrecoverable. The caller runs this only after the commit.
+///
+/// A failure here is cosmetic — a stale WAV beside a registered MP3 — so it is
+/// logged rather than failing a conversion that has already succeeded.
+fn remove_converted_source<R: Runtime>(app: &AppHandle<R>, audio_path: &Path, mp3_path: &Path) {
     match fs::remove_file(audio_path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -273,15 +325,4 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
             );
         }
     }
-
-    log_event(
-        app,
-        "INFO",
-        "audio.compressed",
-        serde_json::json!({
-            "sourcePath": audio_path,
-            "targetPath": mp3_path
-        }),
-    );
-    mp3_path
 }
