@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "../lib/errors";
 import type { AppBootstrap, BusyAction } from "../types";
 
 type UseRecorderActionsOptions = {
@@ -14,10 +15,6 @@ type UseRecorderActionsOptions = {
   setBusyAction: (busyAction: BusyAction) => void;
   setLoadError: (message: string) => void;
 };
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
 
 export function useRecorderActions({
   applyBootstrap,

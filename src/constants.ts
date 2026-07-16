@@ -256,7 +256,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     status: "notFound",
     executablePath: null,
     managed: false,
-    message: "",
+    message: "Install app-managed yt-dlp to import audio from YouTube and other sites.",
   },
   modelDownload: {
     kind: null,

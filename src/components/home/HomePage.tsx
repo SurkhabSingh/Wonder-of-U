@@ -71,6 +71,8 @@ export function HomePage({
   youtubeTotal,
   onEnqueueYoutube,
   onRemoveYoutube,
+  youtubeFinishedCount,
+  onClearFinishedYoutube,
   youtubeActiveProgress,
   onCancelYoutube,
   onView,
@@ -101,6 +103,8 @@ export function HomePage({
   youtubeTotal: number;
   onEnqueueYoutube: (text: string) => void;
   onRemoveYoutube: (id: string) => void;
+  youtubeFinishedCount: number;
+  onClearFinishedYoutube: () => void;
   youtubeActiveProgress: number | null;
   onCancelYoutube: () => void | Promise<void>;
   onView: (filePath: string) => void;
@@ -353,7 +357,20 @@ export function HomePage({
         )}
 
         <div className="home-youtube-row">
-          <span className="home-youtube-label">From YouTube</span>
+          <div className="home-youtube-header">
+            <span className="home-youtube-label">From YouTube</span>
+            {/* Finished rows are history, not work in progress — offer the
+                dismissal only once there is something to dismiss. */}
+            {youtubeFinishedCount > 0 ? (
+              <button
+                type="button"
+                className="ghost home-youtube-clear"
+                onClick={onClearFinishedYoutube}
+              >
+                Clear finished
+              </button>
+            ) : null}
+          </div>
           <div className="input-with-action">
             {/* Input + Add stay ENABLED while a fetch runs — you can keep
                 queuing links; the queue serializes the actual downloads. */}

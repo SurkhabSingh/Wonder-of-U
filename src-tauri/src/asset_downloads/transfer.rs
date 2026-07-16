@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -23,7 +23,7 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn update_model_download_snapshot<R: Runtime, F>(
+pub(super) fn update_model_download_snapshot<R: Runtime, F>(
     app: &AppHandle<R>,
     update: F,
 ) -> Result<(), String>
@@ -41,7 +41,7 @@ where
     Ok(())
 }
 
-pub(crate) fn reset_model_download_control<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+pub(super) fn reset_model_download_control<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let control_state = app.state::<ModelDownloadControlState>();
     let mut control = control_state
         .control
@@ -54,8 +54,110 @@ pub(crate) fn reset_model_download_control<R: Runtime>(app: &AppHandle<R>) -> Re
     Ok(())
 }
 
+/// Owns the single asset-download control slot that every download shares.
+///
+/// Between claiming the slot and handing it to the worker thread there are several
+/// fallible steps, and each one used to early-return with `active` still set — which
+/// wedges every asset download behind "Another download is already in progress."
+/// until the app restarts. Dropping the guard releases the slot, so any `?` on the
+/// way to `spawn` unwinds cleanly. The worker thread resets the slot itself on both
+/// its success and failure paths, so `disarm` hands ownership over once it is running.
+pub(super) struct DownloadSlotGuard<R: Runtime> {
+    app: AppHandle<R>,
+    armed: bool,
+}
+
+impl<R: Runtime> DownloadSlotGuard<R> {
+    /// Claims the slot, or fails with `busy_message` when another download holds it.
+    pub(super) fn acquire(app: &AppHandle<R>, busy_message: &str) -> Result<Self, String> {
+        let control_state = app.state::<ModelDownloadControlState>();
+        let mut control = control_state
+            .control
+            .lock()
+            .map_err(|_| "Could not initialize the download control state.".to_string())?;
+        if control.active {
+            return Err(busy_message.to_string());
+        }
+        control.active = true;
+        control.paused = false;
+        control.cancel_requested = false;
+        drop(control);
+
+        Ok(Self {
+            app: app.clone(),
+            armed: true,
+        })
+    }
+
+    /// Gives up responsibility for the slot: the worker thread releases it from here on.
+    pub(super) fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl<R: Runtime> Drop for DownloadSlotGuard<R> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = reset_model_download_control(&self.app);
+        }
+    }
+}
+
 pub(super) fn ensure_directory_exists(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| error.to_string())
+}
+
+/// Removes the `.part` file unless the transfer got as far as its final rename.
+///
+/// Cancel used to be the only path that cleaned up, so any read/write error left a
+/// partial file behind in the asset directory forever. Declare this guard *before*
+/// the `File` handle it protects: locals drop in reverse, so the file closes first
+/// and the removal is not racing its own open handle.
+struct PartialDownloadGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl PartialDownloadGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartialDownloadGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Verifies a freshly installed managed binary, deleting it when it will not run.
+///
+/// Detection trusts a managed binary by existence (see `managed_binary_is_present`),
+/// so a binary left on disk after a failed `--version` probe would be reported as
+/// ready and then spawned by a real import. A missing VC++ runtime, antivirus
+/// tampering, or a complete-but-corrupt download all land here. The removal is
+/// deliberately best-effort: it must never replace the verification error the user
+/// needs to see.
+pub(super) fn verify_managed_binary_or_remove<V>(
+    executable_path: &Path,
+    verify: V,
+) -> Result<(), String>
+where
+    V: FnOnce(&Path) -> Result<(), String>,
+{
+    match verify(executable_path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(executable_path);
+            Err(error)
+        }
+    }
 }
 
 fn remove_directory_contents(path: &Path) -> Result<(), String> {
@@ -128,6 +230,7 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
 
     let total_bytes = response.content_length();
     let temp_path = target_path.with_extension("part");
+    let mut temp_guard = PartialDownloadGuard::new(temp_path.clone());
     let mut file = fs::File::create(&temp_path).map_err(|error| error.to_string())?;
     let mut buffer = [0u8; 64 * 1024];
     let mut downloaded_bytes = 0u64;
@@ -168,7 +271,6 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
 
             if control.cancel_requested {
                 drop(control);
-                let _ = fs::remove_file(&temp_path);
                 update_model_download_snapshot(app, |snapshot| {
                     snapshot.kind = Some(kind.to_string());
                     snapshot.status = "cancelled".into();
@@ -208,5 +310,70 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     }
 
     fs::rename(&temp_path, target_path).map_err(|error| error.to_string())?;
+    temp_guard.disarm();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{verify_managed_binary_or_remove, PartialDownloadGuard};
+    use std::path::Path;
+
+    #[test]
+    fn a_binary_that_fails_verification_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("yt-dlp.exe");
+        std::fs::write(&binary, b"MZ...").unwrap();
+
+        let error = verify_managed_binary_or_remove(&binary, |_: &Path| {
+            Err("the binary did not run".to_string())
+        })
+        .unwrap_err();
+
+        // The original failure survives, and detection can no longer trust the binary.
+        assert_eq!(error, "the binary did not run");
+        assert!(!binary.exists());
+    }
+
+    #[test]
+    fn a_binary_that_verifies_is_left_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("yt-dlp.exe");
+        std::fs::write(&binary, b"MZ...").unwrap();
+
+        verify_managed_binary_or_remove(&binary, |_: &Path| Ok(())).unwrap();
+
+        assert!(binary.exists());
+    }
+
+    #[test]
+    fn a_failed_removal_still_reports_the_verification_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing to remove: the removal fails and must not mask the real error.
+        let missing = dir.path().join("absent.exe");
+
+        let error =
+            verify_managed_binary_or_remove(&missing, |_: &Path| Err("no runtime".to_string()))
+                .unwrap_err();
+
+        assert_eq!(error, "no runtime");
+    }
+
+    #[test]
+    fn a_partial_download_is_removed_unless_the_guard_is_disarmed() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let stranded = dir.path().join("stranded.part");
+        std::fs::write(&stranded, b"partial").unwrap();
+        drop(PartialDownloadGuard::new(stranded.clone()));
+        assert!(!stranded.exists());
+
+        // A renamed-into-place download disarms the guard, so nothing is touched.
+        let renamed = dir.path().join("kept.part");
+        std::fs::write(&renamed, b"partial").unwrap();
+        let mut guard = PartialDownloadGuard::new(renamed.clone());
+        guard.disarm();
+        drop(guard);
+        assert!(renamed.exists());
+    }
 }

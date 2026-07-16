@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
+import { errorMessage } from "../lib/errors";
 import { fileNameFromPath } from "../lib/format";
-import type { RecordingBatchResult, YoutubeQueueItem } from "../types";
+import type { YoutubeImportOutcome, YoutubeQueueItem } from "../types";
 
 type UseYoutubeQueueOptions = {
   // Single-URL backend import. It BLOCKS until the download finishes and
-  // resolves with the single-item batch (or a "failed"/"cancelled" batch). That
-  // promise resolving IS the completion signal — we never wait on a progress
-  // value or a "done" event. Returns null only when the fetch could not run at
-  // all (thrown/cancelled).
-  importYoutube: (url: string) => Promise<RecordingBatchResult | null>;
+  // resolves with the outcome: `ok` with the single-item batch (which is also
+  // how a user Cancel arrives — a "cancelled" batch), or not-ok with the reason
+  // the command rejected. That promise resolving IS the completion signal — we
+  // never wait on a progress value or a "done" event.
+  importYoutube: (url: string) => Promise<YoutubeImportOutcome>;
   // Fired once when the whole queue drains from busy → idle, with the number of
   // items that actually landed a recording. Lets the caller defer navigation.
   onAllComplete: (landedCount: number) => void;
@@ -23,7 +24,20 @@ type UseYoutubeQueueOptions = {
 // Completion is the awaited `importYoutube` resolving — nothing else. Progress
 // is a lightweight `youtube-progress` Tauri event (a percent number), and
 // cancel is a `youtube-cancel` event that makes the active download resolve
-// early as cancelled/failed so the loop moves on.
+// early as a cancelled batch so the loop moves on.
+
+// Whitespace always separates pasted links. A comma only does when a new link
+// starts right after it: commas are legal in a query string and yt-dlp accepts
+// them, so splitting on every comma tears one URL into two broken halves. A
+// trailing comma is the "a, b" paste style, never part of the link.
+function splitPastedUrls(text: string): string[] {
+  return text
+    .split(/\s+/)
+    .flatMap((token) => token.split(/,(?=https?:\/\/)/))
+    .map((part) => part.replace(/,+$/, "").trim())
+    .filter((part) => part.length > 0);
+}
+
 export function useYoutubeQueue({
   importYoutube,
   onAllComplete,
@@ -81,11 +95,8 @@ export function useYoutubeQueue({
 
   const enqueue = useCallback((text: string) => {
     // One paste of many links becomes many items; a single link is a queue of
-    // one. Newlines, spaces/tabs, and commas all separate (URLs have none).
-    const urls = text
-      .split(/[\s,]+/)
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0);
+    // one.
+    const urls = splitPastedUrls(text);
     if (urls.length === 0) {
       return;
     }
@@ -125,8 +136,8 @@ export function useYoutubeQueue({
 
   const cancelActive = useCallback(() => {
     // Cancel the active download slot. The active item's `importYoutube` promise
-    // then resolves early (cancelled → null, or a failed batch), and the loop
-    // advances to the next queued item.
+    // then resolves early with a "cancelled" batch, and the loop advances to the
+    // next queued item.
     void emit("youtube-cancel");
   }, []);
 
@@ -166,14 +177,22 @@ export function useYoutubeQueue({
         );
         setActiveProgress(0);
 
-        // Completion = this awaited invoke resolving. A throw (or a hard cancel)
-        // surfaces as null; the loop still advances.
-        let result: RecordingBatchResult | null = null;
+        // Completion = this awaited invoke resolving. `importYoutube` already
+        // turns a rejection into a not-ok outcome, so this catch only covers
+        // what it could not; either way the loop still advances.
+        let settled: YoutubeImportOutcome;
         try {
-          result = await importYoutubeRef.current(next.url);
-        } catch {
-          result = null;
+          settled = await importYoutubeRef.current(next.url);
+        } catch (error) {
+          settled = {
+            ok: false,
+            message: errorMessage(
+              error,
+              "The YouTube link could not be imported.",
+            ),
+          };
         }
+        const outcome = settled;
 
         if (!mountedRef.current) {
           break;
@@ -184,8 +203,16 @@ export function useYoutubeQueue({
             if (item.id !== next.id) {
               return item;
             }
-            // null → the fetch could not run (most likely a user cancel).
-            if (result === null) {
+            // The command rejected — a livestream, a dead link, no yt-dlp. That
+            // is a failure, not a cancel, and the row has to say which.
+            if (!outcome.ok) {
+              return { ...item, status: "failed", message: outcome.message };
+            }
+            const { result } = outcome;
+            // A user Cancel comes back as a CANCELLED batch whose one item is
+            // marked failed — read the batch status, or a deliberate cancel
+            // renders as "Failed".
+            if (result.status === "cancelled") {
               return { ...item, status: "cancelled" };
             }
             const landed = result.items.find(

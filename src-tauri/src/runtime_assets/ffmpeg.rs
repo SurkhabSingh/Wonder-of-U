@@ -9,10 +9,15 @@ use std::os::windows::process::CommandExt;
 
 use crate::app_types::{AppSettings, FfmpegDetection};
 
+use super::path_probe::PathProbeCache;
 use super::ytdlp::managed_binary_is_present;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Whether `ffmpeg` on PATH runs — cached for the same reason as the yt-dlp probe:
+/// `detect_local_ffmpeg` also runs on every snapshot emit. See `PathProbeCache`.
+static PATH_FFMPEG_PROBE: PathProbeCache = PathProbeCache::new();
 
 fn managed_ffmpeg_root(asset_directory: &Path) -> PathBuf {
     asset_directory.join("ffmpeg-runtime")
@@ -109,7 +114,7 @@ pub(crate) fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
     }
 
     let path_candidate = PathBuf::from("ffmpeg");
-    if verify_ffmpeg_binary(&path_candidate).is_ok() {
+    if PATH_FFMPEG_PROBE.binary_is_available(|| verify_ffmpeg_binary(&path_candidate).is_ok()) {
         return FfmpegDetection {
             status: "ready".into(),
             executable_path: Some("ffmpeg".into()),

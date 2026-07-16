@@ -338,6 +338,8 @@ function App() {
               youtubeTotal={youtubeQueue.total}
               onEnqueueYoutube={youtubeQueue.enqueue}
               onRemoveYoutube={youtubeQueue.remove}
+              youtubeFinishedCount={youtubeQueue.finishedCount}
+              onClearFinishedYoutube={youtubeQueue.clearFinished}
               youtubeActiveProgress={youtubeQueue.activeProgress}
               onCancelYoutube={youtubeQueue.cancelActive}
               onView={openTranscriptViewer}

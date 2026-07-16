@@ -1,4 +1,5 @@
 mod ffmpeg;
+mod path_probe;
 mod updates;
 mod whisper;
 mod ytdlp;

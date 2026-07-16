@@ -29,6 +29,12 @@ export function StorageSettingsPage({
   onToggleDownloadPause: () => void | Promise<void>;
 }) {
   const ytdlpReady = bootstrap.ytdlpDetection.status === "ready";
+  // Re-downloading the recommended yt-dlp overwrites the binary in place, so the
+  // download action doubles as the install for an update the check turned up.
+  const ytdlpUpdateVersion =
+    ytdlpUpdateResult?.status === "available"
+      ? ytdlpUpdateResult.latestVersion
+      : null;
   return (
     <>
       <header className="panel-header">
@@ -142,6 +148,17 @@ export function StorageSettingsPage({
         )}
       </div>
       <UpdateResultCard result={ytdlpUpdateResult} />
+      {ytdlpReady && ytdlpUpdateVersion ? (
+        <div className="action-row compact-actions">
+          <button
+            type="button"
+            onClick={() => void onDownloadRecommendedYtdlp()}
+            disabled={downloadIsActive || busyAction === "downloadYtdlp"}
+          >
+            Download {ytdlpUpdateVersion}
+          </button>
+        </div>
+      ) : null}
       <DownloadProgressCard
         snapshot={bootstrap.modelDownload}
         kind="ytdlp"

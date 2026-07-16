@@ -1,7 +1,13 @@
 import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "../lib/errors";
 import { formatBatchToastMessage } from "../lib/recordingBatchMessages";
-import type { AppBootstrap, BusyAction, RecordingBatchResult } from "../types";
+import type {
+  AppBootstrap,
+  BusyAction,
+  RecordingBatchResult,
+  YoutubeImportOutcome,
+} from "../types";
 
 type UseRecordingActionsOptions = {
   applyBootstrap: (nextBootstrap: AppBootstrap) => void;
@@ -12,10 +18,6 @@ type UseRecordingActionsOptions = {
   showSuccess: (message: string) => void;
   showWarning: (message: string) => void;
 };
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
 
 export function useRecordingActions({
   applyBootstrap,
@@ -268,13 +270,14 @@ export function useRecordingActions({
 
   // YouTube import: fetch a video's audio with yt-dlp and register it with NO
   // transcript, exactly like importMedia — the file lands in the Library as
-  // "Needs transcript". Returns the batch result so the caller can navigate to
-  // the Library only when the single item actually landed.
+  // "Needs transcript". Returns the outcome rather than the bare batch: a
+  // rejection (livestream, dead link, missing yt-dlp) has a reason worth showing
+  // but no bootstrap, so it gets its own branch instead of a lossy null.
   const importYoutube = useCallback(
-    async (url: string): Promise<RecordingBatchResult | null> => {
+    async (url: string): Promise<YoutubeImportOutcome> => {
       const trimmed = url.trim();
       if (trimmed.length === 0) {
-        return null;
+        return { ok: false, message: "No YouTube link was provided." };
       }
 
       try {
@@ -297,7 +300,7 @@ export function useRecordingActions({
         } else {
           notifyBatchResult(result, message);
         }
-        return result;
+        return { ok: true, result };
       } catch (error) {
         const message = errorMessage(
           error,
@@ -307,7 +310,7 @@ export function useRecordingActions({
         // and translation. Avoid `setLoadError`, which pins a permanent banner
         // (e.g. a rejected livestream would otherwise linger at the top).
         showWarning(message);
-        return null;
+        return { ok: false, message };
       } finally {
         setBusyAction(null);
       }

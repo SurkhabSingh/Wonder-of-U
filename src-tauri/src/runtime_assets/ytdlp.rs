@@ -8,8 +8,15 @@ use std::os::windows::process::CommandExt;
 
 use crate::app_types::{AppSettings, YtdlpDetection};
 
+use super::path_probe::PathProbeCache;
+
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Whether `yt-dlp` on PATH runs. Unlike a managed binary it can only be confirmed by
+/// spawning it, so the result is cached to keep that ~1s off every snapshot emit —
+/// see `PathProbeCache`.
+static PATH_YTDLP_PROBE: PathProbeCache = PathProbeCache::new();
 
 /// The directory the app downloads yt-dlp into: `<asset_dir>/yt-dlp`.
 pub(crate) fn managed_ytdlp_install_directory(asset_directory: &Path) -> PathBuf {
@@ -89,9 +96,10 @@ pub(crate) fn detect_local_ytdlp(settings: &AppSettings) -> YtdlpDetection {
     }
 
     // A PATH-discovered binary is at an unknown location, so it still needs a
-    // `--version` probe to confirm it exists and actually runs.
+    // `--version` probe to confirm it exists and actually runs — cached, because this
+    // runs on every emit too.
     let path_candidate = PathBuf::from("yt-dlp");
-    if verify_ytdlp_binary(&path_candidate).is_ok() {
+    if PATH_YTDLP_PROBE.binary_is_available(|| verify_ytdlp_binary(&path_candidate).is_ok()) {
         return YtdlpDetection {
             status: "ready".into(),
             executable_path: Some("yt-dlp".into()),

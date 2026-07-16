@@ -5,16 +5,14 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     app_runtime::{log_event, update_shell_snapshot},
     app_state::write_persisted_data,
-    app_types::{
-        whisper_model_spec, ModelDownloadControlState, SharedPersistedState, SharedShellState,
-    },
+    app_types::{whisper_model_spec, SharedPersistedState, SharedShellState},
     runtime_assets::refresh_whisper_detection_state,
     transcription::verify_whisper_model,
 };
 
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, reset_model_download_control,
-    update_model_download_snapshot,
+    update_model_download_snapshot, DownloadSlotGuard,
 };
 
 fn clear_managed_model_override<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -60,19 +58,8 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
         }
     }
 
-    {
-        let control_state = app.state::<ModelDownloadControlState>();
-        let mut control = control_state
-            .control
-            .lock()
-            .map_err(|_| "Could not initialize the model download control state.".to_string())?;
-        if control.active {
-            return Err("A model download is already in progress.".into());
-        }
-        control.active = true;
-        control.paused = false;
-        control.cancel_requested = false;
-    }
+    let download_slot =
+        DownloadSlotGuard::acquire(app, "A model download is already in progress.")?;
 
     let target_path = recommended_model_target_path(app)?;
     let model_spec = {
@@ -193,6 +180,7 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
             }
         })
         .map_err(|error| error.to_string())?;
+    download_slot.disarm();
 
     Ok(())
 }

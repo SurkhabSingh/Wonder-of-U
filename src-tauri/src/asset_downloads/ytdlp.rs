@@ -5,13 +5,13 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     app_config::YTDLP_RELEASE_DOWNLOAD_URL,
     app_runtime::{log_event, update_shell_snapshot},
-    app_types::{ModelDownloadControlState, SharedPersistedState, SharedShellState},
+    app_types::{SharedPersistedState, SharedShellState},
     runtime_assets::{managed_ytdlp_install_directory, verify_ytdlp_binary},
 };
 
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, reset_model_download_control,
-    update_model_download_snapshot,
+    update_model_download_snapshot, verify_managed_binary_or_remove, DownloadSlotGuard,
 };
 
 /// Downloads the latest yt-dlp release into `<asset_dir>/yt-dlp/yt-dlp.exe`.
@@ -34,19 +34,8 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
         }
     }
 
-    {
-        let control_state = app.state::<ModelDownloadControlState>();
-        let mut control = control_state
-            .control
-            .lock()
-            .map_err(|_| "Could not initialize the download control state.".to_string())?;
-        if control.active {
-            return Err("Another download is already in progress.".into());
-        }
-        control.active = true;
-        control.paused = false;
-        control.cancel_requested = false;
-    }
+    let download_slot =
+        DownloadSlotGuard::acquire(app, "Another download is already in progress.")?;
 
     let install_directory = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -91,7 +80,7 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
                     "yt-dlp",
                 )?;
 
-                verify_ytdlp_binary(&target_path)?;
+                verify_managed_binary_or_remove(&target_path, verify_ytdlp_binary)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
                     snapshot.kind = Some("ytdlp".into());
                     snapshot.status = "completed".into();
@@ -153,6 +142,7 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
             }
         })
         .map_err(|error| error.to_string())?;
+    download_slot.disarm();
 
     Ok(())
 }

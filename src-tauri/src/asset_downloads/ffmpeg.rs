@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     app_config::{RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL},
     app_runtime::{log_event, update_shell_snapshot},
-    app_types::{ModelDownloadControlState, SharedPersistedState, SharedShellState},
+    app_types::{SharedPersistedState, SharedShellState},
     runtime_assets::{
         collect_managed_ffmpeg_candidates, managed_ffmpeg_install_directory, verify_ffmpeg_binary,
     },
@@ -16,7 +16,8 @@ use crate::{
 
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
-    reset_model_download_control, update_model_download_snapshot,
+    reset_model_download_control, update_model_download_snapshot, verify_managed_binary_or_remove,
+    DownloadSlotGuard,
 };
 
 fn recommended_ffmpeg_archive_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -67,19 +68,8 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
         }
     }
 
-    {
-        let control_state = app.state::<ModelDownloadControlState>();
-        let mut control = control_state
-            .control
-            .lock()
-            .map_err(|_| "Could not initialize the download control state.".to_string())?;
-        if control.active {
-            return Err("Another download is already in progress.".into());
-        }
-        control.active = true;
-        control.paused = false;
-        control.cancel_requested = false;
-    }
+    let download_slot =
+        DownloadSlotGuard::acquire(app, "Another download is already in progress.")?;
 
     let archive_path = recommended_ffmpeg_archive_path(app)?;
     let install_directory = recommended_ffmpeg_install_directory(app)?;
@@ -117,7 +107,6 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
                 let ffmpeg_path = if let Some(existing_path) =
                     find_existing_managed_ffmpeg_path(&asset_directory)
                 {
-                    verify_ffmpeg_binary(&existing_path)?;
                     existing_path
                 } else {
                     download_file_to_path_with_progress(
@@ -133,7 +122,9 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
                         .ok_or_else(|| "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string())?
                 };
 
-                verify_ffmpeg_binary(&ffmpeg_path)?;
+                // Covers a reused install too: detection trusts ffmpeg.exe by existence,
+                // so one that no longer runs has to go rather than keep reporting ready.
+                verify_managed_binary_or_remove(&ffmpeg_path, verify_ffmpeg_binary)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
                     snapshot.kind = Some("ffmpeg".into());
                     snapshot.status = "completed".into();
@@ -200,6 +191,7 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
             }
         })
         .map_err(|error| error.to_string())?;
+    download_slot.disarm();
 
     Ok(())
 }

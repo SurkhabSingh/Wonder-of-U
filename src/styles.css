@@ -2808,10 +2808,29 @@ input::placeholder {
   text-align: left;
 }
 
+/* Section label on the left, the Clear finished ghost on the right. The ghost is
+   conditional, so the row keeps the label's own height when it is absent. */
+.home-youtube-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
 .home-youtube-label {
   color: var(--text-muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-mid);
+}
+
+/* Sized to match the active row's Cancel, so the two ghosts in this section read
+   as one control weight. */
+.home-youtube-clear {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
+  line-height: 1.8;
 }
 
 /* "Fetching N of M…" line — a quiet running total above the queue list. */

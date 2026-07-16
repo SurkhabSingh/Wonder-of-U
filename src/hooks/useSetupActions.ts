@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { RECOMMENDED_RUNTIME_VERSION } from "../constants";
+import { errorMessage } from "../lib/errors";
 import { normalizeSelection } from "../lib/helpers";
 import type {
   AnkiFieldMapping,
@@ -37,10 +38,6 @@ type UseSetupActionsOptions = {
   settingsDraft: AppSettings;
   updateSettings: (update: SettingsUpdate) => void;
 };
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
 
 export function useSetupActions({
   applyBootstrap,

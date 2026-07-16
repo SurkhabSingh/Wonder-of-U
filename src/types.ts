@@ -221,6 +221,14 @@ export type RecordingBatchResult = {
   bootstrap: AppBootstrap;
 };
 
+// What one YouTube import settled as. A rejected `invoke` carries a reason but
+// no `bootstrap`, so it cannot honestly be dressed up as a RecordingBatchResult
+// — the reason travels on its own branch, and the queue row renders it. Note a
+// user Cancel is NOT this: that resolves `ok` with a "cancelled" batch.
+export type YoutubeImportOutcome =
+  | { ok: true; result: RecordingBatchResult }
+  | { ok: false; message: string };
+
 // One row in the Home "From YouTube" queue. The backend import stays single-URL;
 // this is the shape of a frontend-only sequential queue built on top of it.
 export type YoutubeQueueItem = {

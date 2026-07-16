@@ -9,7 +9,7 @@ use crate::{
     app_config::{RECOMMENDED_WHISPER_RUNTIME_FILE, RECOMMENDED_WHISPER_RUNTIME_VERSION},
     app_runtime::{log_event, update_shell_snapshot},
     app_state::{sanitize_runtime_version, write_persisted_data},
-    app_types::{ModelDownloadControlState, SharedPersistedState, SharedShellState},
+    app_types::{SharedPersistedState, SharedShellState},
     runtime_assets::{
         app_managed_runtime_directory, collect_managed_whisper_cli_candidates,
         refresh_whisper_detection_state,
@@ -19,7 +19,7 @@ use crate::{
 
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
-    reset_model_download_control, update_model_download_snapshot,
+    reset_model_download_control, update_model_download_snapshot, DownloadSlotGuard,
 };
 
 fn activate_managed_runtime_version<R: Runtime>(
@@ -118,19 +118,8 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
         }
     }
 
-    {
-        let control_state = app.state::<ModelDownloadControlState>();
-        let mut control = control_state
-            .control
-            .lock()
-            .map_err(|_| "Could not initialize the download control state.".to_string())?;
-        if control.active {
-            return Err("Another download is already in progress.".into());
-        }
-        control.active = true;
-        control.paused = false;
-        control.cancel_requested = false;
-    }
+    let download_slot =
+        DownloadSlotGuard::acquire(app, "Another download is already in progress.")?;
 
     let archive_path = recommended_runtime_archive_path(app, &runtime_version)?;
     let install_directory = recommended_runtime_install_directory(app, &runtime_version)?;
@@ -270,6 +259,7 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
             }
         })
         .map_err(|error| error.to_string())?;
+    download_slot.disarm();
 
     Ok(())
 }
