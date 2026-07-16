@@ -2,7 +2,8 @@
 name = "wonder_of_u_desktop"
 version = "0.1.0"
 description = "Wonder of U desktop application"
-authors = ["Wonder of U"]
+authors = ["Surkhab Singh"]
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

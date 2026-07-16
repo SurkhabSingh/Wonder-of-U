@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Wonder of U",
-  "version": "0.1.0",
+  "version": "../package.json",
   "identifier": "com.wonderofu.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -57,7 +57,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Surkhab Singh",
+    "copyright": "Copyright © 2026 Surkhab Singh",
+    "category": "Education",
+    "licenseFile": "../LICENSE",
+    "shortDescription": "Turn what you watch into Anki sentence cards.",
+    "longDescription": "Wonder of U records the audio playing on your computer, transcribes it locally with Whisper, and turns individual sentences into Anki cards with their own audio clip. Recordings, transcripts, and clips stay on your machine. Whisper, FFmpeg, and yt-dlp are downloaded on first run rather than bundled.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
