@@ -11,10 +11,10 @@ use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
-    app_config::YTDLP_RELEASES_API_URL,
+    app_config::{IPADIC_DICTIONARY_VERSION, YTDLP_RELEASES_API_URL},
     app_state::sanitize_runtime_version,
     app_types::{whisper_model_spec, SharedPersistedState, WhisperAssetUpdateResult},
-    runtime_assets::detect_local_ytdlp,
+    runtime_assets::{detect_local_dictionary, detect_local_ytdlp},
 };
 
 use super::refresh_whisper_detection_state;
@@ -186,6 +186,46 @@ pub(crate) fn check_ytdlp_update_inner<R: Runtime>(
         message,
         current_version: installed_version,
         latest_version: Some(latest_tag),
+    })
+}
+
+/// Reports whether the pinned Japanese dictionary is installed.
+///
+/// Deliberately unlike the other update checks: it asks GitHub nothing. The
+/// dictionary version is pinned to the lindera crate this binary is built against,
+/// so a newer release upstream is not an update the user can take — offering it
+/// would install a dictionary this app cannot load. The only real question is
+/// whether the pinned one is present, which needs no network.
+pub(crate) fn check_dictionary_update_inner<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<WhisperAssetUpdateResult, String> {
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+        persisted.settings.clone()
+    };
+
+    let detection = detect_local_dictionary(&settings);
+    let installed = detection.status == "ready";
+    Ok(WhisperAssetUpdateResult {
+        kind: "dictionary".into(),
+        status: if installed {
+            "current".into()
+        } else {
+            "available".into()
+        },
+        message: if installed {
+            format!(
+                "The Japanese dictionary ({IPADIC_DICTIONARY_VERSION}) is installed and up to date."
+            )
+        } else {
+            format!("The Japanese dictionary ({IPADIC_DICTIONARY_VERSION}) is not installed yet.")
+        },
+        current_version: installed.then(|| IPADIC_DICTIONARY_VERSION.to_string()),
+        latest_version: Some(IPADIC_DICTIONARY_VERSION.to_string()),
     })
 }
 

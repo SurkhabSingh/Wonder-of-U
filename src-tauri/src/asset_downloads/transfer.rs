@@ -160,6 +160,60 @@ where
     }
 }
 
+/// Verifies a freshly installed managed directory, deleting it when it is not usable.
+///
+/// The binary sibling above cannot be reused for this: it removes with
+/// `fs::remove_file`, which fails on a directory and would leave a broken install
+/// exactly where detection trusts it. The removal is best-effort for the same
+/// reason as the binary sibling — it must never replace the verification error.
+pub(super) fn verify_managed_directory_or_remove<T, V>(
+    directory_path: &Path,
+    verify: V,
+) -> Result<T, String>
+where
+    V: FnOnce(&Path) -> Result<T, String>,
+{
+    match verify(directory_path) {
+        Ok(verified) => Ok(verified),
+        Err(error) => {
+            let _ = fs::remove_dir_all(directory_path);
+            Err(error)
+        }
+    }
+}
+
+/// Removes a half-installed directory unless the install got as far as verifying.
+///
+/// Extraction writes an archive's entries in order, so an interrupted one leaves a
+/// directory that is real but incomplete — and the lindera archive happens to write
+/// its small `metadata.json` long before its 32MB `dict.words`, which is precisely
+/// the file detection keys on. Without this, a download that died mid-extract would
+/// be trusted as ready forever and fail on every use. Covers the cancel and
+/// mid-extract paths; `verify_managed_directory_or_remove` covers a complete
+/// install that still will not load.
+pub(super) struct PartialInstallGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl PartialInstallGuard {
+    pub(super) fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartialInstallGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 fn remove_directory_contents(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
@@ -316,8 +370,78 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::{verify_managed_binary_or_remove, PartialDownloadGuard};
+    use super::{
+        verify_managed_binary_or_remove, verify_managed_directory_or_remove, PartialDownloadGuard,
+        PartialInstallGuard,
+    };
     use std::path::Path;
+
+    /// Stands in for an extracted dictionary: a directory with files inside it.
+    fn write_extracted_directory(root: &Path) -> std::path::PathBuf {
+        let directory = root.join("lindera-ipadic");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("metadata.json"), b"{}").unwrap();
+        std::fs::write(directory.join("dict.words"), b"words").unwrap();
+        directory
+    }
+
+    #[test]
+    fn a_directory_that_fails_verification_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = write_extracted_directory(dir.path());
+
+        let error = verify_managed_directory_or_remove(&directory, |_: &Path| {
+            Err::<(), String>("the dictionary did not load".to_string())
+        })
+        .unwrap_err();
+
+        // The original failure survives, and detection can no longer trust the
+        // dictionary — a `remove_file` here would have left it in place.
+        assert_eq!(error, "the dictionary did not load");
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn a_directory_that_verifies_is_left_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = write_extracted_directory(dir.path());
+
+        verify_managed_directory_or_remove(&directory, |_: &Path| Ok(())).unwrap();
+
+        assert!(directory.join("metadata.json").exists());
+    }
+
+    #[test]
+    fn a_failed_directory_removal_still_reports_the_verification_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing to remove: the removal fails and must not mask the real error.
+        let missing = dir.path().join("absent");
+
+        let error = verify_managed_directory_or_remove(&missing, |_: &Path| {
+            Err::<(), String>("no metadata".to_string())
+        })
+        .unwrap_err();
+
+        assert_eq!(error, "no metadata");
+    }
+
+    #[test]
+    fn a_half_extracted_install_is_removed_unless_the_guard_is_disarmed() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // An extraction that died after metadata.json but before the word list:
+        // detection keys on metadata.json, so this must not survive.
+        let stranded = write_extracted_directory(dir.path());
+        drop(PartialInstallGuard::new(stranded.clone()));
+        assert!(!stranded.exists());
+
+        // A verified install disarms the guard, so nothing is touched.
+        let kept = write_extracted_directory(&dir.path().join("kept"));
+        let mut guard = PartialInstallGuard::new(kept.clone());
+        guard.disarm();
+        drop(guard);
+        assert!(kept.join("metadata.json").exists());
+    }
 
     #[test]
     fn a_binary_that_fails_verification_is_removed() {

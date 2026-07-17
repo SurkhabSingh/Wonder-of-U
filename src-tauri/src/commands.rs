@@ -11,10 +11,10 @@ use crate::{
         WhisperAssetUpdateResult,
     },
     asset_downloads::{
-        cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
-        download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
-        download_recommended_ytdlp_inner, download_whisper_runtime_version_inner,
-        toggle_whisper_model_download_pause_inner,
+        cancel_whisper_model_download_inner, download_recommended_dictionary_inner,
+        download_recommended_ffmpeg_inner, download_recommended_whisper_model_inner,
+        download_recommended_whisper_runtime_inner, download_recommended_ytdlp_inner,
+        download_whisper_runtime_version_inner, toggle_whisper_model_download_pause_inner,
     },
     desktop_shell::{
         hide_main_window as hide_main_window_inner, show_main_window as show_main_window_inner,
@@ -26,8 +26,8 @@ use crate::{
     },
     recording_session::{start_recording_inner, stop_recording_inner},
     runtime_assets::{
-        check_whisper_model_update_inner, check_whisper_runtime_update_inner,
-        check_ytdlp_update_inner,
+        check_dictionary_update_inner, check_whisper_model_update_inner,
+        check_whisper_runtime_update_inner, check_ytdlp_update_inner,
     },
     settings::save_settings_inner,
 };
@@ -92,6 +92,20 @@ pub(crate) async fn check_whisper_model_update(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) fn download_recommended_dictionary(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_dictionary_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+/// Unlike its siblings this needs no `spawn_blocking`: the dictionary version is
+/// pinned, so the check reads a little file metadata rather than making a network
+/// round trip. See `check_dictionary_update_inner`.
+#[tauri::command]
+pub(crate) fn check_dictionary_update(app: AppHandle) -> Result<WhisperAssetUpdateResult, String> {
+    check_dictionary_update_inner(&app)
 }
 
 #[tauri::command]

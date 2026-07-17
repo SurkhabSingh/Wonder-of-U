@@ -419,6 +419,7 @@ pub(crate) struct AppBootstrap {
     pub(crate) whisper_detection: WhisperDetection,
     pub(crate) ffmpeg_detection: FfmpegDetection,
     pub(crate) ytdlp_detection: YtdlpDetection,
+    pub(crate) dictionary_detection: DictionaryDetection,
     pub(crate) model_download: ModelDownloadSnapshot,
     pub(crate) log_path: String,
 }
@@ -499,6 +500,28 @@ impl Default for YtdlpDetection {
             managed: false,
             message: "Install app-managed yt-dlp to import audio from YouTube and other sites."
                 .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DictionaryDetection {
+    pub(crate) status: String,
+    pub(crate) dictionary_path: Option<String>,
+    pub(crate) managed: bool,
+    pub(crate) message: String,
+}
+
+impl Default for DictionaryDetection {
+    fn default() -> Self {
+        Self {
+            status: "notFound".into(),
+            dictionary_path: None,
+            managed: false,
+            message:
+                "Install the Japanese dictionary to analyse transcript sentences word by word."
+                    .into(),
         }
     }
 }

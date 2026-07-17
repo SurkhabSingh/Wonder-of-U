@@ -172,6 +172,13 @@ export type YtdlpDetection = {
   message: string;
 };
 
+export type DictionaryDetection = {
+  status: string;
+  dictionaryPath: string | null;
+  managed: boolean;
+  message: string;
+};
+
 export type WhisperAssetUpdateResult = {
   kind: string;
   status: string;
@@ -197,6 +204,7 @@ export type AppBootstrap = {
   whisperDetection: WhisperDetection;
   ffmpegDetection: FfmpegDetection;
   ytdlpDetection: YtdlpDetection;
+  dictionaryDetection: DictionaryDetection;
   modelDownload: ModelDownloadSnapshot;
   logPath: string;
 };
@@ -251,8 +259,10 @@ export type BusyAction =
   | "downloadRuntime"
   | "downloadFfmpeg"
   | "downloadYtdlp"
+  | "downloadDictionary"
   | "importYoutube"
   | "checkYtdlpUpdate"
+  | "checkDictionaryUpdate"
   | "checkRuntimeUpdate"
   | "checkModelUpdate"
   | "loadAnki"

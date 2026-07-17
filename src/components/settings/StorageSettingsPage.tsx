@@ -12,23 +12,30 @@ export function StorageSettingsPage({
   busyAction,
   downloadIsActive,
   ytdlpUpdateResult,
+  dictionaryUpdateResult,
   onCancelDownload,
   onDownloadRecommendedFfmpeg,
   onDownloadRecommendedYtdlp,
   onCheckYtdlpUpdate,
+  onDownloadRecommendedDictionary,
+  onCheckDictionaryUpdate,
   onToggleDownloadPause,
 }: {
   bootstrap: AppBootstrap;
   busyAction: BusyAction;
   downloadIsActive: boolean;
   ytdlpUpdateResult: WhisperAssetUpdateResult | null;
+  dictionaryUpdateResult: WhisperAssetUpdateResult | null;
   onCancelDownload: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
+  onDownloadRecommendedDictionary: () => void | Promise<void>;
+  onCheckDictionaryUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
 }) {
   const ytdlpReady = bootstrap.ytdlpDetection.status === "ready";
+  const dictionaryReady = bootstrap.dictionaryDetection.status === "ready";
   // Re-downloading the recommended yt-dlp overwrites the binary in place, so the
   // download action doubles as the install for an update the check turned up.
   const ytdlpUpdateVersion =
@@ -162,6 +169,74 @@ export function StorageSettingsPage({
       <DownloadProgressCard
         snapshot={bootstrap.modelDownload}
         kind="ytdlp"
+        downloadIsActive={downloadIsActive}
+        onTogglePause={() => void onToggleDownloadPause()}
+        onCancel={() => void onCancelDownload()}
+      />
+
+      <header className="panel-header">
+        <div>
+          <p className="panel-kicker">Storage</p>
+          <h2>Japanese Dictionary</h2>
+        </div>
+        <span
+          className={`status-chip status-chip-${
+            dictionaryReady ? "success" : "warning"
+          }`}
+          title={bootstrap.dictionaryDetection.message}
+        >
+          {dictionaryReady ? "Ready" : "Missing"}
+        </span>
+      </header>
+
+      <div className={`update-card ${dictionaryReady ? "current" : "available"}`}>
+        <strong>
+          {bootstrap.dictionaryDetection.message ||
+            (dictionaryReady
+              ? "The Japanese dictionary is installed."
+              : "Install the Japanese dictionary to analyse Japanese sentences.")}
+        </strong>
+        <p className="microcopy">
+          Wonder of U uses the IPADIC dictionary to split a Japanese transcript
+          into words and reduce each one to the form it is listed under, so 見た
+          counts as 見る. It is fetched from the lindera releases (MIT) at a
+          pinned version; it is not bundled, and it takes about 16 MB to download
+          and 60 MB on disk.
+        </p>
+        {bootstrap.dictionaryDetection.dictionaryPath ? (
+          <p
+            className="path-copy"
+            title={bootstrap.dictionaryDetection.dictionaryPath}
+          >
+            {fileNameFromPath(bootstrap.dictionaryDetection.dictionaryPath)}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="action-row inline-actions">
+        {dictionaryReady ? (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onCheckDictionaryUpdate()}
+            disabled={busyAction === "checkDictionaryUpdate"}
+          >
+            Check dictionary
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void onDownloadRecommendedDictionary()}
+            disabled={downloadIsActive || busyAction === "downloadDictionary"}
+          >
+            Download dictionary
+          </button>
+        )}
+      </div>
+      <UpdateResultCard result={dictionaryUpdateResult} />
+      <DownloadProgressCard
+        snapshot={bootstrap.modelDownload}
+        kind="dictionary"
         downloadIsActive={downloadIsActive}
         onTogglePause={() => void onToggleDownloadPause()}
         onCancel={() => void onCancelDownload()}

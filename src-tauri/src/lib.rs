@@ -12,6 +12,7 @@ mod recording_library;
 mod recording_session;
 mod runtime_assets;
 mod settings;
+mod tokenizer;
 mod transcription;
 mod translation_bridge;
 
@@ -73,9 +74,11 @@ pub fn run() {
             download_whisper_runtime_version,
             download_recommended_ffmpeg,
             download_recommended_ytdlp,
+            download_recommended_dictionary,
             check_whisper_runtime_update,
             check_whisper_model_update,
             check_ytdlp_update,
+            check_dictionary_update,
             toggle_whisper_model_download_pause,
             cancel_whisper_model_download,
             save_settings,

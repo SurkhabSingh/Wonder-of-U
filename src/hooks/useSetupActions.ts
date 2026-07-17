@@ -35,6 +35,7 @@ type UseSetupActionsOptions = {
   setModelUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   setRuntimeUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   setYtdlpUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
+  setDictionaryUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   settingsDraft: AppSettings;
   updateSettings: (update: SettingsUpdate) => void;
 };
@@ -50,6 +51,7 @@ export function useSetupActions({
   setModelUpdateResult,
   setRuntimeUpdateResult,
   setYtdlpUpdateResult,
+  setDictionaryUpdateResult,
   settingsDraft,
   updateSettings,
 }: UseSetupActionsOptions) {
@@ -112,6 +114,42 @@ export function useSetupActions({
       setBusyAction(null);
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+
+  const downloadRecommendedDictionary = useCallback(async () => {
+    try {
+      setBusyAction("downloadDictionary");
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_recommended_dictionary",
+      );
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("storage");
+    } catch (error) {
+      setLoadError(
+        errorMessage(error, "The Japanese dictionary could not be prepared."),
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+
+  const checkDictionaryUpdate = useCallback(async () => {
+    try {
+      setBusyAction("checkDictionaryUpdate");
+      const result = await invoke<WhisperAssetUpdateResult>(
+        "check_dictionary_update",
+      );
+      setDictionaryUpdateResult(result);
+    } catch (error) {
+      setLoadError(
+        errorMessage(
+          error,
+          "The Japanese dictionary check could not be completed.",
+        ),
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }, [setBusyAction, setLoadError, setDictionaryUpdateResult]);
 
   const checkYtdlpUpdate = useCallback(async () => {
     try {
@@ -288,9 +326,11 @@ export function useSetupActions({
     browseForDirectory,
     browseForFile,
     cancelDownload,
+    checkDictionaryUpdate,
     checkModelUpdate,
     checkRuntimeUpdate,
     checkYtdlpUpdate,
+    downloadRecommendedDictionary,
     downloadRecommendedFfmpeg,
     downloadRecommendedModel,
     downloadRecommendedRuntime,

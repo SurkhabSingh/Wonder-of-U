@@ -49,6 +49,8 @@ function App() {
     useState<WhisperAssetUpdateResult | null>(null);
   const [ytdlpUpdateResult, setYtdlpUpdateResult] =
     useState<WhisperAssetUpdateResult | null>(null);
+  const [dictionaryUpdateResult, setDictionaryUpdateResult] =
+    useState<WhisperAssetUpdateResult | null>(null);
   const [recordingActionMessage, setRecordingActionMessage] = useState("");
 
   // The Library status microcopy is never cleared by its setters, so it lingers
@@ -196,10 +198,12 @@ function App() {
     cancelDownload,
     checkModelUpdate,
     checkRuntimeUpdate,
+    checkDictionaryUpdate,
     checkYtdlpUpdate,
     downloadRecommendedFfmpeg,
     downloadRecommendedModel,
     downloadRecommendedRuntime,
+    downloadRecommendedDictionary,
     downloadRecommendedYtdlp,
     downloadRuntimeVersion,
     toggleDownloadPause,
@@ -215,6 +219,7 @@ function App() {
     setModelUpdateResult,
     setRuntimeUpdateResult,
     setYtdlpUpdateResult,
+    setDictionaryUpdateResult,
     settingsDraft,
     updateSettings,
   });
@@ -492,6 +497,7 @@ function App() {
             runtimeUpdateVersion={runtimeUpdateVersion}
             modelUpdateResult={modelUpdateResult}
             ytdlpUpdateResult={ytdlpUpdateResult}
+            dictionaryUpdateResult={dictionaryUpdateResult}
             runtimeInstalled={runtimeInstalled}
             modelInstalled={modelInstalled}
             resolvedCliPath={resolvedCliPath}
@@ -508,6 +514,8 @@ function App() {
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onCheckYtdlpUpdate={checkYtdlpUpdate}
+            onDownloadRecommendedDictionary={downloadRecommendedDictionary}
+            onCheckDictionaryUpdate={checkDictionaryUpdate}
             onToggleDownloadPause={toggleDownloadPause}
             onCancelDownload={cancelDownload}
             onRefreshAnkiCatalog={refreshAnkiCatalog}

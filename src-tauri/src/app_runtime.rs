@@ -13,7 +13,7 @@ use crate::{
         AppBootstrap, AppPathsState, ModelDownloadState, SharedPersistedState, SharedShellState,
         ShellSnapshot, WhisperDetectionState,
     },
-    runtime_assets::{detect_local_ffmpeg, detect_local_ytdlp},
+    runtime_assets::{detect_local_dictionary, detect_local_ffmpeg, detect_local_ytdlp},
 };
 
 pub(crate) fn now_ms() -> u64 {
@@ -70,6 +70,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         .clone();
     let ffmpeg_detection = detect_local_ffmpeg(&persisted.settings);
     let ytdlp_detection = detect_local_ytdlp(&persisted.settings);
+    let dictionary_detection = detect_local_dictionary(&persisted.settings);
     let whisper_detection = app
         .state::<WhisperDetectionState>()
         .0
@@ -96,6 +97,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         whisper_detection,
         ffmpeg_detection,
         ytdlp_detection,
+        dictionary_detection,
         model_download,
         log_path,
     })

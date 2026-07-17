@@ -320,6 +320,13 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     managed: false,
     message: "Install app-managed yt-dlp to import audio from YouTube and other sites.",
   },
+  dictionaryDetection: {
+    status: "notFound",
+    dictionaryPath: null,
+    managed: false,
+    message:
+      "Install the Japanese dictionary to analyse transcript sentences word by word.",
+  },
   modelDownload: {
     kind: null,
     status: "idle",

@@ -30,6 +30,10 @@ wasapi = "0.23.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tiny_http = "0.12"
+# Default features are `mmap` only — no dictionary is embedded. Enabling
+# `embed-ipadic` would bake ~50MB of IPADIC into the binary and tax every user
+# for an optional feature; we load a prebuilt dictionary from a path at runtime.
+lindera = "4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10.1"
