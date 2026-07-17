@@ -11,6 +11,7 @@ import type {
   AnkiSettings,
   RecentRecording,
   RecordingFilter,
+  VocabularySource,
 } from "../types";
 
 type UseRecordingLibraryOptions = {
@@ -21,6 +22,25 @@ type UseRecordingLibraryOptions = {
 };
 
 const RECORDINGS_PER_PAGE = 8;
+
+// Fold each saved row's chosen field into the catalog's per-note-type field map,
+// so a row keeps showing its own value even when the catalog has no fields for
+// that note type yet.
+function mergeSavedVocabularyFields(
+  fieldMap: Record<string, string[]>,
+  sources: VocabularySource[],
+): Record<string, string[]> {
+  const merged: Record<string, string[]> = { ...fieldMap };
+  for (const { noteType, field } of sources) {
+    if (!noteType || !field) {
+      continue;
+    }
+    merged[noteType] = Array.from(
+      new Set([field, ...(merged[noteType] ?? [])]),
+    );
+  }
+  return merged;
+}
 
 function mergeSavedAnkiSettingsIntoCatalog(
   catalog: AnkiCatalog,
@@ -39,10 +59,20 @@ function mergeSavedAnkiSettingsIntoCatalog(
     noteTypes: Array.from(
       new Set([
         ...(ankiSettings.noteType ? [ankiSettings.noteType] : []),
+        ...ankiSettings.vocabularySources
+          .map((source) => source.noteType)
+          .filter(Boolean),
         ...catalog.noteTypes,
       ]),
     ),
     fields: Array.from(new Set([...savedFields, ...catalog.fields])),
+    // Keep each saved row's own field visible in its dropdown even before the
+    // catalog reports that note type's fields (Anki offline, or a fresh row whose
+    // fields have not been fetched yet), so a save never blanks a chosen value.
+    vocabularyFieldMap: mergeSavedVocabularyFields(
+      catalog.vocabularyFieldMap,
+      ankiSettings.vocabularySources,
+    ),
     message:
       catalog.status === "idle" && (ankiSettings.deckName || ankiSettings.noteType)
         ? "Using your saved Anki mapping. Refresh only if you changed decks, note types, or fields in Anki."

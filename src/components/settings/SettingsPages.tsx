@@ -7,11 +7,13 @@ import type {
   AppSettings,
   AutosaveState,
   BusyAction,
+  KnownWordsSnapshot,
   SettingsSection,
   WhisperAssetUpdateResult,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
 import { AnkiMappingSettingsPage } from "./AnkiMappingSettingsPage";
+import { KnownWordsSettingsPage } from "./KnownWordsSettingsPage";
 import { ModelSettingsPage } from "./ModelSettingsPage";
 import { PreferencesSettingsPage } from "./PreferencesSettingsPage";
 import { RuntimeSettingsPage } from "./RuntimeSettingsPage";
@@ -47,6 +49,8 @@ export function SettingsPages({
   resolvedCliPath,
   resolvedModelPath,
   downloadIsActive,
+  knownWords,
+  onRefreshKnownWords,
   onUpdateSettings,
   onBrowseDirectory,
   onBrowseFile,
@@ -87,6 +91,8 @@ export function SettingsPages({
   resolvedCliPath: string;
   resolvedModelPath: string;
   downloadIsActive: boolean;
+  knownWords: KnownWordsSnapshot;
+  onRefreshKnownWords: () => void | Promise<void>;
   onUpdateSettings: (update: SettingsUpdate) => void;
   onBrowseDirectory: (field: BrowseDirectoryField) => void | Promise<void>;
   onBrowseFile: (field: BrowseFileField) => void | Promise<void>;
@@ -215,6 +221,18 @@ export function SettingsPages({
             displayedAnkiCatalog={displayedAnkiCatalog}
             onRefreshAnkiCatalog={onRefreshAnkiCatalog}
             onUpdateAnkiField={onUpdateAnkiField}
+            onUpdateSettings={onUpdateSettings}
+            settingsDraft={settingsDraft}
+          />
+        </section>
+
+        <section id="settings-knownWords" className="settings-section">
+          <KnownWordsSettingsPage
+            busyAction={busyAction}
+            displayedAnkiCatalog={displayedAnkiCatalog}
+            knownWords={knownWords}
+            onRefreshAnkiCatalog={onRefreshAnkiCatalog}
+            onRefreshKnownWords={onRefreshKnownWords}
             onUpdateSettings={onUpdateSettings}
             settingsDraft={settingsDraft}
           />

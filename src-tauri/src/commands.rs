@@ -4,11 +4,12 @@ use crate::{
     anki::{
         add_furigana_to_anki_inner, load_anki_catalog_inner, mine_segment_to_anki_inner,
         push_recordings_to_anki_deck_inner, push_recordings_to_anki_inner,
+        refresh_known_words_inner,
     },
     app_runtime::build_app_bootstrap,
     app_types::{
-        AnkiCatalog, AppBootstrap, AppSettings, RecordingBatchResult, RecordingTexts,
-        WhisperAssetUpdateResult,
+        AnkiCatalog, AppBootstrap, AppSettings, KnownWordsSnapshot, RecordingBatchResult,
+        RecordingTexts, WhisperAssetUpdateResult,
     },
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_dictionary_inner,
@@ -171,13 +172,25 @@ pub(crate) fn hide_main_window(app: AppHandle) -> Result<(), String> {
 pub(crate) async fn load_anki_catalog(
     app: AppHandle,
     note_type: Option<String>,
+    vocabulary_note_type: Option<String>,
 ) -> Result<AnkiCatalog, String> {
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        load_anki_catalog_inner(&app_for_blocking, note_type)
+        load_anki_catalog_inner(&app_for_blocking, note_type, vocabulary_note_type)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Walks the user's whole vocabulary note type over AnkiConnect, so it belongs on
+/// a blocking thread even more than its siblings: a 50k collection is ~100
+/// sequential requests.
+#[tauri::command]
+pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnapshot, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || refresh_known_words_inner(&app_for_blocking))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

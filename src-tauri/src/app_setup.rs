@@ -6,9 +6,9 @@ use crate::{
     app_runtime::{append_structured_log, setup_error},
     app_state::{build_app_paths, load_persisted_data, write_persisted_data},
     app_types::{
-        ModelDownloadControl, ModelDownloadControlState, ModelDownloadSnapshot, ModelDownloadState,
-        RecorderState, SharedPersistedState, SharedShellState, ShellSnapshot, WhisperDetection,
-        WhisperDetectionState,
+        KnownWordsState, ModelDownloadControl, ModelDownloadControlState, ModelDownloadSnapshot,
+        ModelDownloadState, RecorderState, SharedPersistedState, SharedShellState, ShellSnapshot,
+        WhisperDetection, WhisperDetectionState,
     },
     runtime_assets::refresh_whisper_detection_state,
     settings::apply_launch_at_login_setting,
@@ -33,6 +33,7 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
         condvar: Condvar::new(),
     });
     app.manage(RecorderState(Mutex::new(None)));
+    app.manage(KnownWordsState(Mutex::new(None)));
     app.manage(crate::translation_bridge::TranslationBridge::new());
 
     let mut startup_warnings = Vec::new();

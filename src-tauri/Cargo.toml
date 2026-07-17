@@ -34,6 +34,11 @@ tiny_http = "0.12"
 # `embed-ipadic` would bake ~50MB of IPADIC into the binary and tax every user
 # for an optional feature; we load a prebuilt dictionary from a path at runtime.
 lindera = "4"
+# NFKC for the known-word index, which has to fold ＡＢＣ onto ABC and half-width
+# katakana onto full-width before either side of a comparison is trustworthy. Not
+# a new cost: lindera already depends on this exact crate, so it is compiled into
+# the binary either way — this only makes the dependency visible to us as well.
+unicode-normalization = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10.1"

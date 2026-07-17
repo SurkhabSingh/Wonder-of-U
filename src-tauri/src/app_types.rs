@@ -158,6 +158,20 @@ pub(crate) struct AnkiFieldMapping {
     pub(crate) created_at: String,
 }
 
+/// One note type + field the known-word index is read from.
+///
+/// Named explicitly rather than inferred from a deck or from "the first field":
+/// a deck is a study schedule, not a vocabulary list, and a first field is as
+/// often a sentence or an id as it is a word. Independent of the push `note_type`
+/// on purpose — the note type cards are pushed INTO is rarely one vocabulary is
+/// read FROM.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VocabularySource {
+    pub(crate) note_type: String,
+    pub(crate) field: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AnkiSettings {
@@ -165,6 +179,22 @@ pub(crate) struct AnkiSettings {
     pub(crate) note_type: String,
     #[serde(default)]
     pub(crate) fields: AnkiFieldMapping,
+    /// The note types the known-word index is read from. A list, not one entry,
+    /// because a learner's vocabulary routinely lives across several note types
+    /// (a Kaishi deck and a Lapis deck, say); the index is the union of them all.
+    /// An empty list means the feature is off — the state before anything is
+    /// added, and the clean way to turn it back off.
+    #[serde(default)]
+    pub(crate) vocabulary_sources: Vec<VocabularySource>,
+    /// The single-source shape unit 2 first shipped, kept ONLY so a settings.json
+    /// written by that version still parses and its one source is carried into
+    /// `vocabulary_sources` by `normalize_settings`. `skip_serializing` retires
+    /// the field the next time settings are saved, so it lingers on disk for
+    /// exactly one more write and never in anything we hand the frontend.
+    #[serde(default, skip_serializing)]
+    pub(crate) vocabulary_note_type: String,
+    #[serde(default, skip_serializing)]
+    pub(crate) vocabulary_field: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -571,6 +601,35 @@ pub(crate) struct AnkiCatalog {
     pub(crate) decks: Vec<String>,
     pub(crate) note_types: Vec<String>,
     pub(crate) fields: Vec<String>,
+    /// Field names keyed by note type, for the vocabulary rows. Each row picks its
+    /// own note type, so one flat field list cannot serve them — a row's dropdown
+    /// has to show the fields of THAT row's note type. The map holds an entry for
+    /// every distinct note type currently configured (plus any the picker is
+    /// asking about), fetched in one catalog load so no row is left blank.
+    pub(crate) vocabulary_field_map: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// What one known-word refresh has to say for itself.
+///
+/// `word_count` and `built_at_ms` describe the index as it stands after the
+/// attempt, not what the attempt itself read — an offline refresh leaves the
+/// previous index in place and reports it, because it is still the best answer
+/// available. `status` is what happened: `ready`, `empty`, `offline`, or
+/// `unconfigured`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KnownWordsSnapshot {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) word_count: usize,
+    pub(crate) built_at_ms: Option<u64>,
+}
+
+/// Every word the user already knows, normalized to the form the transcript side
+/// asks in, with the moment it was read out of Anki.
+pub(crate) struct KnownWordIndex {
+    pub(crate) words: std::collections::HashSet<String>,
+    pub(crate) built_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -608,6 +667,13 @@ pub(crate) struct ModelDownloadControlState {
     pub(crate) condvar: Condvar,
 }
 pub(crate) struct RecorderState(pub(crate) Mutex<Option<ActiveRecording>>);
+/// The known-word index, or `None` until the user builds one.
+///
+/// Memory only, deliberately: it is a cache of Anki's contents, and persisting it
+/// would mean reloading a snapshot of a collection that has been edited since,
+/// with nothing to tell us so. `None` at startup is honest — the UI says "not
+/// built yet" and the user presses Refresh.
+pub(crate) struct KnownWordsState(pub(crate) Mutex<Option<KnownWordIndex>>);
 
 #[derive(Default)]
 pub(crate) struct ModelDownloadControl {

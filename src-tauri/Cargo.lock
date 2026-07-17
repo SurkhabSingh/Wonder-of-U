@@ -5814,6 +5814,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tempfile",
  "tiny_http",
+ "unicode-normalization",
  "wasapi",
  "windows-sys 0.61.2",
  "winreg 0.10.1",

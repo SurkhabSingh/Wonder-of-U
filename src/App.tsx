@@ -11,6 +11,7 @@ import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { useAnkiCatalog } from "./hooks/useAnkiCatalog";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useAppViewState } from "./hooks/useAppViewState";
+import { useKnownWords } from "./hooks/useKnownWords";
 import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
@@ -70,6 +71,10 @@ function App() {
     toast.success(message, { duration: 3500 });
   }
 
+  function showError(message: string) {
+    toast.error(message, { duration: 5000 });
+  }
+
   // Deep-link into the single Settings page and scroll a specific section into
   // view. Used by the Setup checklist rows and by post-download navigation.
   const openSettingsSection = useCallback((section: SettingsSection) => {
@@ -119,6 +124,14 @@ function App() {
     persistSettingsIfNeeded,
     setBusyAction,
     setLoadError,
+    showSuccess,
+    showWarning,
+  });
+
+  const { knownWords, refreshKnownWords } = useKnownWords({
+    persistSettingsIfNeeded,
+    setBusyAction,
+    showError,
     showSuccess,
     showWarning,
   });
@@ -490,6 +503,8 @@ function App() {
             autosaveMessage={autosaveMessage}
             busyAction={busyAction}
             displayedAnkiCatalog={displayedAnkiCatalog}
+            knownWords={knownWords}
+            onRefreshKnownWords={refreshKnownWords}
             activeRuntimeVersion={activeRuntimeVersion}
             installedRuntimeVersions={installedRuntimeVersions}
             manualRuntimeOverride={manualRuntimeOverride}

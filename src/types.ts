@@ -41,10 +41,22 @@ export type AnkiFieldMapping = {
   createdAt: string;
 };
 
+// One note type + field the known-word index is read from. Independent of the
+// push `noteType`: the note type cards are pushed into is rarely one vocabulary is
+// read from.
+export type VocabularySource = {
+  noteType: string;
+  field: string;
+};
+
 export type AnkiSettings = {
   deckName: string;
   noteType: string;
   fields: AnkiFieldMapping;
+  // The note types the known-word index is read from, unioned together. A
+  // learner's vocabulary routinely spans several note types (a Kaishi deck and a
+  // Lapis deck, say). An empty list means the feature is off.
+  vocabularySources: VocabularySource[];
 };
 
 export type WhisperSettings = {
@@ -216,6 +228,20 @@ export type AnkiCatalog = {
   decks: string[];
   noteTypes: string[];
   fields: string[];
+  // Field names keyed by note type, for the vocabulary rows. Each row picks its
+  // own note type, so one flat list cannot serve them — a row reads its dropdown
+  // from `vocabularyFieldMap[row.noteType]`. Holds an entry per distinct
+  // configured note type (plus any the picker is currently asking about).
+  vocabularyFieldMap: Record<string, string[]>;
+};
+
+// `wordCount` and `builtAtMs` describe the index as it stands, not what the last
+// refresh read: an offline refresh keeps the previous index and reports it.
+export type KnownWordsSnapshot = {
+  status: "ready" | "empty" | "offline" | "unconfigured";
+  message: string;
+  wordCount: number;
+  builtAtMs: number | null;
 };
 
 export type RecordingActionItem = {
@@ -266,6 +292,7 @@ export type BusyAction =
   | "checkRuntimeUpdate"
   | "checkModelUpdate"
   | "loadAnki"
+  | "knownWords"
   | "playRecording"
   | "deleteRecording"
   | "pushAnki"

@@ -17,6 +17,11 @@ export type RefreshAnkiCatalogOptions = {
   silent?: boolean;
   skipPersist?: boolean;
   suppressErrors?: boolean;
+  // The note type a vocabulary row was just pointed at, passed explicitly for the
+  // same reason `nextNoteType` is: the draft save is debounced, so its fields
+  // would otherwise not be fetched until the save lands a beat later. The backend
+  // adds this on top of the persisted rows rather than replacing them.
+  vocabularyNoteType?: string;
 };
 
 export function useAnkiCatalog({
@@ -45,8 +50,22 @@ export function useAnkiCatalog({
         }
         const catalog = await invoke<AnkiCatalog>("load_anki_catalog", {
           noteType: (nextNoteType ?? noteType) || null,
+          vocabularyNoteType: options?.vocabularyNoteType || null,
         });
-        setAnkiCatalog(catalog);
+        // The backend rebuilds the vocabulary field map from only the persisted
+        // sources plus the one note type this call asked about, so a plain replace
+        // would erase the fields of a row just pointed at a note type that is not
+        // saved yet — the auto-refresh (or an Anki-offline reply, whose map is
+        // empty) would wipe it a beat later. Field names for a note type do not
+        // vanish once known, so carry earlier entries forward and let this call's
+        // fresher answer win for the types it did fetch.
+        setAnkiCatalog((previous) => ({
+          ...catalog,
+          vocabularyFieldMap: {
+            ...previous.vocabularyFieldMap,
+            ...catalog.vocabularyFieldMap,
+          },
+        }));
         if (catalog.status === "offline" && !options?.suppressErrors) {
           showWarning("Anki is offline currently.");
         } else if (catalog.status !== "offline" && options?.notifySuccess) {

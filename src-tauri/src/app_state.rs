@@ -16,7 +16,7 @@ use crate::{
     app_types::{
         default_translation_provider, default_translation_target_language, whisper_model_spec,
         AnkiFieldMapping, AnkiSettings, AppPathsState, AppSettings, FeatureSettings, PersistedData,
-        TranslationSettings, WhisperSettings,
+        TranslationSettings, VocabularySource, WhisperSettings,
     },
     runtime_assets::{all_managed_model_paths, collect_managed_whisper_cli_candidates},
 };
@@ -100,6 +100,11 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 source_path: settings.anki.fields.source_path.trim().to_string(),
                 created_at: settings.anki.fields.created_at.trim().to_string(),
             },
+            vocabulary_sources: normalize_vocabulary_sources(&settings.anki),
+            // Consumed into the list above; cleared so the migration runs once and
+            // the legacy fields never masquerade as a live setting.
+            vocabulary_note_type: String::new(),
+            vocabulary_field: String::new(),
         },
         features: FeatureSettings {
             transcription: settings.features.transcription,
@@ -120,6 +125,52 @@ pub(crate) fn normalize_settings<R: Runtime>(
         launch_at_login: settings.launch_at_login,
         start_minimized: settings.start_minimized,
     })
+}
+
+/// Cleans the vocabulary source list and folds in a legacy single source.
+///
+/// A row with either half blank is dropped rather than kept as a half-configured
+/// entry the index build would have to guard against — the UI adds an empty row on
+/// the user's click, so a blank pair is "not filled in yet", not a request. Exact
+/// duplicate rows are collapsed so the same note type is not walked twice; the
+/// index's `HashSet` would dedup the words regardless, but there is no reason to
+/// pay for the round trips.
+///
+/// The legacy `vocabulary_note_type`/`vocabulary_field` pair is migrated in only
+/// when the list is otherwise empty: once a settings.json has been saved in the
+/// new shape those fields are gone, so this fires exactly once, for the one
+/// settings.json unit 2's first cut left on disk.
+fn normalize_vocabulary_sources(anki: &AnkiSettings) -> Vec<VocabularySource> {
+    let mut sources: Vec<VocabularySource> = Vec::new();
+    for source in &anki.vocabulary_sources {
+        let note_type = source.note_type.trim().to_string();
+        let field = source.field.trim().to_string();
+        if note_type.is_empty() || field.is_empty() {
+            continue;
+        }
+        let source = VocabularySource { note_type, field };
+        if !sources
+            .iter()
+            .any(|existing| existing.note_type == source.note_type && existing.field == source.field)
+        {
+            sources.push(source);
+        }
+    }
+
+    // Legacy single source folds in only when nothing else survived, so it never
+    // duplicates a row the new shape already carries and never fires twice.
+    if sources.is_empty() {
+        let note_type = anki.vocabulary_note_type.trim();
+        let field = anki.vocabulary_field.trim();
+        if !note_type.is_empty() && !field.is_empty() {
+            sources.push(VocabularySource {
+                note_type: note_type.to_string(),
+                field: field.to_string(),
+            });
+        }
+    }
+
+    sources
 }
 
 /// Keep the persisted provider to the ids the extension actually routes on,
@@ -294,7 +345,99 @@ pub(crate) fn unique_wav_path(directory: &Path, file_stem: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_translation_target_language;
+    use super::{normalize_translation_target_language, normalize_vocabulary_sources};
+    use crate::app_types::{AnkiSettings, VocabularySource};
+
+    fn source(note_type: &str, field: &str) -> VocabularySource {
+        VocabularySource {
+            note_type: note_type.into(),
+            field: field.into(),
+        }
+    }
+
+    #[test]
+    fn an_old_single_source_settings_json_still_deserializes_and_migrates() {
+        // The exact shape unit 2's first cut persisted: singular fields, no list.
+        // It must parse (no hard failure that would trip the corrupt-settings
+        // reset) AND its one source must survive into the list.
+        let anki: AnkiSettings = serde_json::from_value(serde_json::json!({
+            "deckName": "Japanese",
+            "noteType": "Mining",
+            "fields": { "transcription": "Expression", "audio": "Audio",
+                        "translation": "", "sourcePath": "", "createdAt": "" },
+            "vocabularyNoteType": "Kaishi 1.5k",
+            "vocabularyField": "Word"
+        }))
+        .unwrap();
+
+        let sources = normalize_vocabulary_sources(&anki);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].note_type, "Kaishi 1.5k");
+        assert_eq!(sources[0].field, "Word");
+    }
+
+    #[test]
+    fn unknown_legacy_fields_alongside_the_new_list_are_harmless() {
+        // A transitional file could carry both; the list wins and the legacy pair
+        // is ignored rather than appended, so nothing is duplicated.
+        let anki: AnkiSettings = serde_json::from_value(serde_json::json!({
+            "deckName": "",
+            "noteType": "",
+            "vocabularyNoteType": "Kaishi 1.5k",
+            "vocabularyField": "Word",
+            "vocabularySources": [
+                { "noteType": "Lapis", "field": "Expression" }
+            ]
+        }))
+        .unwrap();
+
+        let sources = normalize_vocabulary_sources(&anki);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].note_type, "Lapis");
+    }
+
+    #[test]
+    fn vocabulary_sources_are_trimmed_deduplicated_and_stripped_of_blank_rows() {
+        let anki = AnkiSettings {
+            vocabulary_sources: vec![
+                source("  Kaishi 1.5k  ", " Expression "),
+                // A blank half is an unfilled UI row, not a request.
+                source("Lapis", ""),
+                source("", "Word"),
+                // Exact duplicate of the first once trimmed: collapsed.
+                source("Kaishi 1.5k", "Expression"),
+                source("Lapis", "Expression"),
+            ],
+            ..Default::default()
+        };
+
+        let sources = normalize_vocabulary_sources(&anki);
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].note_type, "Kaishi 1.5k");
+        assert_eq!(sources[0].field, "Expression");
+        assert_eq!(sources[1].note_type, "Lapis");
+        assert_eq!(sources[1].field, "Expression");
+    }
+
+    #[test]
+    fn a_populated_list_does_not_resurrect_the_legacy_pair() {
+        let anki = AnkiSettings {
+            vocabulary_sources: vec![source("Lapis", "Expression")],
+            vocabulary_note_type: "Kaishi 1.5k".into(),
+            vocabulary_field: "Word".into(),
+            ..Default::default()
+        };
+
+        // Legacy migration fires only when the list is otherwise empty.
+        let sources = normalize_vocabulary_sources(&anki);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].note_type, "Lapis");
+    }
+
+    #[test]
+    fn no_sources_at_all_normalizes_to_an_empty_list() {
+        assert!(normalize_vocabulary_sources(&AnkiSettings::default()).is_empty());
+    }
 
     #[test]
     fn translation_target_language_is_normalized_to_a_url_safe_code() {

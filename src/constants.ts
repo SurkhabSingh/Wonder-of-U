@@ -1,4 +1,9 @@
-import type { AnkiCatalog, AppBootstrap, LanguageOption } from "./types";
+import type {
+  AnkiCatalog,
+  AppBootstrap,
+  KnownWordsSnapshot,
+  LanguageOption,
+} from "./types";
 
 export const MODEL_OPTIONS = [
   {
@@ -276,6 +281,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         sourcePath: "",
         createdAt: "",
       },
+      vocabularySources: [],
     },
     features: {
       transcription: true,
@@ -346,4 +352,12 @@ export const DEFAULT_ANKI_CATALOG: AnkiCatalog = {
   decks: [],
   noteTypes: [],
   fields: [],
+  vocabularyFieldMap: {},
+};
+
+export const DEFAULT_KNOWN_WORDS: KnownWordsSnapshot = {
+  status: "unconfigured",
+  message: "Add a vocabulary note type and field to build the list.",
+  wordCount: 0,
+  builtAtMs: null,
 };

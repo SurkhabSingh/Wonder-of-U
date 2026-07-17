@@ -3,6 +3,7 @@ mod client;
 mod fields;
 mod furigana;
 mod furigana_update;
+mod known_words;
 mod mine;
 mod push;
 mod references;
@@ -10,6 +11,7 @@ mod references;
 pub(crate) use self::{
     catalog::load_anki_catalog_inner,
     furigana_update::add_furigana_to_anki_inner,
+    known_words::refresh_known_words_inner,
     mine::mine_segment_to_anki_inner,
     push::{push_recordings_to_anki_deck_inner, push_recordings_to_anki_inner},
 };
