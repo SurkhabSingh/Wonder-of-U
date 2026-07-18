@@ -289,6 +289,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       targetLanguage: DEFAULT_TRANSLATION_TARGET_LANGUAGE,
     },
     theme: "system",
+    indicatorPosition: "top-center",
     launchAtLogin: false,
     startMinimized: false,
   },

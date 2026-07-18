@@ -66,6 +66,16 @@ export type TranslationSettings = {
 
 export type ThemePreference = "system" | "light" | "dark";
 
+// Where the global recording-indicator toast is anchored on screen. Must stay in
+// lockstep with the six values the Rust `normalize_indicator_position` accepts.
+export type IndicatorPosition =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
+
 export type AppSettings = {
   outputDirectory: string;
   assetDirectory: string;
@@ -74,6 +84,7 @@ export type AppSettings = {
   features: FeatureSettings;
   translation: TranslationSettings;
   theme: ThemePreference;
+  indicatorPosition: IndicatorPosition;
   launchAtLogin: boolean;
   startMinimized: boolean;
 };

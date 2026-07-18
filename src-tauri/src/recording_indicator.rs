@@ -5,6 +5,8 @@ use tauri::{
     WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
+use crate::{app_state::normalize_indicator_position, app_types::SharedPersistedState};
+
 /// Overlay window label and the event it listens for. Kept next to each other so
 /// the backend show/emit and the tiny overlay bundle cannot drift apart.
 const INDICATOR_WINDOW_LABEL: &str = "indicator";
@@ -95,28 +97,59 @@ fn build_indicator_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> 
     Ok(())
 }
 
-/// Parks the toast at the top-center of the primary monitor's work area — the
-/// spot the eye naturally lands on, and clear of the video controls that usually
-/// sit along the bottom. If no monitor is reported we leave the window where it
-/// landed rather than guess a position that could push it off-screen.
+/// Parks the toast at the user's chosen anchor within the primary monitor's work
+/// area (default top-center — the spot the eye lands on and clear of the video
+/// controls along the bottom). If no monitor is reported we leave the window
+/// where it landed rather than guess a position that could push it off-screen.
 fn position_indicator_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) {
     let monitor = match app.primary_monitor() {
         Ok(Some(monitor)) => monitor,
         _ => return,
     };
 
-    // `work_area` is physical pixels, but the window size was booked in logical
-    // units, so scale it up to match before centering.
+    let position = indicator_position_setting(app);
+
+    // `work_area` is physical pixels, but the window size and margin were booked
+    // in logical units, so scale them up to match before anchoring.
     let scale = monitor.scale_factor();
     let work_area = monitor.work_area();
     let window_width = INDICATOR_WIDTH * scale;
+    let window_height = INDICATOR_HEIGHT * scale;
     let margin = INDICATOR_MARGIN * scale;
 
-    let x =
-        work_area.position.x as f64 + (work_area.size.width as f64 - window_width) / 2.0;
-    let y = work_area.position.y as f64 + margin;
+    let left = work_area.position.x as f64;
+    let top = work_area.position.y as f64;
+    let area_width = work_area.size.width as f64;
+    let area_height = work_area.size.height as f64;
+
+    let x = match position.as_str() {
+        "top-left" | "bottom-left" => left + margin,
+        "top-right" | "bottom-right" => left + area_width - window_width - margin,
+        // top-center / bottom-center, and the normalized fallback.
+        _ => left + (area_width - window_width) / 2.0,
+    };
+    let y = match position.as_str() {
+        "bottom-left" | "bottom-center" | "bottom-right" => {
+            top + area_height - window_height - margin
+        }
+        // Every top-* anchor, and the fallback.
+        _ => top + margin,
+    };
 
     let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+}
+
+/// The user's chosen toast anchor, normalized to one of the six known values so
+/// a bad stored value can never place the window off-screen. Defaults to
+/// top-center if the settings state is missing or unreadable.
+fn indicator_position_setting<R: Runtime>(app: &AppHandle<R>) -> String {
+    app.try_state::<SharedPersistedState>()
+        .and_then(|state| {
+            state.0.lock().ok().map(|guard| {
+                normalize_indicator_position(&guard.settings.indicator_position).to_string()
+            })
+        })
+        .unwrap_or_else(|| "top-center".to_string())
 }
 
 /// Drives the global indicator for one lifecycle moment: swaps the tray icon and
@@ -163,6 +196,9 @@ pub(crate) fn signal_recording_indicator<R: Runtime>(app: &AppHandle<R>, signal:
     };
 
     if let Some(window) = app.get_webview_window(INDICATOR_WINDOW_LABEL) {
+        // Re-anchor on every appearance so a changed position setting takes
+        // effect on the next toast without an app restart.
+        position_indicator_window(app, &window);
         let _ = window.show();
     }
     let _ = app.emit_to(

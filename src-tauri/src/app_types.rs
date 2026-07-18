@@ -76,6 +76,13 @@ pub(crate) fn default_theme_preference() -> String {
     "system".into()
 }
 
+/// Where the global recording-indicator toast is anchored on the primary
+/// monitor. One of the six values `normalize_indicator_position` accepts; the
+/// centered top edge is the original, most eye-catching placement.
+pub(crate) fn default_indicator_position() -> String {
+    "top-center".into()
+}
+
 /// Matches the browser extension's default provider id (`KNOWN_TRANSLATION_PROVIDERS`
 /// in the extension). Sent verbatim in each translation job; the extension routes
 /// on it, so the string must stay in lockstep with the extension's ids.
@@ -206,6 +213,8 @@ pub(crate) struct AppSettings {
     pub(crate) translation: TranslationSettings,
     #[serde(default = "default_theme_preference")]
     pub(crate) theme: String,
+    #[serde(default = "default_indicator_position")]
+    pub(crate) indicator_position: String,
     #[serde(default)]
     pub(crate) launch_at_login: bool,
     #[serde(default)]

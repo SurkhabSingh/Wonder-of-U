@@ -9,8 +9,8 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     app_runtime::{append_structured_log, now_ms},
     app_types::{
-        default_theme_preference, AnkiSettings, AppPathsState, AppSettings, FeatureSettings,
-        PersistedData, TranslationSettings, WhisperSettings,
+        default_indicator_position, default_theme_preference, AnkiSettings, AppPathsState,
+        AppSettings, FeatureSettings, PersistedData, TranslationSettings, WhisperSettings,
     },
 };
 
@@ -65,6 +65,7 @@ fn default_settings<R: Runtime>(
         features: FeatureSettings::default(),
         translation: TranslationSettings::default(),
         theme: default_theme_preference(),
+        indicator_position: default_indicator_position(),
         launch_at_login: false,
         start_minimized: false,
     })

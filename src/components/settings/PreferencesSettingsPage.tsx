@@ -2,6 +2,7 @@ import type {
   AppSettings,
   AutosaveState,
   BusyAction,
+  IndicatorPosition,
   ThemePreference,
 } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
@@ -51,6 +52,27 @@ export function PreferencesSettingsPage({
             onChange={(nextValue) =>
               onUpdateSettings({
                 theme: nextValue as ThemePreference,
+              })
+            }
+          />
+        </label>
+
+        <label className="field">
+          <span>Recording indicator position</span>
+          <ThemedSelect
+            value={settingsDraft.indicatorPosition}
+            options={[
+              { value: "top-left", label: "Top left" },
+              { value: "top-center", label: "Top center" },
+              { value: "top-right", label: "Top right" },
+              { value: "bottom-left", label: "Bottom left" },
+              { value: "bottom-center", label: "Bottom center" },
+              { value: "bottom-right", label: "Bottom right" },
+            ]}
+            placeholder="Indicator position"
+            onChange={(nextValue) =>
+              onUpdateSettings({
+                indicatorPosition: nextValue as IndicatorPosition,
               })
             }
           />

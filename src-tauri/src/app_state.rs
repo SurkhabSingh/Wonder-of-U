@@ -29,6 +29,20 @@ pub(crate) fn normalize_theme_preference(theme: &str) -> &str {
     }
 }
 
+/// Clamp the recording-indicator anchor to the six placements the overlay knows
+/// how to position, so a hand-edited or stale `state.json` can never leave the
+/// toast off-screen. Anything unrecognized falls back to the centered top edge.
+pub(crate) fn normalize_indicator_position(position: &str) -> &str {
+    match position.trim() {
+        "top-left" => "top-left",
+        "top-right" => "top-right",
+        "bottom-left" => "bottom-left",
+        "bottom-center" => "bottom-center",
+        "bottom-right" => "bottom-right",
+        _ => "top-center",
+    }
+}
+
 pub(crate) fn normalize_settings<R: Runtime>(
     app: &AppHandle<R>,
     paths: &AppPathsState,
@@ -47,6 +61,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
     let cli_path = settings.whisper.cli_path.trim();
     let model_path = settings.whisper.model_path.trim();
     let theme = normalize_theme_preference(&settings.theme);
+    let indicator_position = normalize_indicator_position(&settings.indicator_position);
 
     let normalized_cli_path = if cli_path.is_empty() {
         String::new()
@@ -117,6 +132,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
             ),
         },
         theme: theme.into(),
+        indicator_position: indicator_position.into(),
         launch_at_login: settings.launch_at_login,
         start_minimized: settings.start_minimized,
     })
