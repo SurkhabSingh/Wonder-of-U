@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Manager, Runtime, WindowEvent,
@@ -24,6 +25,9 @@ use crate::{
     app_runtime::{log_event, update_shell_snapshot},
     app_types::{
         SharedPersistedState, SharedShellState, SHOW_SHORTCUT, START_SHORTCUT, STOP_SHORTCUT,
+    },
+    recording_indicator::{
+        configure_recording_indicator, signal_recording_indicator, IndicatorSignal,
     },
     recording_session::{start_recording_inner, stop_recording_inner},
 };
@@ -113,6 +117,12 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
                 "message": error
             }),
         );
+        // A hotkey-triggered start or stop fails while the window is hidden, so the
+        // in-app toast never surfaces — flash the global pill instead. `ShowWindow`
+        // has nothing to do with recording, so it stays silent.
+        if matches!(action, HotkeyAction::Start | HotkeyAction::Stop) {
+            signal_recording_indicator(app, IndicatorSignal::Failed);
+        }
         let _ = update_shell_snapshot(app, |shell| {
             shell.phase = "error".into();
             shell.status_text = error.clone();
@@ -180,12 +190,18 @@ pub(crate) fn configure_desktop_shell<R: Runtime>(
     let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])
         .map_err(|error| error.to_string())?;
 
+    // Kept so the recording indicator can restore it after flashing the red dot.
+    // Owned as `Image<'static>` because it outlives this call inside managed state.
+    let default_icon = app.default_window_icon().cloned().map(Image::to_owned);
+
     let mut tray_builder = TrayIconBuilder::new().tooltip(APP_TITLE).menu(&menu);
-    if let Some(icon) = app.default_window_icon().cloned() {
+    if let Some(icon) = default_icon.clone() {
         tray_builder = tray_builder.icon(icon);
     }
 
-    tray_builder
+    // The returned handle used to be dropped; the indicator keeps it so recording
+    // can swap the tray icon between the default and the red dot.
+    let tray = tray_builder
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 let _ = show_main_window(app);
@@ -208,6 +224,15 @@ pub(crate) fn configure_desktop_shell<R: Runtime>(
         })
         .build(app)
         .map_err(|error| error.to_string())?;
+
+    // Set up before the hotkeys register, so the first start or stop can already
+    // find the managed state. A failure here is non-fatal: the app still records,
+    // just without the global indicator, and the reason lands in the warnings.
+    if let Err(error) = configure_recording_indicator(app.handle(), tray, default_icon) {
+        warnings.push(format!(
+            "The recording indicator could not be initialized. {error}"
+        ));
+    }
 
     if let Some(window) = app.get_webview_window("main") {
         let app_handle = app.handle().clone();

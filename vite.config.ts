@@ -8,6 +8,17 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  // Two HTML entries: the main app window and the standalone recording indicator
+  // overlay. The overlay ships its own tiny bundle so it never pulls in React.
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        overlay: "overlay.html",
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

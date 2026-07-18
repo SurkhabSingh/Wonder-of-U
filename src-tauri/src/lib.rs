@@ -8,6 +8,7 @@ mod asset_downloads;
 mod commands;
 mod desktop_shell;
 mod recording;
+mod recording_indicator;
 mod recording_library;
 mod recording_session;
 mod runtime_assets;

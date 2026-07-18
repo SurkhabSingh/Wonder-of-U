@@ -17,6 +17,7 @@ use crate::{
         ActiveRecording, AppPathsState, RecorderState, SharedPersistedState, SharedShellState,
     },
     recording::capture_system_audio_loopback,
+    recording_indicator::{signal_recording_indicator, IndicatorSignal},
 };
 
 /// Set for as long as a `start_recording` call is between claiming the recorder
@@ -253,6 +254,10 @@ pub(crate) fn start_recording_inner<R: Runtime>(
         shell.last_transcript_path = None;
         shell.transition_count += 1;
     })?;
+
+    // Both the global hotkey and the UI button reach recording through here, so a
+    // single call flashes the corner pill and lights the tray dot for either.
+    signal_recording_indicator(app, IndicatorSignal::Recording);
     Ok(())
 }
 
@@ -309,6 +314,9 @@ pub(crate) fn stop_recording_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(),
         })
         .map_err(|error| error.to_string())?;
 
+    // Capture has stopped, so drop the tray dot and flash the corner pill now
+    // rather than waiting on the background finalizer that saves the WAV.
+    signal_recording_indicator(app, IndicatorSignal::Saved);
     Ok(())
 }
 

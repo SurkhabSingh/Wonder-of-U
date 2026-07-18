@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wonder of U Recording Indicator</title>
+    <style>
+      /* The window itself is transparent; only the card is ever painted. No
+         margins or scrollbars so nothing but the card shows. The card is
+         right-aligned and slides in from the right, ShadowPlay-style. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: default;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* A fixed dark card — it floats over arbitrary content, so it deliberately
+         does not follow the app theme. A colored left rail carries the state at a
+         glance. Hidden by default; `.visible` drops and fades it into view from the
+         top edge. */
+      #card {
+        display: inline-flex;
+        align-items: center;
+        gap: 13px;
+        max-width: calc(100% - 8px);
+        padding: 14px 18px 14px 15px;
+        border-radius: 13px;
+        background: rgba(20, 20, 23, 0.96);
+        border-left: 3px solid var(--accent, #ff4d4f);
+        color: #ffffff;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        opacity: 0;
+        transform: translateY(-22px) scale(0.97);
+        transition:
+          opacity 240ms cubic-bezier(0.16, 1, 0.3, 1),
+          transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      #card.visible {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+      }
+
+      /* The icon is a filled disc in the state color, big enough to catch the eye;
+         a white glyph rides inside it for the terminal states. */
+      #icon {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: var(--accent, #ff4d4f);
+        color: #ffffff;
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      /* A soft pulse on the recording state so a live capture reads as "ongoing"
+         rather than a one-off flash. Removed for the terminal states. */
+      #card.state-recording #icon {
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.55);
+        }
+        70% {
+          box-shadow: 0 0 0 9px rgba(255, 77, 79, 0);
+        }
+      }
+
+      #text {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      #title {
+        font-size: 15px;
+        font-weight: 650;
+        line-height: 1.15;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #subtitle {
+        font-size: 12px;
+        line-height: 1.15;
+        color: rgba(255, 255, 255, 0.6);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="card">
+      <span id="icon"></span>
+      <span id="text">
+        <span id="title"></span>
+        <span id="subtitle">Wonder of U</span>
+      </span>
+    </div>
+    <script type="module" src="/src/overlay/main.ts"></script>
+  </body>
+</html>
