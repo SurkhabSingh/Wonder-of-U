@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug)]
@@ -40,6 +40,15 @@ fn write_worker_log(log_path: &Path, level: &str, event: &str, message: &str) {
     }
 }
 
+/// How often the capture loop reports the input level to the UI. Fast enough for
+/// a meter to feel live, slow enough that the event traffic stays negligible.
+#[cfg(target_os = "windows")]
+const LEVEL_EMIT_INTERVAL: Duration = Duration::from_millis(75);
+
+/// Runs the loopback capture. `on_level` is called roughly every
+/// [`LEVEL_EMIT_INTERVAL`] with the peak sample amplitude (0.0..=1.0) seen since
+/// the last call, so the caller can drive a live input meter; it is called once
+/// more with `0.0` when capture ends so the meter falls back to rest.
 #[cfg(target_os = "windows")]
 pub fn capture_system_audio_loopback(
     output_path: PathBuf,
@@ -47,6 +56,7 @@ pub fn capture_system_audio_loopback(
     stop_signal: Arc<AtomicBool>,
     log_path: PathBuf,
     started_at_ms: u64,
+    mut on_level: impl FnMut(f32),
 ) -> Result<RecordingCaptureResult, String> {
     use wasapi::{initialize_mta, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
@@ -109,6 +119,12 @@ pub fn capture_system_audio_loopback(
             &format!("Loopback capture started for {}", output_path.display()),
         );
 
+        // Peak amplitude accumulated since the last level report, and when that
+        // report last went out. Reported on a timer rather than per packet so the
+        // meter updates at a steady cadence regardless of buffer size.
+        let mut level_peak: f32 = 0.0;
+        let mut last_level_emit = Instant::now();
+
         loop {
             let new_frames = capture_client
                 .get_next_packet_size()
@@ -122,7 +138,16 @@ pub fn capture_system_audio_loopback(
                 capture_client
                     .read_from_device_to_deque(&mut sample_queue)
                     .map_err(|error| error.to_string())?;
-                drain_float32_queue_to_wav(&mut sample_queue, &mut writer)?;
+                level_peak =
+                    level_peak.max(drain_float32_queue_to_wav(&mut sample_queue, &mut writer)?);
+            }
+
+            // A quiet stretch reports 0 on the same cadence, so the meter decays
+            // to rest instead of freezing on the last loud peak.
+            if last_level_emit.elapsed() >= LEVEL_EMIT_INTERVAL {
+                on_level(level_peak);
+                level_peak = 0.0;
+                last_level_emit = Instant::now();
             }
 
             if stop_signal.load(Ordering::SeqCst) {
@@ -131,6 +156,9 @@ pub fn capture_system_audio_loopback(
 
             let _ = h_event.wait_for_event(200);
         }
+
+        // Drop the meter to rest the moment capture stops, ahead of the save.
+        on_level(0.0);
 
         for _ in 0..6 {
             let new_frames = capture_client
@@ -188,11 +216,15 @@ pub fn capture_system_audio_loopback(
     }
 }
 
+/// Drains whole float32 frames from `queue` into the WAV writer, returning the
+/// peak absolute amplitude (0.0..=1.0) of everything written this call so the
+/// caller can drive a level meter without a second pass over the samples.
 #[cfg(target_os = "windows")]
 fn drain_float32_queue_to_wav(
     queue: &mut VecDeque<u8>,
     writer: &mut hound::WavWriter<std::io::BufWriter<std::fs::File>>,
-) -> Result<(), String> {
+) -> Result<f32, String> {
+    let mut peak = 0.0f32;
     while queue.len() >= 4 {
         let bytes = [
             queue.pop_front().unwrap_or_default(),
@@ -201,13 +233,14 @@ fn drain_float32_queue_to_wav(
             queue.pop_front().unwrap_or_default(),
         ];
         let sample = f32::from_le_bytes(bytes).clamp(-1.0, 1.0);
+        peak = peak.max(sample.abs());
         let pcm = (sample * i16::MAX as f32).round() as i16;
         writer
             .write_sample(pcm)
             .map_err(|error| error.to_string())?;
     }
 
-    Ok(())
+    Ok(peak)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -217,6 +250,7 @@ pub fn capture_system_audio_loopback(
     _stop_signal: Arc<AtomicBool>,
     _log_path: PathBuf,
     _started_at_ms: u64,
+    _on_level: impl FnMut(f32),
 ) -> Result<RecordingCaptureResult, String> {
     Err("System-audio loopback capture is only implemented for Windows right now.".into())
 }

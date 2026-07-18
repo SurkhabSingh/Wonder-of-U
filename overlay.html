@@ -111,6 +111,39 @@
         color: rgba(255, 255, 255, 0.6);
         white-space: nowrap;
       }
+
+      /* Live input-level bar. Only meaningful while capture is running, so it is
+         hidden unless the card is in the recording state. Mirrors the Home meter:
+         a full-width gradient revealed from the left by an inline clip-path, so a
+         given fill width is always the same color. Literal colors — the overlay
+         document has no app theme CSS variables. */
+      #overlay-level {
+        display: none;
+        position: relative;
+        margin-top: 5px;
+        height: 5px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      #card.state-recording #overlay-level {
+        display: block;
+      }
+
+      #overlay-level-fill {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: linear-gradient(
+          90deg,
+          #34c759 0%,
+          #ffcc00 64%,
+          #ff453a 100%
+        );
+        clip-path: inset(0 100% 0 0);
+        transition: clip-path 90ms linear;
+      }
     </style>
   </head>
 
@@ -120,6 +153,7 @@
       <span id="text">
         <span id="title"></span>
         <span id="subtitle">Wonder of U</span>
+        <span id="overlay-level"><span id="overlay-level-fill"></span></span>
       </span>
     </div>
     <script type="module" src="/src/overlay/main.ts"></script>

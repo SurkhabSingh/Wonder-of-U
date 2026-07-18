@@ -2545,6 +2545,34 @@ input::placeholder {
   font-weight: var(--weight-medium);
 }
 
+/* Live input-level meter shown while recording. A silent WASAPI loopback leaves
+   the bar at rest, which is the one visible tell that nothing is being captured. */
+.level-meter {
+  position: relative;
+  width: 100%;
+  height: 7px;
+  margin-top: var(--space-3);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--surface-active);
+}
+
+/* Full-width gradient, revealed from the left by an inline clip-path tied to the
+   current peak, so a given fill width always shows the same color. The short
+   transition bridges the ~75ms gaps between readings into a smooth glide. */
+.level-meter-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    90deg,
+    var(--success) 0%,
+    var(--warning) 64%,
+    var(--error) 100%
+  );
+  transition: clip-path 90ms linear;
+}
+
 .home-record-actions {
   display: flex;
   flex-wrap: wrap;

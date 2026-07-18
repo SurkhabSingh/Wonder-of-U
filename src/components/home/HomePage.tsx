@@ -15,6 +15,7 @@ import type {
   YoutubeQueueItem,
 } from "../../types";
 import { recorderStatusLabel } from "../recorder/RecorderPage";
+import { RecordingLevelMeter } from "../recorder/RecordingLevelMeter";
 import { TooltipBadge } from "../ui/Tooltip";
 
 const SUPPORTED_FORMATS_HINT = IMPORT_MEDIA_EXTENSIONS.join(", ");
@@ -198,6 +199,9 @@ export function HomePage({
               {recorderStatusLabel(phase, statusText)}
             </span>
           </div>
+          {phase === "recording" ? (
+            <RecordingLevelMeter active />
+          ) : null}
         </div>
         <div className="home-record-actions">
           <TooltipBadge label="Shortcuts" description={hotkeyTooltip} />

@@ -4,7 +4,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 mod finalize;
 
@@ -19,6 +19,11 @@ use crate::{
     recording::capture_system_audio_loopback,
     recording_indicator::{signal_recording_indicator, IndicatorSignal},
 };
+
+/// Event carrying the live input level (a single `f32` peak, 0.0..=1.0) to the
+/// recording meters — the main-window bar (`useRecordingLevel`) and the toast
+/// overlay bar (`src/overlay/main.ts`). Broadcast, so both windows receive it.
+const RECORDING_LEVEL_EVENT: &str = "recording-level";
 
 /// Set for as long as a `start_recording` call is between claiming the recorder
 /// slot and storing the `ActiveRecording` in it.
@@ -199,6 +204,11 @@ pub(crate) fn start_recording_inner<R: Runtime>(
     let output_path_for_worker = output_path.clone();
     let display_name_for_worker = display_name.clone();
     let stop_signal_for_worker = stop_signal.clone();
+    // The capture thread reports its input level here; broadcast each reading so
+    // both meters — the main-window bar and the global toast overlay — light up
+    // from the one source. A dropped emit (e.g. a window is gone) is ignored: the
+    // meter is purely cosmetic and must never disturb the capture.
+    let app_for_level = app.clone();
     let worker = std::thread::Builder::new()
         .name("system-audio-recorder".into())
         .spawn(move || {
@@ -208,6 +218,9 @@ pub(crate) fn start_recording_inner<R: Runtime>(
                 stop_signal_for_worker,
                 log_path,
                 started_at_ms,
+                move |level| {
+                    let _ = app_for_level.emit(RECORDING_LEVEL_EVENT, level);
+                },
             )
         })
         .map_err(|error| {
