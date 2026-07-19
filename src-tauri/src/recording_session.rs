@@ -188,17 +188,12 @@ pub(crate) fn start_recording_inner<R: Runtime>(
         armed: true,
     };
 
-    write_persisted_data(app, &persisted_snapshot)?;
-    update_shell_snapshot(app, |shell| {
-        shell.phase = "recording".into();
-        shell.status_text = format!("Starting system audio capture to {}", output_path.display());
-        shell.started_at_ms = Some(started_at_ms);
-        shell.current_recording_name = Some(display_name.clone());
-        shell.last_output_path = None;
-        shell.last_transcript_path = None;
-        shell.transition_count += 1;
-    })?;
-
+    // Spawn the capture worker FIRST — before the durable state write and the shell
+    // snapshot emit. Those two used to sit on the critical path ahead of capture: the
+    // fsync in write_persisted_data (a few ms, more under load) and the snapshot's
+    // ffmpeg/yt-dlp detection (up to ~1s on a cold probe cache) delayed the first
+    // sample by exactly that much. Doing them after the spawn overlaps them with the
+    // worker's WASAPI initialisation, so audio starts as soon as the device is ready.
     let stop_signal = Arc::new(AtomicBool::new(false));
     let log_path = app.state::<AppPathsState>().inner().log_file.clone();
     let output_path_for_worker = output_path.clone();
@@ -246,6 +241,19 @@ pub(crate) fn start_recording_inner<R: Runtime>(
             stop_signal,
             worker,
         });
+    }
+
+    // Capture is now running; persist the reserved counter/settings off the hot path.
+    // Best-effort: a failure here must not tear down a live recording (worst case a
+    // recording counter is reused), so it is logged rather than propagated.
+    if let Err(error) = write_persisted_data(app, &persisted_snapshot) {
+        let message: String = error.into();
+        log_event(
+            app,
+            "WARN",
+            "recording.persist_failed",
+            serde_json::json!({ "error": message }),
+        );
     }
 
     log_event(
