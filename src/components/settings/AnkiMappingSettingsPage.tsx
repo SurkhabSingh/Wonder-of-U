@@ -9,6 +9,7 @@ import { ThemedSelect } from "../ui/ThemedSelect";
 import { TooltipBadge } from "../ui/Tooltip";
 import { AnkiFieldSelect } from "./AnkiFieldSelect";
 import type { SettingsUpdate } from "./settingsTypes";
+import { invoke } from "@tauri-apps/api/core";
 
 export function AnkiMappingSettingsPage({
   busyAction,
@@ -28,6 +29,35 @@ export function AnkiMappingSettingsPage({
   onUpdateSettings: (update: SettingsUpdate) => void;
   settingsDraft: AppSettings;
 }) {
+  // Creates the shared "Anki Lookup" note type over AnkiConnect (the same schema the
+  // add-on and extension use), then auto-maps our roles onto its fields so mining
+  // works with zero manual setup.
+  const handleCreateNoteType = async () => {
+    try {
+      const noteType = await invoke<string>("create_anki_note_type");
+      onUpdateSettings({
+        anki: {
+          noteType,
+          fields: {
+            transcription: "Expression",
+            furigana: "Furigana",
+            audio: "Audio",
+            translation: "Translation",
+            sourcePath: "",
+            createdAt: "",
+            sourceUrl: "SourceURL",
+            title: "Title",
+            position: "Time",
+          },
+        },
+      });
+      await onRefreshAnkiCatalog(noteType, { notifySuccess: true });
+    } catch {
+      // Anki offline / rejected — refresh so the status chip reflects reality.
+      await onRefreshAnkiCatalog(undefined);
+    }
+  };
+
   return (
     <>
       <header className="panel-header">
@@ -166,6 +196,25 @@ export function AnkiMappingSettingsPage({
             }}
           />
         </label>
+
+        <div className="info-note">
+          <p className="hint">
+            No matching note type? Create the shared &ldquo;Anki Lookup&rdquo; note
+            type in one click &mdash; the same one the Wonder of U add-on and browser
+            extension use &mdash; and the fields below map automatically.
+          </p>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void handleCreateNoteType()}
+            disabled={
+              busyAction === "loadAnki" ||
+              displayedAnkiCatalog.status !== "ready"
+            }
+          >
+            Create the Wonder of U note type
+          </button>
+        </div>
 
         <AnkiFieldSelect
           field="transcription"

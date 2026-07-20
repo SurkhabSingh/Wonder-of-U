@@ -2,8 +2,9 @@ use tauri::AppHandle;
 
 use crate::{
     anki::{
-        add_furigana_to_anki_inner, load_anki_catalog_inner, mine_segment_to_anki_inner,
-        push_recordings_to_anki_deck_inner, push_recordings_to_anki_inner,
+        add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
+        mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
+        push_recordings_to_anki_inner,
     },
     app_runtime::build_app_bootstrap,
     app_types::{
@@ -164,6 +165,13 @@ pub(crate) async fn load_anki_catalog(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn create_anki_note_type() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(create_recommended_note_type_inner)
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
