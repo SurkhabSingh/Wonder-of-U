@@ -274,6 +274,50 @@ fn mine_single_segment<R: Runtime>(
         );
     }
 
+    // 4 (cont.). Source link / title / timestamp — each written only when the field
+    // is mapped AND the data exists (a local recording with no URL omits the link).
+    let display_title = recording_display_title(&recording);
+    if !anki.fields.source_url.is_empty() {
+        if let Some(url) = recording
+            .source_url
+            .as_deref()
+            .map(str::trim)
+            // Only ever build a link for http(s) URLs — never let a stray
+            // javascript:/data: URL become a clickable link in the rendered card.
+            .filter(|value| {
+                let lower = value.to_ascii_lowercase();
+                lower.starts_with("https://") || lower.starts_with("http://")
+            })
+        {
+            let href = youtube_timestamped_link(url, start_ms).unwrap_or_else(|| url.to_string());
+            let link_text = if display_title.is_empty() {
+                "Source".to_string()
+            } else {
+                display_title.clone()
+            };
+            fields.insert(
+                anki.fields.source_url.clone(),
+                serde_json::Value::String(format!(
+                    "<a href=\"{}\">{}</a>",
+                    html_escape(&href),
+                    html_escape(&link_text),
+                )),
+            );
+        }
+    }
+    if !anki.fields.title.is_empty() && !display_title.is_empty() {
+        fields.insert(
+            anki.fields.title.clone(),
+            serde_json::Value::String(html_escape(&display_title)),
+        );
+    }
+    if !anki.fields.position.is_empty() {
+        fields.insert(
+            anki.fields.position.clone(),
+            serde_json::Value::String(format_position(start_ms)),
+        );
+    }
+
     // 5. Translation: reuse the recording's existing translation for this
     // sentence when one is present (the paired line the viewer already shows).
     // Mining never generates a fresh translation — if none exists, the card
@@ -375,9 +419,57 @@ pub(crate) fn mine_segment_to_anki_inner<R: Runtime>(
     })
 }
 
+/// For a YouTube URL, returns the same URL with a `t=<seconds>s` parameter so the
+/// link opens at the sentence's moment. Returns None for non-YouTube URLs (the
+/// caller then links the URL plainly). Chooses `?`/`&` based on any existing query.
+fn youtube_timestamped_link(url: &str, start_ms: u64) -> Option<String> {
+    let is_youtube = url.contains("youtube.com/watch")
+        || url.contains("youtu.be/")
+        || url.contains("youtube.com/shorts/");
+    if !is_youtube {
+        return None;
+    }
+    let seconds = start_ms / 1000;
+    let separator = if url.contains('?') { '&' } else { '?' };
+    Some(format!("{url}{separator}t={seconds}s"))
+}
+
+/// Formats a segment start time as `H:MM:SS`, or `M:SS` under an hour.
+fn format_position(start_ms: u64) -> String {
+    let total_secs = start_ms / 1000;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// The recording's display title: its stored title (an imported file's original
+/// name) when set, else the file stem of its path.
+fn recording_display_title(recording: &RecentRecording) -> String {
+    if let Some(title) = recording
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return title.to_string();
+    }
+    std::path::Path::new(&recording.file_path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_ffmpeg_timestamp, slice_ffmpeg_args};
+    use super::{
+        format_ffmpeg_timestamp, format_position, slice_ffmpeg_args, youtube_timestamped_link,
+    };
 
     #[test]
     fn formats_millisecond_offsets_as_padded_seconds() {
@@ -414,5 +506,29 @@ mod tests {
         let ss = args.iter().position(|arg| arg == "-ss").expect("-ss present");
         // 100ms - 250ms padding saturates to the start of the file.
         assert_eq!(args[ss + 1], "0.000");
+    }
+
+    #[test]
+    fn youtube_links_deep_link_to_the_moment() {
+        assert_eq!(
+            youtube_timestamped_link("https://www.youtube.com/watch?v=abc", 153_000).as_deref(),
+            Some("https://www.youtube.com/watch?v=abc&t=153s"),
+        );
+        assert_eq!(
+            youtube_timestamped_link("https://youtu.be/abc", 5_000).as_deref(),
+            Some("https://youtu.be/abc?t=5s"),
+        );
+        assert_eq!(
+            youtube_timestamped_link("https://youtube.com/shorts/xyz", 0).as_deref(),
+            Some("https://youtube.com/shorts/xyz?t=0s"),
+        );
+        assert_eq!(youtube_timestamped_link("https://example.com/v", 5_000), None);
+    }
+
+    #[test]
+    fn positions_format_as_a_clock() {
+        assert_eq!(format_position(5_000), "0:05");
+        assert_eq!(format_position(153_000), "2:33");
+        assert_eq!(format_position(3_723_000), "1:02:03");
     }
 }

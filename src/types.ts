@@ -39,6 +39,9 @@ export type AnkiFieldMapping = {
   translation: string;
   sourcePath: string;
   createdAt: string;
+  sourceUrl: string;
+  title: string;
+  position: string;
 };
 
 export type AnkiSettings = {

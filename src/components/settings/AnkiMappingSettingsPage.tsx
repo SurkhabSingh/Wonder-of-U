@@ -154,6 +154,9 @@ export function AnkiMappingSettingsPage({
                     translation: "",
                     sourcePath: "",
                     createdAt: "",
+                    sourceUrl: "",
+                    title: "",
+                    position: "",
                   },
                 },
               });
@@ -201,6 +204,30 @@ export function AnkiMappingSettingsPage({
           label="Created-at field"
           description="Optional recording timestamp in milliseconds. Leave unmapped unless your note type has a tracking field for it."
           currentValue={settingsDraft.anki.fields.createdAt}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
+          field="sourceUrl"
+          label="Source link field"
+          description="Optional clickable link back to the source. YouTube imports deep-link to the sentence's exact moment; other URLs link plainly; a local recording with no URL is skipped."
+          currentValue={settingsDraft.anki.fields.sourceUrl}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
+          field="title"
+          label="Recording title field"
+          description="Optional display title of the recording (an imported file's original name, or the file stem for mic recordings)."
+          currentValue={settingsDraft.anki.fields.title}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
+          field="position"
+          label="Timestamp field"
+          description="Optional timestamp of the sentence within the recording (H:MM:SS)."
+          currentValue={settingsDraft.anki.fields.position}
           fieldOptions={displayedAnkiCatalog.fields}
           onChange={onUpdateAnkiField}
         />

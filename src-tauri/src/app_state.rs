@@ -114,6 +114,9 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 translation: settings.anki.fields.translation.trim().to_string(),
                 source_path: settings.anki.fields.source_path.trim().to_string(),
                 created_at: settings.anki.fields.created_at.trim().to_string(),
+                source_url: settings.anki.fields.source_url.trim().to_string(),
+                title: settings.anki.fields.title.trim().to_string(),
+                position: settings.anki.fields.position.trim().to_string(),
             },
         },
         features: FeatureSettings {

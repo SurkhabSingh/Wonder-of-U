@@ -163,6 +163,16 @@ pub(crate) struct AnkiFieldMapping {
     pub(crate) translation: String,
     pub(crate) source_path: String,
     pub(crate) created_at: String,
+    /// Target field for a clickable link back to the source (YouTube links deep-link
+    /// to the sentence's moment). Empty = unmapped.
+    #[serde(default)]
+    pub(crate) source_url: String,
+    /// Target field for the recording's display title. Empty = unmapped.
+    #[serde(default)]
+    pub(crate) title: String,
+    /// Target field for the sentence's timestamp (H:MM:SS). Empty = unmapped.
+    #[serde(default)]
+    pub(crate) position: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

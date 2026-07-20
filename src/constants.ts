@@ -275,6 +275,9 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         translation: "",
         sourcePath: "",
         createdAt: "",
+        sourceUrl: "",
+        title: "",
+        position: "",
       },
     },
     features: {
