@@ -10,7 +10,7 @@ use crate::{
     app_state::sanitize_runtime_version,
     app_types::{
         whisper_model_spec, AppSettings, SharedPersistedState, WhisperDetection,
-        WhisperDetectionState, WHISPER_MODEL_SPECS,
+        WhisperDetectionState, VAD_MODEL_FILE_NAME, WHISPER_MODEL_SPECS,
     },
     transcription::{verify_whisper_cli, verify_whisper_model},
 };
@@ -200,6 +200,28 @@ fn find_existing_managed_model_path(
         })
 }
 
+/// The Silero VAD model has a fixed filename (no model_choice), so resolve it by
+/// name across the same managed model dirs the ggml models use.
+fn find_existing_vad_model_path(
+    asset_directory: &Path,
+    executable_path: Option<&Path>,
+) -> Option<PathBuf> {
+    collect_managed_whisper_model_candidates(asset_directory, executable_path)
+        .into_iter()
+        .find(|candidate| {
+            candidate.exists()
+                && candidate
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.eq_ignore_ascii_case(VAD_MODEL_FILE_NAME))
+                    .unwrap_or(false)
+        })
+}
+
+pub(crate) fn vad_model_target_path(asset_directory: &Path) -> PathBuf {
+    asset_directory.join("models").join(VAD_MODEL_FILE_NAME)
+}
+
 pub(crate) fn all_managed_model_paths(asset_directory: &Path) -> Vec<PathBuf> {
     let models_directory = asset_directory.join("models");
     WHISPER_MODEL_SPECS
@@ -266,6 +288,9 @@ fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetecti
     let model_path = model_path.filter(|path| path.exists());
     let model_source = model_path.as_ref().map(|_| model_source).unwrap_or(None);
 
+    let vad_model_path = find_existing_vad_model_path(&asset_directory, executable_path.as_deref())
+        .filter(|path| path.exists());
+
     let cli_error = executable_path
         .as_deref()
         .and_then(|path| verify_whisper_cli(path).err());
@@ -329,6 +354,8 @@ fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetecti
         model_ready,
         cli_managed,
         model_managed,
+        vad_model_ready: vad_model_path.is_some(),
+        vad_model_path: vad_model_path.map(|path| path.display().to_string()),
         message,
     })
 }

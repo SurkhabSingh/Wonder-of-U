@@ -17,6 +17,10 @@ pub struct WhisperTranscriptionRequest {
     pub model_path: PathBuf,
     pub audio_path: PathBuf,
     pub language: String,
+    /// The managed Silero VAD model, when installed. Present → transcribe with
+    /// `--vad`, which re-anchors segment timestamps to the original timeline (fixing
+    /// the long-audio drift) and skips silence (faster). Absent → plain transcription.
+    pub vad_model_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +167,35 @@ pub fn run_whisper_transcription(
         .arg("--output-file")
         .arg(&output_base)
         .arg("--no-prints");
+
+    // Use most cores but leave a couple free so the machine stays responsive during a
+    // long transcription. whisper-cli defaults to 4 threads, which idles bigger CPUs.
+    let threads = std::thread::available_parallelism()
+        .map(|cores| cores.get().saturating_sub(2).max(1))
+        .unwrap_or(4);
+    command.arg("-t").arg(threads.to_string());
+
+    // Stop whisper's runaway repetition on non-vocal audio (a single line looping to
+    // the end of a song's instrumental outro). `-mc 0` drops the cross-window text
+    // context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
+    // Proven on long music tracks, and unlike VAD it never discards actual speech.
+    command.arg("-mc").arg("0").arg("--suppress-nst");
+
+    // VAD re-anchors segment timestamps to the original audio timeline (removing the
+    // long-audio drift) and skips silence — only when the managed VAD model exists.
+    // Short max-speech + padding keep segment boundaries tight without clipping onsets.
+    if let Some(vad_model) = request.vad_model_path.as_ref() {
+        command
+            .arg("--vad")
+            .arg("--vad-model")
+            .arg(vad_model)
+            .arg("--vad-min-silence-duration-ms")
+            .arg("100")
+            .arg("--vad-speech-pad-ms")
+            .arg("60")
+            .arg("--vad-max-speech-duration-s")
+            .arg("15");
+    }
 
     if !request.language.trim().is_empty() {
         command.arg("--language").arg(request.language.trim());

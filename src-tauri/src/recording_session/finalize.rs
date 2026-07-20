@@ -103,6 +103,13 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                         ),
                         audio_path: PathBuf::from(&recent_recording.file_path),
                         language: settings.whisper.language.clone(),
+                        // VAD only when the user opted into higher-accuracy timestamps
+                        // — it re-anchors long speech but drops singing/music.
+                        vad_model_path: if settings.whisper.high_accuracy_timestamps {
+                            whisper_detection.vad_model_path.clone().map(PathBuf::from)
+                        } else {
+                            None
+                        },
                     }) {
                         Ok(result) => {
                             let mut transcript_path = result.transcript_path;
@@ -157,6 +164,8 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                                 &recent_recording.file_path,
                                 &result.json_path,
                                 &language_key,
+                                &transcript_path,
+                                recent_recording.duration_ms,
                             ) {
                                 Ok(path) => path.map(|path| path.display().to_string()),
                                 Err(error) => {

@@ -202,6 +202,7 @@ function App() {
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRuntimeVersion,
+    downloadVadModel,
     toggleDownloadPause,
     updateAnkiField,
   } = useSetupActions({
@@ -505,6 +506,7 @@ function App() {
             onDownloadRecommendedRuntime={downloadRecommendedRuntime}
             onCheckModelUpdate={checkModelUpdate}
             onDownloadRecommendedModel={downloadRecommendedModel}
+            onDownloadVadModel={downloadVadModel}
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onCheckYtdlpUpdate={checkYtdlpUpdate}
