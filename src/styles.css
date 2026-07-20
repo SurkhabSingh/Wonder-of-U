@@ -434,6 +434,54 @@ input::placeholder {
   background: color-mix(in srgb, var(--canvas) 72%, transparent);
 }
 
+.confirm-overlay {
+  position: fixed;
+  z-index: var(--z-overlay);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: color-mix(in srgb, var(--canvas) 60%, transparent);
+}
+
+.confirm-panel {
+  width: min(30rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.confirm-title {
+  font-size: var(--text-lg);
+  color: var(--text-strong);
+}
+
+.confirm-message {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-5);
+  margin-top: var(--space-2);
+}
+
+.confirm-danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #ffffff;
+}
+
 .busy-panel {
   width: min(360px, calc(100vw - 40px));
   display: flex;

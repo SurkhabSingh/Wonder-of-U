@@ -1,4 +1,4 @@
-import { ask } from "@tauri-apps/plugin-dialog";
+import { useConfirm } from "../ui/ConfirmDialogProvider";
 import type {
   AppSettings,
   AutosaveState,
@@ -24,6 +24,8 @@ export function PreferencesSettingsPage({
   onUpdateSettings: (update: SettingsUpdate) => void;
   settingsDraft: AppSettings;
 }) {
+  const confirm = useConfirm();
+
   return (
     <>
       <header className="panel-header">
@@ -165,15 +167,14 @@ export function PreferencesSettingsPage({
               onChange={async (event) => {
                 const enabled = event.currentTarget.checked;
                 if (enabled) {
-                  const confirmed = await ask(
-                    "Enable local audio cleanup after Anki push? After Anki successfully copies the audio into its media folder, Wonder of U will delete the local audio file from this machine. The transcript and history stay in Wonder of U, and existing Anki cards are not affected.",
-                    {
-                      title: "Enable audio cleanup?",
-                      kind: "warning",
-                      okLabel: "Enable",
-                      cancelLabel: "Cancel",
-                    },
-                  );
+                  const confirmed = await confirm({
+                    title: "Enable audio cleanup?",
+                    message:
+                      "Enable local audio cleanup after Anki push? After Anki successfully copies the audio into its media folder, Wonder of U will delete the local audio file from this machine. The transcript and history stay in Wonder of U, and existing Anki cards are not affected.",
+                    okLabel: "Enable",
+                    cancelLabel: "Cancel",
+                    danger: true,
+                  });
                   if (!confirmed) {
                     return;
                   }

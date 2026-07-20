@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { useConfirm } from "../components/ui/ConfirmDialogProvider";
 import { errorMessage } from "../lib/errors";
 import { formatBatchToastMessage } from "../lib/recordingBatchMessages";
 import type {
@@ -29,6 +29,8 @@ export function useRecordingActions({
   showSuccess,
   showWarning,
 }: UseRecordingActionsOptions) {
+  const confirm = useConfirm();
+
   // A batch that could not run at all ("unavailable") or only partly ran
   // ("partial") is not a success. Reporting it with a green check is how
   // "the browser extension is not connected" ended up looking like good news.
@@ -60,10 +62,14 @@ export function useRecordingActions({
 
   const deleteRecording = useCallback(
     async (filePath: string) => {
-      const confirmed = await ask(
-        "Delete this saved recording from Wonder of U? This removes the local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.",
-        { title: "Delete recording?", kind: "warning", okLabel: "Delete", cancelLabel: "Keep" },
-      );
+      const confirmed = await confirm({
+        title: "Delete recording?",
+        message:
+          "Delete this saved recording from Wonder of U? This removes the local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.",
+        okLabel: "Delete",
+        cancelLabel: "Keep",
+        danger: true,
+      });
       if (!confirmed) {
         return;
       }
@@ -91,12 +97,15 @@ export function useRecordingActions({
         return;
       }
 
-      const confirmed = await ask(
-        `Delete ${filePaths.length} selected recording${
+      const confirmed = await confirm({
+        title: "Delete recordings?",
+        message: `Delete ${filePaths.length} selected recording${
           filePaths.length === 1 ? "" : "s"
         } from Wonder of U? This removes local audio, transcript, and translation files from this machine. Existing Anki cards are not affected.`,
-        { title: "Delete recordings?", kind: "warning", okLabel: "Delete", cancelLabel: "Keep" },
-      );
+        okLabel: "Delete",
+        cancelLabel: "Keep",
+        danger: true,
+      });
       if (!confirmed) {
         return;
       }
@@ -437,12 +446,15 @@ export function useRecordingActions({
 
   const convertRecordingsToMp3 = useCallback(
     async (filePaths: string[]) => {
-      const confirmed = await ask(
-        `Convert ${filePaths.length} recording${
+      const confirmed = await confirm({
+        title: "Convert to MP3?",
+        message: `Convert ${filePaths.length} recording${
           filePaths.length === 1 ? "" : "s"
         } to MP3? Wonder of U will keep the transcript/history, create MP3 files, and remove the original local WAV files after conversion succeeds. Existing Anki cards are not affected.`,
-        { title: "Convert to MP3?", kind: "warning", okLabel: "Convert", cancelLabel: "Cancel" },
-      );
+        okLabel: "Convert",
+        cancelLabel: "Cancel",
+        danger: true,
+      });
       if (!confirmed) {
         return;
       }
