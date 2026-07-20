@@ -12,7 +12,14 @@ pub(super) fn anki_media_file_name(path: &Path) -> String {
         .map(sanitize_recording_name)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "recording".into())
-        .replace(' ', "_");
+        .replace(' ', "_")
+        // Anki ends a `[sound:...]` reference at the FIRST `]`, so a bracket in the
+        // media filename truncates the tag and the card plays nothing. YouTube imports
+        // are always named `Title [id]`, so their mined clips carry brackets — strip
+        // both from this Anki-facing name. The on-disk source keeps its brackets; only
+        // the media reference is sanitized, and it stays consistent with storeMediaFile
+        // (which is given this same name), so the stored file and the tag still match.
+        .replace(|character: char| character == '[' || character == ']', "_");
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -146,4 +153,34 @@ pub(crate) fn recording_pushed_to_anki_target(
     recording.anki_note_id.is_some()
         && recording.anki_deck_name.as_deref() == Some(settings.deck_name.as_str())
         && recording.anki_note_type.as_deref() == Some(settings.note_type.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn media_file_name_strips_brackets_so_sound_tags_parse() {
+        // A YouTube import's mined clip is named `Title [id]_seg….mp3`. The brackets
+        // must not survive into the media name, or the `[sound:...]` tag truncates.
+        let name =
+            anki_media_file_name(&PathBuf::from("Rust in 100 Seconds [abC-1]_seg1000.mp3"));
+        assert!(!name.contains('['), "media name must not contain '[': {name}");
+        assert!(!name.contains(']'), "media name must not contain ']': {name}");
+
+        // The resulting tag parses back to exactly one tag whose inner filename equals
+        // the stored media name — Anki's first-`]` truncation no longer cuts it short.
+        let tag = format!("[sound:{name}]");
+        assert_eq!(extract_anki_sound_tags(&tag), vec![tag.clone()]);
+        let inner = &tag["[sound:".len()..tag.len() - 1];
+        assert_eq!(inner, name);
+    }
+
+    #[test]
+    fn media_file_name_leaves_plain_names_unchanged() {
+        // A mic recording has no brackets and must be untouched apart from the prefix.
+        let name = anki_media_file_name(&PathBuf::from("recording_1_seg1000.mp3"));
+        assert_eq!(name, "wonder_of_u_recording_1_seg1000.mp3");
+    }
 }

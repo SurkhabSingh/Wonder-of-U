@@ -2,80 +2,137 @@ use super::client::{
     anki_connect_health_check, anki_connect_request, anki_offline_message, json_string_array,
 };
 
-/// The shared note type all three Wonder of U tools target. The Anki Lookup add-on
-/// defines the SAME schema in its `notes/recommended.py`; the two must stay
-/// byte-identical (same name, same ordered fields, same template + CSS) so a card
-/// made by the app, the extension, or the add-on is interchangeable.
-pub(crate) const NOTE_TYPE_NAME: &str = "Anki Lookup";
-const CARD_TEMPLATE_NAME: &str = "Recognition";
+/// The app's OWN note type — a listening card, deliberately distinct from the Anki
+/// Lookup add-on's vocabulary card. The add-on's card is word→meaning (the word on the
+/// front); this one is audio→text for listening practice: only the audio plays on the
+/// front, and the sentence, translation, and source are revealed on the back. The two
+/// serve opposite workflows, so they are separate note types with separate names and
+/// never collide on creation (the earlier "byte-identical shared type" coupling is
+/// intentionally severed).
+pub(crate) const NOTE_TYPE_NAME: &str = "Wonder of U Listening";
+const CARD_TEMPLATE_NAME: &str = "Listening";
 
-/// Field order. The first ten mirror the add-on; `SourceURL`/`Title`/`Time` are the
-/// Wonder of U additions — left blank by the add-on and filled by the app/extension
-/// over AnkiConnect, exactly as `Audio` already works.
-const FIELD_NAMES: [&str; 13] = [
-    "Expression",
-    "Reading",
-    "Furigana",
-    "Glossary",
+/// Field order. `Sentence` is FIRST on purpose: Anki keys duplicate detection on the
+/// first field and the app writes the transcript there, so "already mined / already
+/// pushed" keeps working. Display is template-driven, so the sentence being field 1
+/// does not put it on the front. `Audio` holds the `[sound:...]` the app fills;
+/// `Reading` is an optional manual kana aid, left unmapped by default.
+const FIELD_NAMES: [&str; 7] = [
     "Sentence",
-    "Translation",
-    "Pitch",
-    "Frequency",
     "Audio",
-    "Source",
+    "Translation",
+    "Reading",
     "SourceURL",
     "Title",
     "Time",
 ];
 
-/// Card front: the expression alone, so the reviewer recalls the rest.
-const FRONT_TEMPLATE: &str = "<div class=\"expression\">{{Expression}}</div>";
+/// Card front: the audio alone, so the reviewer listens and recalls the rest. `{{#Audio}}`
+/// guards it so a note that somehow lacks audio still generates a card rather than
+/// erroring.
+const FRONT_TEMPLATE: &str = r#"<div class="wu-card wu-front">
+  {{#Audio}}<div class="wu-audio">{{Audio}}</div>{{/Audio}}
+  <div class="wu-hint">Listen and recall</div>
+</div>"#;
 
-/// Card back. `{{#Field}}…{{/Field}}` guards collapse an empty field, so a note made
-/// without (say) pitch or a source link leaves no labelled blank. `{{furigana:Furigana}}`
-/// is Anki's native filter (expects bracket notation `漢字[かんじ]`).
-const BACK_TEMPLATE: &str = concat!(
-    "{{FrontSide}}\n",
-    "<hr id=\"answer\">\n",
-    "{{#Reading}}<div class=\"reading\">{{Reading}}</div>{{/Reading}}\n",
-    "{{#Furigana}}<div class=\"furigana\">{{furigana:Furigana}}</div>{{/Furigana}}\n",
-    "{{#Pitch}}<div class=\"pitch\">{{Pitch}}</div>{{/Pitch}}\n",
-    "{{#Glossary}}<div class=\"glossary\">{{Glossary}}</div>{{/Glossary}}\n",
-    "{{#Sentence}}<div class=\"sentence\">{{Sentence}}</div>{{/Sentence}}\n",
-    "{{#Translation}}<div class=\"translation\">{{Translation}}</div>{{/Translation}}\n",
-    "{{#Frequency}}<div class=\"frequency\">Frequency: {{Frequency}}</div>{{/Frequency}}\n",
-    "{{#Audio}}{{Audio}}{{/Audio}}\n",
-    "{{#Title}}<div class=\"title\">{{Title}}</div>{{/Title}}\n",
-    "{{#Time}}<div class=\"time\">{{Time}}</div>{{/Time}}\n",
-    "{{#SourceURL}}<div class=\"source-url\">{{SourceURL}}</div>{{/SourceURL}}",
-);
+/// Card back: replay + the sentence (already carrying inline `<ruby>` furigana from the
+/// add-on bridge, so it is rendered directly, NOT through Anki's `{{furigana:}}` filter)
+/// + translation + an optional reading + a small source/title/time row. Every block is
+/// `{{#Field}}…{{/Field}}`-guarded so a blank field leaves no empty row. It does not use
+/// `{{FrontSide}}` — the back shows its own `{{Audio}}` replay without repeating the hint.
+const BACK_TEMPLATE: &str = r#"<div class="wu-card wu-back">
+  {{#Audio}}<div class="wu-audio">{{Audio}}</div>{{/Audio}}
+  {{#Sentence}}<div class="wu-sentence">{{Sentence}}</div>{{/Sentence}}
+  {{#Reading}}<div class="wu-reading">{{Reading}}</div>{{/Reading}}
+  {{#Translation}}<div class="wu-translation">{{Translation}}</div>{{/Translation}}
+  <div class="wu-meta">
+    {{#Title}}<span class="wu-title">{{Title}}</span>{{/Title}}
+    {{#Time}}<span class="wu-time">{{Time}}</span>{{/Time}}
+    {{#SourceURL}}<span class="wu-source">{{SourceURL}}</span>{{/SourceURL}}
+  </div>
+</div>"#;
 
-/// Self-contained: Anki cards do not see any add-on stylesheet.
-const CARD_CSS: &str = concat!(
-    ".card {\n",
-    "  font-family: sans-serif;\n",
-    "  font-size: 20px;\n",
-    "  text-align: center;\n",
-    "  color: black;\n",
-    "  background: white;\n",
-    "}\n",
-    ".expression { font-size: 40px; }\n",
-    ".reading { color: #666; }\n",
-    ".glossary { text-align: left; margin: 12px auto; max-width: 40em; }\n",
-    ".sentence { margin: 12px auto; max-width: 40em; }\n",
-    ".translation { color: #666; margin: 8px auto; max-width: 40em; }\n",
-    ".frequency { color: #999; font-size: 15px; }\n",
-    ".title { color: #888; font-size: 14px; margin-top: 10px; }\n",
-    ".time { color: #999; font-size: 13px; }\n",
-    ".source-url { margin-top: 8px; font-size: 13px; }\n",
-    ".nightMode.card { color: white; background: #2b2b2b; }\n",
-    ".nightMode .reading, .nightMode .translation { color: #aaa; }",
-);
+/// Self-contained styling (Anki cards never see any add-on stylesheet): a clean,
+/// Lapis-like light/dark card. The replay button is scaled up via its container; the
+/// meta row uses margin, not a border, so a card with no title/source shows no empty
+/// rule.
+const CARD_CSS: &str = r#".card {
+  --wu-bg: #ffffff;
+  --wu-fg: #1c1d1f;
+  --wu-muted: #6b7280;
+  --wu-faint: #9aa1ab;
+  --wu-rule: #e6e8eb;
+  --wu-accent: #2f6df6;
+  font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", "Yu Gothic", Meiryo, system-ui, sans-serif;
+  color: var(--wu-fg);
+  background: var(--wu-bg);
+  padding: 28px 18px;
+  line-height: 1.7;
+  text-align: center;
+}
+.nightMode.card {
+  --wu-bg: #1e1f22;
+  --wu-fg: #eceef1;
+  --wu-muted: #a6adba;
+  --wu-faint: #7f8794;
+  --wu-rule: #33363b;
+  --wu-accent: #7aa2ff;
+}
+.wu-card { max-width: 34em; margin: 0 auto; }
+.wu-audio { margin: 8px 0 4px; }
+.wu-audio a { transform: scale(1.6); display: inline-block; }
+.wu-front .wu-hint {
+  margin-top: 22px;
+  color: var(--wu-faint);
+  font-size: 0.82em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.wu-sentence {
+  font-size: 1.55em;
+  line-height: 2;
+  font-weight: 500;
+  margin: 18px auto 6px;
+  overflow-wrap: anywhere;
+}
+.wu-back .wu-sentence {
+  border-top: 1px solid var(--wu-rule);
+  padding-top: 18px;
+  margin-top: 14px;
+}
+.wu-sentence rt {
+  font-size: 0.52em;
+  color: var(--wu-muted);
+  font-weight: 400;
+  user-select: none;
+}
+.wu-reading { color: var(--wu-muted); font-size: 0.95em; margin-top: 2px; }
+.wu-translation {
+  color: var(--wu-muted);
+  font-size: 1.02em;
+  line-height: 1.6;
+  margin: 14px auto 0;
+  max-width: 32em;
+}
+.wu-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  justify-content: center;
+  margin-top: 20px;
+  color: var(--wu-faint);
+  font-size: 0.78em;
+}
+.wu-meta a { color: var(--wu-accent); text-decoration: none; }
+.wu-meta a:hover { text-decoration: underline; }
+.wu-title { font-weight: 600; color: var(--wu-muted); }"#;
 
-/// Creates the shared "Anki Lookup" note type over AnkiConnect when it is absent.
-/// Idempotent: an existing note type of the same name is left untouched (Anki does
-/// not enforce unique model names, so the name guard is ours). Returns the note type
-/// name so the caller can map its role→field settings onto it.
+/// Creates the app's "Wonder of U Listening" note type over AnkiConnect when it is
+/// absent. Idempotent: an existing note type of the same name is left untouched (Anki
+/// does not enforce unique model names, so the name guard is ours). The distinct name
+/// means this never collides with the add-on's "Anki Lookup" vocabulary type. Returns
+/// the note type name so the caller can map its role→field settings onto it.
 pub(crate) fn create_recommended_note_type_inner() -> Result<String, String> {
     anki_connect_health_check().map_err(|error| anki_offline_message(&error))?;
 

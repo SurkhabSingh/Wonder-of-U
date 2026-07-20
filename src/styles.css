@@ -1464,9 +1464,11 @@ input::placeholder {
 }
 
 .anki-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Deck and Note type lead the grid full-width; the field-mapping selects follow
+   two-per-row below them. */
 .anki-grid .field:nth-child(1),
 .anki-grid .field:nth-child(2) {
   grid-column: span 2;

@@ -29,9 +29,11 @@ export function AnkiMappingSettingsPage({
   onUpdateSettings: (update: SettingsUpdate) => void;
   settingsDraft: AppSettings;
 }) {
-  // Creates the shared "Anki Lookup" note type over AnkiConnect (the same schema the
-  // add-on and extension use), then auto-maps our roles onto its fields so mining
-  // works with zero manual setup.
+  // Creates the app's "Wonder of U Listening" note type over AnkiConnect (a listening
+  // card: audio on the front, transcript/translation on the back), then auto-maps our
+  // roles onto its fields so mining works with zero manual setup. The transcript maps
+  // to the Sentence field (field 1, so Anki dedup still works); furigana has no separate
+  // field — it is written into that same Sentence field as ruby HTML.
   const handleCreateNoteType = async () => {
     try {
       const noteType = await invoke<string>("create_anki_note_type");
@@ -39,8 +41,8 @@ export function AnkiMappingSettingsPage({
         anki: {
           noteType,
           fields: {
-            transcription: "Expression",
-            furigana: "Furigana",
+            transcription: "Sentence",
+            furigana: "",
             audio: "Audio",
             translation: "Translation",
             sourcePath: "",
@@ -106,6 +108,25 @@ export function AnkiMappingSettingsPage({
             AnkiConnect version {displayedAnkiCatalog.version}
           </p>
         ) : null}
+      </div>
+
+      <div className="info-note">
+        <p className="microcopy">
+          No matching note type? Create the app&rsquo;s &ldquo;Wonder of U
+          Listening&rdquo; note type in one click &mdash; a listening card that plays the
+          audio on the front and reveals the transcript, translation, and source on the
+          back &mdash; and the fields below map automatically.
+        </p>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => void handleCreateNoteType()}
+          disabled={
+            busyAction === "loadAnki" || displayedAnkiCatalog.status !== "ready"
+          }
+        >
+          Create the Wonder of U Listening note type
+        </button>
       </div>
 
       <div className="settings-grid anki-grid">
@@ -197,29 +218,10 @@ export function AnkiMappingSettingsPage({
           />
         </label>
 
-        <div className="info-note">
-          <p className="hint">
-            No matching note type? Create the shared &ldquo;Anki Lookup&rdquo; note
-            type in one click &mdash; the same one the Wonder of U add-on and browser
-            extension use &mdash; and the fields below map automatically.
-          </p>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void handleCreateNoteType()}
-            disabled={
-              busyAction === "loadAnki" ||
-              displayedAnkiCatalog.status !== "ready"
-            }
-          >
-            Create the Wonder of U note type
-          </button>
-        </div>
-
         <AnkiFieldSelect
           field="transcription"
-          label="Expression / transcript field"
-          description="Receives the transcript during push. When furigana is enabled or added later, this same field is replaced with hover-only ruby HTML, like a Yomitan expression field."
+          label="Sentence / transcript field"
+          description="Receives the transcript during push; it renders on the BACK of the listening card. When furigana is enabled or added later, this same field is replaced with ruby HTML, like a Yomitan expression field."
           currentValue={settingsDraft.anki.fields.transcription}
           fieldOptions={displayedAnkiCatalog.fields}
           onChange={onUpdateAnkiField}
@@ -307,11 +309,11 @@ export function AnkiMappingSettingsPage({
 
       <div className="info-note">
         <strong>
-          Recommended mapping: Expression / transcript -&gt; Expression or Back,
-          Replay audio -&gt; Audio or Front.
+          Listening card: Replay audio -&gt; Audio (Front), transcript -&gt; Sentence
+          (Back).
         </strong>
         <p className="microcopy">
-          Furigana is applied directly to the expression/transcript field, not a
+          Furigana is applied directly to the sentence/transcript field, not a
           separate field. The Anki replay icon only shows if the audio field is
           visible in the current card side template.
         </p>
