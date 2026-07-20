@@ -70,6 +70,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_bootstrap,
             download_recommended_whisper_model,
+            download_vad_model,
             download_recommended_whisper_runtime,
             download_whisper_runtime_version,
             download_recommended_ffmpeg,

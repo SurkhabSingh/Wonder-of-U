@@ -153,6 +153,28 @@ export function useSetupActions({
     setModelUpdateResult,
   ]);
 
+  const downloadVadModel = useCallback(async () => {
+    try {
+      setBusyAction("downloadVadModel");
+      await persistSettingsIfNeeded();
+      const nextBootstrap = await invoke<AppBootstrap>("download_vad_model");
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("whisper");
+    } catch (error) {
+      setLoadError(
+        errorMessage(error, "The speech-detection (VAD) model could not be prepared."),
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }, [
+    applyBootstrap,
+    persistSettingsIfNeeded,
+    openSettingsSection,
+    setBusyAction,
+    setLoadError,
+  ]);
+
   const checkRuntimeUpdate = useCallback(async () => {
     try {
       setBusyAction("checkRuntimeUpdate");
@@ -296,6 +318,7 @@ export function useSetupActions({
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRuntimeVersion,
+    downloadVadModel,
     toggleDownloadPause,
     updateAnkiField,
   };

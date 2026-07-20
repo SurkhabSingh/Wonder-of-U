@@ -264,6 +264,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       runtimeVersion: RECOMMENDED_RUNTIME_VERSION,
       modelChoice: "small",
       language: "auto",
+      highAccuracyTimestamps: false,
     },
     anki: {
       deckName: "",
@@ -305,6 +306,8 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     modelSource: null,
     runtimeVersion: RECOMMENDED_RUNTIME_VERSION,
     availableRuntimeVersions: [],
+    vadModelReady: false,
+    vadModelPath: null,
     cliReady: false,
     modelReady: false,
     cliManaged: false,

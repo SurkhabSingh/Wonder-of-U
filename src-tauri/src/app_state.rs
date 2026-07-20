@@ -103,6 +103,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
             } else {
                 language.to_string()
             },
+            high_accuracy_timestamps: settings.whisper.high_accuracy_timestamps,
         },
         anki: AnkiSettings {
             deck_name: settings.anki.deck_name.trim().to_string(),

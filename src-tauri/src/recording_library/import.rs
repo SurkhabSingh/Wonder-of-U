@@ -508,6 +508,32 @@ fn stderr_indicates_oversize(stderr: &str) -> bool {
         .any(|needle| lower.contains(needle))
 }
 
+/// True when yt-dlp failed because it needs a JavaScript runtime to solve YouTube's
+/// `nsig` challenge. YouTube serves this challenge intermittently, so the SAME url
+/// usually succeeds on a later attempt — the importer keys its auto-retry off this.
+/// Matched case-insensitively because the wording varies across yt-dlp versions
+/// ("Failed to extract nsig", "requires a JavaScript interpreter", "no supported
+/// JavaScript runtime", "install a JS runtime").
+fn stderr_indicates_js_runtime(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    [
+        "javascript runtime",
+        "javascript interpreter",
+        "js runtime",
+        "failed to extract nsig",
+        "nsig extraction failed",
+        "unable to run the javascript",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+/// Shown when every attempt hit the JS-runtime challenge. Frames it as the usually-
+/// transient issue it is and points at the durable fix (installing a JS runtime),
+/// rather than dumping yt-dlp's raw interpreter error on the user.
+const JS_RUNTIME_REJECTED_MESSAGE: &str =
+    "YouTube couldn't be read this time — it asked for a JavaScript runtime to unlock this video. This is usually temporary, so try the import again. Installing Deno or Node.js makes it reliable.";
+
 /// The metadata a single up-front probe collects: the video's `live_status` (so a
 /// live/upcoming/premiere can be refused without downloading) plus its `title` and
 /// `id`, which pin a guaranteed-unique output path before the fetch begins.
@@ -1260,16 +1286,44 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
         shell.transition_count += 1;
     })?;
 
-    match fetch_youtube_audio(
-        app,
-        cancel_listener.flag(),
-        &ytdlp_executable,
-        ffmpeg_location.as_deref(),
-        &output_directory,
-        &output_template,
-        &expected_output,
-        &normalized_url,
-    ) {
+    // YouTube intermittently serves an `nsig` JS challenge yt-dlp can't solve without
+    // a JavaScript runtime; the same URL typically succeeds on a later attempt (the
+    // user confirmed a manual redo works). Auto-retry that specific failure a couple
+    // of times before surfacing it, so a transient challenge needs no manual redo. Any
+    // other failure — and a Cancel — breaks out immediately.
+    const MAX_JS_RUNTIME_ATTEMPTS: usize = 3;
+    let mut attempt = 0;
+    let fetch_result = loop {
+        attempt += 1;
+        let outcome = fetch_youtube_audio(
+            app,
+            cancel_listener.flag(),
+            &ytdlp_executable,
+            ffmpeg_location.as_deref(),
+            &output_directory,
+            &output_template,
+            &expected_output,
+            &normalized_url,
+        );
+        let should_retry = attempt < MAX_JS_RUNTIME_ATTEMPTS
+            && !cancel_listener.flag().load(Ordering::Relaxed)
+            && matches!(&outcome, Err(message) if stderr_indicates_js_runtime(message));
+        if !should_retry {
+            break outcome;
+        }
+        log_event(
+            app,
+            "WARN",
+            "youtube.js_runtime_retry",
+            serde_json::json!({ "attempt": attempt, "sourceUrl": normalized_url }),
+        );
+        update_shell_snapshot(app, |shell| {
+            shell.status_text = "YouTube needs a moment; retrying the import…".into();
+            shell.transition_count += 1;
+        })?;
+    };
+
+    match fetch_result {
         Ok(FetchOutcome::Completed { path }) => {
             match register_youtube_recording(
                 app,
@@ -1313,7 +1367,14 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
             }
         }
         Ok(FetchOutcome::Cancelled) => finish_youtube_cancelled(app, &normalized_url),
-        Err(message) => finish_youtube_failure(app, &normalized_url, message),
+        Err(message) => {
+            let friendly = if stderr_indicates_js_runtime(&message) {
+                JS_RUNTIME_REJECTED_MESSAGE.to_string()
+            } else {
+                message
+            };
+            finish_youtube_failure(app, &normalized_url, friendly)
+        }
     }
 }
 
@@ -1322,7 +1383,8 @@ mod tests {
     use super::{
         classify_extension, convert_ffmpeg_args, ffprobe_path_for, is_same_file,
         parse_ffprobe_duration_ms, parse_probe_metadata_line, parse_ytdlp_progress_line,
-        stderr_indicates_livestream, stderr_indicates_oversize, validate_import_url,
+        stderr_indicates_js_runtime, stderr_indicates_livestream, stderr_indicates_oversize,
+        validate_import_url,
         ytdlp_fetch_args, ytdlp_output_template, youtube_output_stem, ImportPlan,
     };
     use std::path::{Path, PathBuf};
@@ -1644,6 +1706,28 @@ mod tests {
             "[download] File is larger than max-filesize (3221225472 > 2147483648). Aborting."
         ));
         assert!(!stderr_indicates_oversize(""));
+    }
+
+    #[test]
+    fn js_runtime_stderr_is_detected_across_wordings_and_case() {
+        // The nsig JS-runtime failure whose wording varies across yt-dlp versions.
+        assert!(stderr_indicates_js_runtime(
+            "ERROR: [youtube] abc: Failed to extract nsig function code; please install a JavaScript runtime"
+        ));
+        assert!(stderr_indicates_js_runtime(
+            "nsig extraction failed: Some formats may be missing"
+        ));
+        assert!(stderr_indicates_js_runtime(
+            "This extractor requires a JavaScript interpreter"
+        ));
+        // Matching is case-insensitive.
+        assert!(stderr_indicates_js_runtime("NO SUPPORTED JS RUNTIME FOUND"));
+        // The other named skips must never be mistaken for it, nor it for them.
+        assert!(!stderr_indicates_js_runtime(
+            "ERROR: [youtube] abc: Video has not passed filter (!is_live), skipping .."
+        ));
+        assert!(!stderr_indicates_livestream("please install a js runtime"));
+        assert!(!stderr_indicates_js_runtime(""));
     }
 
     #[test]

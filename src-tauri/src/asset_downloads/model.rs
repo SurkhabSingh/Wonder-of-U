@@ -1,12 +1,15 @@
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
     app_runtime::{log_event, update_shell_snapshot},
     app_state::write_persisted_data,
-    app_types::{whisper_model_spec, SharedPersistedState, SharedShellState},
-    runtime_assets::refresh_whisper_detection_state,
+    app_types::{whisper_model_spec, SharedPersistedState, SharedShellState, VAD_MODEL_DOWNLOAD_URL},
+    runtime_assets::{refresh_whisper_detection_state, vad_model_target_path},
     transcription::verify_whisper_model,
 };
 
@@ -27,6 +30,20 @@ fn clear_managed_model_override<R: Runtime>(app: &AppHandle<R>) -> Result<(), St
     };
 
     write_persisted_data(app, &persisted_snapshot)
+}
+
+/// A relaxed size check for the Silero VAD model. It is only ~885 KB, so it would
+/// trip `verify_whisper_model`'s 1 MB floor; this guards against a truncated or
+/// failed download without demanding a ggml-model-sized file.
+fn verify_vad_model(model_path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(model_path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("The VAD model path is not a file.".into());
+    }
+    if metadata.len() < 100_000 {
+        return Err("The VAD model file is unexpectedly small.".into());
+    }
+    Ok(())
 }
 
 fn recommended_model_target_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -175,6 +192,141 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
                     &app_handle,
                     "ERROR",
                     "whisper.model_download_failed",
+                    serde_json::json!({ "message": error }),
+                );
+            }
+        })
+        .map_err(|error| error.to_string())?;
+    download_slot.disarm();
+
+    Ok(())
+}
+
+pub(crate) fn download_vad_model_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    {
+        let shell_state = app.state::<SharedShellState>();
+        let shell = shell_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the shell state.".to_string())?;
+        if shell.phase != "idle" && shell.phase != "error" {
+            return Err("Finish the current task before downloading the VAD model.".into());
+        }
+    }
+
+    let download_slot =
+        DownloadSlotGuard::acquire(app, "A model download is already in progress.")?;
+
+    let target_path = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+        let asset_directory = PathBuf::from(&persisted.settings.asset_directory);
+        drop(persisted);
+        vad_model_target_path(&asset_directory)
+    };
+    if let Some(parent) = target_path.parent() {
+        ensure_directory_exists(parent)?;
+    }
+    let app_handle = app.clone();
+
+    update_shell_snapshot(app, |shell| {
+        shell.phase = "downloading-model".into();
+        shell.status_text = format!(
+            "Downloading the speech-detection (VAD) model to {}...",
+            target_path.display()
+        );
+        shell.started_at_ms = None;
+        shell.current_recording_name = None;
+    })?;
+    update_model_download_snapshot(app, |snapshot| {
+        snapshot.kind = Some("vad".into());
+        snapshot.status = "starting".into();
+        snapshot.message = "Preparing the speech-detection (VAD) model download...".into();
+        snapshot.downloaded_bytes = 0;
+        snapshot.total_bytes = None;
+        snapshot.progress_percent = None;
+        snapshot.target_path = Some(target_path.display().to_string());
+    })?;
+
+    std::thread::Builder::new()
+        .name("whisper-vad-download".into())
+        .spawn(move || {
+            let download_result = (|| -> Result<(), String> {
+                if !target_path.exists() {
+                    download_file_to_path_with_progress(
+                        &app_handle,
+                        VAD_MODEL_DOWNLOAD_URL,
+                        &target_path,
+                        "vad",
+                        "the speech-detection (VAD) model",
+                    )?;
+                }
+                verify_vad_model(&target_path)?;
+                let detection = refresh_whisper_detection_state(&app_handle)?;
+                update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("vad".into());
+                    snapshot.status = "completed".into();
+                    snapshot.message =
+                        "Speech-detection (VAD) model downloaded successfully.".into();
+                    snapshot.downloaded_bytes =
+                        snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
+                    snapshot.progress_percent = Some(100.0);
+                    snapshot.target_path = Some(target_path.display().to_string());
+                })?;
+                reset_model_download_control(&app_handle)?;
+
+                update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = if detection.vad_model_ready {
+                        "Speech-detection (VAD) model is ready. Transcripts will now use accurate timestamps."
+                            .into()
+                    } else {
+                        format!(
+                            "VAD model downloaded, but Whisper still needs setup: {}",
+                            detection.message
+                        )
+                    };
+                    shell.started_at_ms = None;
+                })?;
+
+                log_event(
+                    &app_handle,
+                    "INFO",
+                    "whisper.vad_model_downloaded",
+                    serde_json::json!({ "targetPath": target_path.display().to_string() }),
+                );
+                Ok(())
+            })();
+
+            if let Err(error) = download_result {
+                let cancelled = error.ends_with("download cancelled.");
+                let _ = update_model_download_snapshot(&app_handle, |snapshot| {
+                    snapshot.kind = Some("vad".into());
+                    if cancelled {
+                        snapshot.status = "cancelled".into();
+                        snapshot.message = "VAD model download cancelled.".into();
+                    } else {
+                        snapshot.status = "failed".into();
+                        snapshot.message = format!("VAD model download failed: {error}");
+                    }
+                });
+                let _ = reset_model_download_control(&app_handle);
+                let _ = update_shell_snapshot(&app_handle, |shell| {
+                    shell.phase = "idle".into();
+                    shell.status_text = if cancelled {
+                        "VAD model download cancelled.".into()
+                    } else {
+                        format!("VAD model download failed: {error}")
+                    };
+                    shell.started_at_ms = None;
+                });
+                log_event(
+                    &app_handle,
+                    "ERROR",
+                    "whisper.vad_model_download_failed",
                     serde_json::json!({ "message": error }),
                 );
             }

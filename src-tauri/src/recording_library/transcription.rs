@@ -146,7 +146,13 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     // additional languages), so its stem is exactly the one to mirror. A missing or
     // unparseable json leaves `segments_path` None and never fails transcription.
     let segments_path =
-        match store_segments_sidecar(&recording.file_path, &json_path, &language) {
+        match store_segments_sidecar(
+            &recording.file_path,
+            &json_path,
+            &language,
+            &final_transcript_path,
+            recording.duration_ms,
+        ) {
             Ok(path) => path.map(|path| path.display().to_string()),
             Err(error) => {
                 log_event(
@@ -215,11 +221,20 @@ pub(crate) fn store_segments_sidecar(
     audio_file_path: &str,
     json_path: &Path,
     language: &str,
+    transcript_path: &Path,
+    duration_ms: u64,
 ) -> Result<Option<PathBuf>, String> {
-    let segments = match parse_whisper_segments(json_path) {
+    let raw = match parse_whisper_segments(json_path) {
         Some(segments) if !segments.is_empty() => segments,
         _ => return Ok(None),
     };
+
+    // Repair whisper's runaway repetition and out-of-bounds tails before persisting.
+    let raw_len = raw.len();
+    let segments = clean_segments(raw, duration_ms);
+    if segments.is_empty() {
+        return Ok(None);
+    }
 
     let _rename_guard = OUTPUT_RENAME_LOCK
         .lock()
@@ -239,7 +254,71 @@ pub(crate) fn store_segments_sidecar(
     let serialized =
         serde_json::to_string(&segments).map_err(|error| error.to_string())?;
     fs::write(&target, serialized).map_err(|error| error.to_string())?;
+
+    // If cleaning removed segments (a repetition loop, or a hallucinated tail past the
+    // audio end), the whisper `.txt` still holds that junk — rewrite it from the cleaned
+    // segments so the displayed transcript, translation input, and whole-recording Anki
+    // push all match the sidecar. Left untouched when nothing was removed, so a normal
+    // transcript keeps whisper's exact text. Best-effort: a failed rewrite is ignored.
+    if segments.len() != raw_len {
+        let cleaned_text = segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = fs::write(transcript_path, format!("{cleaned_text}\n"));
+    }
+
     Ok(Some(target))
+}
+
+/// Repairs two whisper failure modes on non-vocal / trailing audio before the segments
+/// are persisted:
+/// 1. **Runaway repetition** — a run of `REPEAT_LIMIT`+ consecutive segments with the
+///    identical trimmed text (whisper looping one line over an instrumental) collapses
+///    to a single segment spanning the whole run.
+/// 2. **Out-of-bounds tails** — a segment starting at/after the audio end is dropped, and
+///    an overshooting `end_ms` is clamped to the duration (kills a trailing hallucination
+///    such as a "thanks for watching" line placed past the real end).
+///
+/// `duration_ms == 0` (unknown duration) skips the bounds pass but keeps the dedup pass.
+fn clean_segments(segments: Vec<RecordingSegment>, duration_ms: u64) -> Vec<RecordingSegment> {
+    const REPEAT_LIMIT: usize = 4;
+
+    let bounded: Vec<RecordingSegment> = segments
+        .into_iter()
+        .filter_map(|mut segment| {
+            if duration_ms > 0 {
+                if segment.start_ms >= duration_ms {
+                    return None;
+                }
+                if segment.end_ms > duration_ms {
+                    segment.end_ms = duration_ms;
+                }
+            }
+            Some(segment)
+        })
+        .collect();
+
+    let mut cleaned: Vec<RecordingSegment> = Vec::with_capacity(bounded.len());
+    let mut index = 0;
+    while index < bounded.len() {
+        let mut run_end = index + 1;
+        while run_end < bounded.len() && bounded[run_end].text == bounded[index].text {
+            run_end += 1;
+        }
+        if run_end - index >= REPEAT_LIMIT {
+            // Keep one segment spanning the whole repeated run.
+            let mut merged = bounded[index].clone();
+            merged.end_ms = bounded[run_end - 1].end_ms;
+            cleaned.push(merged);
+        } else {
+            cleaned.extend_from_slice(&bounded[index..run_end]);
+        }
+        index = run_end;
+    }
+    cleaned
 }
 
 /// Read whisper's json and convert its `transcription[].offsets.{from,to}` (ms)
@@ -344,6 +423,13 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             .unwrap_or_default(),
     );
     let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
+    // VAD only when the user opted into higher-accuracy timestamps — it re-anchors
+    // long speech but drops singing/music, so it must never be the default.
+    let vad_model_path = if settings.whisper.high_accuracy_timestamps {
+        whisper_detection.vad_model_path.clone().map(PathBuf::from)
+    } else {
+        None
+    };
     let language = transcript_language_key(&settings.whisper.language);
     let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
@@ -379,6 +465,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             model_path: model_path.clone(),
             audio_path: PathBuf::from(&recording.file_path),
             language: settings.whisper.language.clone(),
+            vad_model_path: vad_model_path.clone(),
         })
         .and_then(|result| {
             apply_transcription_result_to_recording(
@@ -609,10 +696,16 @@ mod tests {
         )
         .unwrap();
 
-        let stored =
-            store_segments_sidecar(&audio_path.display().to_string(), &json_path, "fr")
-                .unwrap()
-                .expect("a parseable json must yield a sidecar path");
+        let transcript_path = dir.path().join("hola_100.fr.transcript.txt");
+        let stored = store_segments_sidecar(
+            &audio_path.display().to_string(),
+            &json_path,
+            "fr",
+            &transcript_path,
+            0,
+        )
+        .unwrap()
+        .expect("a parseable json must yield a sidecar path");
 
         assert_eq!(stored, dir.path().join("hola_100.fr.segments.json"));
 
@@ -635,21 +728,130 @@ mod tests {
         let audio_path = dir.path().join("hola_100.wav");
         fs::write(&audio_path, b"audio").unwrap();
 
+        let transcript_path = dir.path().join("hola_100.fr.transcript.txt");
+
         // A json path that was never written.
         let missing = dir.path().join("nope.json");
-        let result =
-            store_segments_sidecar(&audio_path.display().to_string(), &missing, "fr").unwrap();
+        let result = store_segments_sidecar(
+            &audio_path.display().to_string(),
+            &missing,
+            "fr",
+            &transcript_path,
+            0,
+        )
+        .unwrap();
         assert!(result.is_none(), "a missing json must not produce a sidecar");
 
         // A json that is not whisper-shaped parses to no segments.
         let garbage = dir.path().join("garbage.json");
         fs::write(&garbage, "not json at all").unwrap();
-        let result =
-            store_segments_sidecar(&audio_path.display().to_string(), &garbage, "fr").unwrap();
+        let result = store_segments_sidecar(
+            &audio_path.display().to_string(),
+            &garbage,
+            "fr",
+            &transcript_path,
+            0,
+        )
+        .unwrap();
         assert!(result.is_none(), "unparseable json must not produce a sidecar");
 
         // No sidecar file was left behind for the language.
         assert!(!dir.path().join("hola_100.fr.segments.json").exists());
+    }
+
+    #[test]
+    fn clean_segments_collapses_a_runaway_repetition_run() {
+        let seg = |text: &str, from: u64, to: u64| RecordingSegment {
+            text: text.into(),
+            start_ms: from,
+            end_ms: to,
+        };
+        let mut segments = vec![seg("intro", 0, 1000)];
+        // Ten identical segments — whisper looping one line over an instrumental.
+        for i in 0..10 {
+            segments.push(seg("ループ", 1000 + i * 1000, 2000 + i * 1000));
+        }
+
+        let cleaned = clean_segments(segments, 0);
+
+        // The loop collapses to a single segment spanning the whole run.
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaned[0].text, "intro");
+        assert_eq!(cleaned[1].text, "ループ");
+        assert_eq!(cleaned[1].start_ms, 1000);
+        assert_eq!(cleaned[1].end_ms, 11000);
+    }
+
+    #[test]
+    fn clean_segments_keeps_a_short_legitimate_repeat() {
+        // A genuine 3× repeat (below the limit) must be preserved, not collapsed.
+        let seg = |from: u64, to: u64| RecordingSegment {
+            text: "リフレイン".into(),
+            start_ms: from,
+            end_ms: to,
+        };
+        let segments = vec![seg(0, 1000), seg(1000, 2000), seg(2000, 3000)];
+
+        let cleaned = clean_segments(segments, 0);
+
+        assert_eq!(cleaned.len(), 3);
+    }
+
+    #[test]
+    fn clean_segments_drops_and_clamps_out_of_bounds_tails() {
+        let seg = |text: &str, from: u64, to: u64| RecordingSegment {
+            text: text.into(),
+            start_ms: from,
+            end_ms: to,
+        };
+        let segments = vec![
+            seg("in bounds", 0, 5000),
+            seg("overshoots the end", 5000, 9000), // ends past duration -> clamp
+            seg("starts past the end", 9000, 12000), // starts past duration -> drop
+        ];
+
+        let cleaned = clean_segments(segments, 8000);
+
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaned[1].text, "overshoots the end");
+        assert_eq!(cleaned[1].end_ms, 8000, "an overshooting end is clamped");
+    }
+
+    #[test]
+    fn store_segments_sidecar_rewrites_transcript_when_it_collapses_a_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio_path = dir.path().join("song_1.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+        let transcript_path = dir.path().join("song_1.ja.transcript.txt");
+        // The raw whisper .txt still holds the looped junk.
+        fs::write(&transcript_path, "ループ\nループ\nループ\nループ\nループ\nループ\n").unwrap();
+
+        let entries = (0..6)
+            .map(|i| {
+                let from = 1000 * i;
+                let to = 1000 * (i + 1);
+                format!(r#"{{ "offsets": {{ "from": {from}, "to": {to} }}, "text": "ループ" }}"#)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let json_path = dir.path().join("whisper-temp.json");
+        fs::write(&json_path, format!(r#"{{ "transcription": [ {entries} ] }}"#)).unwrap();
+
+        let stored = store_segments_sidecar(
+            &audio_path.display().to_string(),
+            &json_path,
+            "ja",
+            &transcript_path,
+            60_000,
+        )
+        .unwrap()
+        .expect("a parseable json must yield a sidecar path");
+
+        let segments: Vec<RecordingSegment> =
+            serde_json::from_str(&fs::read_to_string(&stored).unwrap()).unwrap();
+        assert_eq!(segments.len(), 1, "the six-segment loop collapses to one");
+        // The transcript .txt was rewritten from the cleaned segment, dropping the loop.
+        assert_eq!(fs::read_to_string(&transcript_path).unwrap().trim(), "ループ");
     }
 
     #[test]
