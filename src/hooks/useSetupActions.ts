@@ -153,47 +153,6 @@ export function useSetupActions({
     setModelUpdateResult,
   ]);
 
-  const downloadVadModel = useCallback(async () => {
-    try {
-      setBusyAction("downloadVadModel");
-      await persistSettingsIfNeeded();
-      const nextBootstrap = await invoke<AppBootstrap>("download_vad_model");
-      applyBootstrap(nextBootstrap);
-      openSettingsSection("whisper");
-    } catch (error) {
-      setLoadError(
-        errorMessage(error, "The speech-detection (VAD) model could not be prepared."),
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }, [
-    applyBootstrap,
-    persistSettingsIfNeeded,
-    openSettingsSection,
-    setBusyAction,
-    setLoadError,
-  ]);
-
-  // Download the VAD model WITHOUT navigating to Settings — for the inline long-video
-  // prompt in the Library, where jumping to Settings would be jarring. Returns whether
-  // the model is ready afterward so the caller can decide to transcribe with VAD.
-  const ensureVadModel = useCallback(async (): Promise<boolean> => {
-    try {
-      setBusyAction("downloadVadModel");
-      const nextBootstrap = await invoke<AppBootstrap>("download_vad_model");
-      applyBootstrap(nextBootstrap);
-      return nextBootstrap.whisperDetection.vadModelReady;
-    } catch (error) {
-      setLoadError(
-        errorMessage(error, "The speech-detection (VAD) model could not be prepared."),
-      );
-      return false;
-    } finally {
-      setBusyAction(null);
-    }
-  }, [applyBootstrap, setBusyAction, setLoadError]);
-
   const checkRuntimeUpdate = useCallback(async () => {
     try {
       setBusyAction("checkRuntimeUpdate");
@@ -337,8 +296,6 @@ export function useSetupActions({
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRuntimeVersion,
-    downloadVadModel,
-    ensureVadModel,
     toggleDownloadPause,
     updateAnkiField,
   };

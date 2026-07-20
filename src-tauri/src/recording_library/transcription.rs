@@ -13,7 +13,7 @@ use crate::{
         transcript_language_key, RecentRecording, RecordingActionItem, RecordingBatchResult,
         RecordingSegment, RecordingTranscript, SharedPersistedState,
     },
-    runtime_assets::refresh_whisper_detection_state,
+    runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
 
@@ -397,9 +397,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
     force: bool,
-    // Per-run VAD override from the long-video prompt: `Some(true/false)` forces it on/off
-    // for this batch; `None` falls back to the global `highAccuracyTimestamps` setting.
-    high_accuracy: Option<bool>,
 ) -> Result<RecordingBatchResult, String> {
     let settings = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -426,25 +423,11 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             .unwrap_or_default(),
     );
     let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
-    // VAD only when opted in (per-run override, else the global setting) — it re-anchors
-    // long speech but drops singing/music, so it must never be the default.
-    let use_vad = high_accuracy.unwrap_or(settings.whisper.high_accuracy_timestamps);
-    let vad_model_path = if use_vad {
-        whisper_detection.vad_model_path.clone().map(PathBuf::from)
-    } else {
-        None
-    };
-    // Recorded so a transcript's timing accuracy is diagnosable from the log: whether the
-    // caller asked for VAD, and whether the model was actually present to honor it.
-    log_event(
-        app,
-        "INFO",
-        "transcription.mode",
-        serde_json::json!({
-            "vadRequested": use_vad,
-            "vadEngaged": vad_model_path.is_some(),
-        }),
-    );
+    // ffmpeg (when available) lets long recordings be transcribed in overlapping chunks so
+    // their timestamps stay accurate over the whole file; absent, a single pass is used.
+    let ffmpeg_path = detect_local_ffmpeg(&settings)
+        .executable_path
+        .map(PathBuf::from);
     let language = transcript_language_key(&settings.whisper.language);
     let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
@@ -482,7 +465,8 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 model_path: model_path.clone(),
                 audio_path: PathBuf::from(&recording.file_path),
                 language: settings.whisper.language.clone(),
-                vad_model_path: vad_model_path.clone(),
+                ffmpeg_path: ffmpeg_path.clone(),
+                duration_ms: recording.duration_ms,
             },
             move |percent| {
                 let _ = app_progress.emit("transcription-progress", percent);

@@ -53,13 +53,6 @@ pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
     },
 ];
 
-/// The Silero VAD model used with whisper.cpp `--vad` to keep long-audio segment
-/// timestamps accurate (re-anchored to the original timeline) and skip silence.
-/// Downloaded like the ggml models, into `<asset>/models/`.
-pub(crate) const VAD_MODEL_FILE_NAME: &str = "ggml-silero-v6.2.0.bin";
-pub(crate) const VAD_MODEL_DOWNLOAD_URL: &str =
-    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
-
 pub(crate) fn default_whisper_model_id() -> &'static str {
     "small"
 }
@@ -201,11 +194,6 @@ pub(crate) struct WhisperSettings {
     #[serde(default = "default_whisper_model_choice")]
     pub(crate) model_choice: String,
     pub(crate) language: String,
-    /// When on, transcription runs whisper with VAD (needs the managed VAD model) to
-    /// re-anchor long-audio timestamps. Off by default: Silero VAD is tuned for speech
-    /// and silently drops singing/music, so it is opt-in, for long spoken-word content.
-    #[serde(default)]
-    pub(crate) high_accuracy_timestamps: bool,
 }
 
 impl Default for WhisperSettings {
@@ -216,7 +204,6 @@ impl Default for WhisperSettings {
             runtime_version: default_whisper_runtime_version(),
             model_choice: default_whisper_model_id().into(),
             language: "auto".into(),
-            high_accuracy_timestamps: false,
         }
     }
 }
@@ -469,8 +456,6 @@ pub(crate) struct WhisperDetection {
     pub(crate) model_ready: bool,
     pub(crate) cli_managed: bool,
     pub(crate) model_managed: bool,
-    pub(crate) vad_model_ready: bool,
-    pub(crate) vad_model_path: Option<String>,
     pub(crate) message: String,
 }
 
@@ -488,8 +473,6 @@ impl Default for WhisperDetection {
             model_ready: false,
             cli_managed: false,
             model_managed: false,
-            vad_model_ready: false,
-            vad_model_path: None,
             message:
                 "Add or download whisper-cli and a Whisper model to enable offline transcription."
                     .into(),

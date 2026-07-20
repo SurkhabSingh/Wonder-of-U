@@ -373,17 +373,14 @@ export function useRecordingActions({
 
   const transcribeRecordings = useCallback(
     // `force` bypasses the has-transcript skip so an existing recording can be
-    // re-run for the SAME language to backfill the segments sidecar. `highAccuracy`
-    // is the per-run VAD override from the long-video prompt (undefined = use the
-    // global setting).
-    async (filePaths: string[], force = false, highAccuracy?: boolean) => {
+    // re-run for the SAME language to backfill the segments sidecar.
+    async (filePaths: string[], force = false) => {
       try {
         setBusyAction("transcribeRecording");
         await persistSettingsIfNeeded();
         const result = await invoke<RecordingBatchResult>("transcribe_recordings", {
           filePaths,
           force,
-          highAccuracy,
         });
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("transcribe", result);

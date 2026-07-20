@@ -14,8 +14,8 @@ use crate::{
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
         download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
-        download_recommended_ytdlp_inner, download_vad_model_inner,
-        download_whisper_runtime_version_inner, toggle_whisper_model_download_pause_inner,
+        download_recommended_ytdlp_inner, download_whisper_runtime_version_inner,
+        toggle_whisper_model_download_pause_inner,
     },
     desktop_shell::{
         hide_main_window as hide_main_window_inner, show_main_window as show_main_window_inner,
@@ -56,12 +56,6 @@ pub(crate) fn download_whisper_runtime_version(
     runtime_version: String,
 ) -> Result<AppBootstrap, String> {
     download_whisper_runtime_version_inner(&app, &runtime_version)?;
-    build_app_bootstrap(&app)
-}
-
-#[tauri::command]
-pub(crate) fn download_vad_model(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_vad_model_inner(&app)?;
     build_app_bootstrap(&app)
 }
 
@@ -296,12 +290,11 @@ pub(crate) async fn transcribe_recordings(
     app: AppHandle,
     file_paths: Vec<String>,
     force: Option<bool>,
-    high_accuracy: Option<bool>,
 ) -> Result<RecordingBatchResult, String> {
     let app_for_blocking = app.clone();
     let force = force.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        transcribe_recordings_inner(&app_for_blocking, file_paths, force, high_accuracy)
+        transcribe_recordings_inner(&app_for_blocking, file_paths, force)
     })
     .await
     .map_err(|error| error.to_string())?

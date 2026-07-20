@@ -54,7 +54,6 @@ export function SettingsPages({
   onDownloadRecommendedRuntime,
   onCheckModelUpdate,
   onDownloadRecommendedModel,
-  onDownloadVadModel,
   onDownloadRecommendedFfmpeg,
   onDownloadRecommendedYtdlp,
   onCheckYtdlpUpdate,
@@ -92,7 +91,6 @@ export function SettingsPages({
   onDownloadRecommendedRuntime: () => void | Promise<void>;
   onCheckModelUpdate: () => void | Promise<void>;
   onDownloadRecommendedModel: () => void | Promise<void>;
-  onDownloadVadModel: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
@@ -174,7 +172,6 @@ export function SettingsPages({
             onCancelDownload={onCancelDownload}
             onCheckModelUpdate={onCheckModelUpdate}
             onDownloadRecommendedModel={onDownloadRecommendedModel}
-            onDownloadVadModel={onDownloadVadModel}
             onToggleDownloadPause={onToggleDownloadPause}
             onUpdateSettings={onUpdateSettings}
             resolvedModelPath={resolvedModelPath}

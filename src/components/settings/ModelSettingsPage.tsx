@@ -21,7 +21,6 @@ export function ModelSettingsPage({
   onCancelDownload,
   onCheckModelUpdate,
   onDownloadRecommendedModel,
-  onDownloadVadModel,
   onToggleDownloadPause,
   onUpdateSettings,
   resolvedModelPath,
@@ -36,7 +35,6 @@ export function ModelSettingsPage({
   onCancelDownload: () => void | Promise<void>;
   onCheckModelUpdate: () => void | Promise<void>;
   onDownloadRecommendedModel: () => void | Promise<void>;
-  onDownloadVadModel: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
   onUpdateSettings: (update: SettingsUpdate) => void;
   resolvedModelPath: string;
@@ -206,50 +204,6 @@ export function ModelSettingsPage({
         />
       </div>
 
-      <div className="download-section">
-        <p className="setup-group-label">Timestamp accuracy (VAD)</p>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={settingsDraft.whisper.highAccuracyTimestamps}
-            onChange={(event) =>
-              onUpdateSettings({
-                whisper: { highAccuracyTimestamps: event.currentTarget.checked },
-              })
-            }
-          />
-          <span>Higher timestamp accuracy on long spoken-word audio (speech only)</span>
-        </label>
-        <p className="microcopy">
-          Uses voice-activity detection to keep long dialogue aligned second-for-second
-          for SRT export and clip slicing. Leave this OFF for songs or music — VAD is
-          tuned for speech and can skip singing. Requires the speech-detection model.
-        </p>
-        {bootstrap.whisperDetection.vadModelReady ? (
-          <div className="installed-card">
-            <div className="installed-row">
-              <strong>Speech-detection model ready</strong>
-            </div>
-          </div>
-        ) : (
-          <div className="action-row inline-actions">
-            <button
-              type="button"
-              onClick={() => void onDownloadVadModel()}
-              disabled={downloadIsActive || busyAction === "downloadVadModel"}
-            >
-              Download speech-detection model (~1&nbsp;MB)
-            </button>
-          </div>
-        )}
-        <DownloadProgressCard
-          snapshot={bootstrap.modelDownload}
-          kind="vad"
-          downloadIsActive={downloadIsActive}
-          onTogglePause={() => void onToggleDownloadPause()}
-          onCancel={() => void onCancelDownload()}
-        />
-      </div>
     </div>
   );
 }

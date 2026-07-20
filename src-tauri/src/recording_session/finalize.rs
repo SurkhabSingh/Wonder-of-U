@@ -13,7 +13,7 @@ use crate::{
         auto_translate_after_transcription, insert_recent_recording,
         rename_recording_outputs_from_transcript, store_segments_sidecar,
     },
-    runtime_assets::refresh_whisper_detection_state,
+    runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
 
@@ -104,13 +104,10 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                         ),
                         audio_path: PathBuf::from(&recent_recording.file_path),
                         language: settings.whisper.language.clone(),
-                        // VAD only when the user opted into higher-accuracy timestamps
-                        // — it re-anchors long speech but drops singing/music.
-                        vad_model_path: if settings.whisper.high_accuracy_timestamps {
-                            whisper_detection.vad_model_path.clone().map(PathBuf::from)
-                        } else {
-                            None
-                        },
+                        ffmpeg_path: detect_local_ffmpeg(&settings)
+                            .executable_path
+                            .map(PathBuf::from),
+                        duration_ms: recent_recording.duration_ms,
                     }, move |percent| {
                         let _ = app_progress.emit("transcription-progress", percent);
                     }) {

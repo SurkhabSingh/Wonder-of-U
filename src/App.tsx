@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { ask } from "@tauri-apps/plugin-dialog";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { HomePage } from "./components/home/HomePage";
@@ -24,10 +23,6 @@ import type {
   SettingsSection,
   WhisperAssetUpdateResult,
 } from "./types";
-
-// Recordings at least this long trigger the "use higher timestamp accuracy?" prompt —
-// drift only bites on long audio, so shorter clips transcribe without a nag.
-const LONG_VIDEO_MS = 10 * 60 * 1000;
 
 function App() {
   const {
@@ -208,8 +203,6 @@ function App() {
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRuntimeVersion,
-    downloadVadModel,
-    ensureVadModel,
     toggleDownloadPause,
     updateAnkiField,
   } = useSetupActions({
@@ -277,65 +270,6 @@ function App() {
 
   const transcriptionProgress = useTranscriptionProgress(
     bootstrap.shell.phase === "transcribing",
-  );
-
-  // Wraps every transcribe trigger: for a long recording (and when the global accuracy
-  // default is off), offer VAD for THIS run so long dialogue stays second-for-second in
-  // sync — a per-video choice, so a song can decline and keep its vocals. Declining, or a
-  // short clip, transcribes plainly.
-  const handleTranscribe = useCallback(
-    async (filePaths: string[], force = false) => {
-      const longestMs = filePaths.reduce((longest, path) => {
-        const durationMs =
-          bootstrap.recentRecordings.find(
-            (recording) => recording.filePath === path,
-          )?.durationMs ?? 0;
-        return Math.max(longest, durationMs);
-      }, 0);
-
-      if (
-        longestMs >= LONG_VIDEO_MS &&
-        !settingsDraft.whisper.highAccuracyTimestamps
-      ) {
-        const useAccurate = await ask(
-          `This is a ${Math.round(longestMs / 60000)}-minute video. Use higher timestamp accuracy for it?\n\n` +
-            "Best for speech and dialogue — it keeps long transcripts in sync second-for-second. " +
-            "Decline for music or songs, which it may skip. Downloads a small (~1 MB) model the first time.",
-          {
-            title: "Higher timestamp accuracy?",
-            kind: "info",
-            okLabel: "Use accuracy (VAD)",
-            cancelLabel: "Transcribe normally",
-          },
-        );
-        if (useAccurate) {
-          if (
-            !bootstrap.whisperDetection.vadModelReady &&
-            !(await ensureVadModel())
-          ) {
-            showWarning(
-              "Could not prepare the accuracy model — transcribing normally.",
-            );
-            await transcribeRecordings(filePaths, force, false);
-            return;
-          }
-          await transcribeRecordings(filePaths, force, true);
-          return;
-        }
-        await transcribeRecordings(filePaths, force, false);
-        return;
-      }
-
-      await transcribeRecordings(filePaths, force);
-    },
-    [
-      bootstrap.recentRecordings,
-      bootstrap.whisperDetection.vadModelReady,
-      ensureVadModel,
-      settingsDraft.whisper.highAccuracyTimestamps,
-      showWarning,
-      transcribeRecordings,
-    ],
   );
 
   return (
@@ -475,7 +409,7 @@ function App() {
               onToggleSelection={toggleRecordingSelection}
               onClearSelection={clearRecordingSelection}
               onOpenRecordingMenuChange={setOpenRecordingMenuPath}
-              onTranscribe={handleTranscribe}
+              onTranscribe={transcribeRecordings}
               onPushToAnki={pushRecordingsToAnki}
               onAddFurigana={addFuriganaToAnki}
               onTranslate={translateRecordings}
@@ -492,7 +426,7 @@ function App() {
                 recording={viewingRecording}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
-                  void handleTranscribe([viewingRecording.filePath], force)
+                  void transcribeRecordings([viewingRecording.filePath], force)
                 }
                 isReTranscribing={busyAction === "transcribeRecording"}
                 onReTranslate={(force) =>
@@ -577,7 +511,6 @@ function App() {
             onDownloadRecommendedRuntime={downloadRecommendedRuntime}
             onCheckModelUpdate={checkModelUpdate}
             onDownloadRecommendedModel={downloadRecommendedModel}
-            onDownloadVadModel={downloadVadModel}
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onCheckYtdlpUpdate={checkYtdlpUpdate}

@@ -16,5 +16,5 @@ pub(crate) use ytdlp::{
 };
 pub(crate) use whisper::{
     all_managed_model_paths, app_managed_runtime_directory, collect_managed_whisper_cli_candidates,
-    refresh_whisper_detection_state, vad_model_target_path, whisper_detection_inputs_changed,
+    refresh_whisper_detection_state, whisper_detection_inputs_changed,
 };

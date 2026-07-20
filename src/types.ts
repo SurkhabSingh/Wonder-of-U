@@ -56,9 +56,6 @@ export type WhisperSettings = {
   runtimeVersion: string;
   modelChoice: string;
   language: string;
-  // Opt-in VAD for tighter long-audio timestamps. Off by default because Silero VAD
-  // is speech-tuned and drops singing/music; only useful for long spoken-word audio.
-  highAccuracyTimestamps: boolean;
 };
 
 export type TranslationProvider = "google-translate" | "deepl";
@@ -172,10 +169,6 @@ export type WhisperDetection = {
   modelReady: boolean;
   cliManaged: boolean;
   modelManaged: boolean;
-  // The Silero VAD model (accurate long-audio timestamps). Optional: transcription
-  // works without it, just with the drift-prone no-VAD path.
-  vadModelReady: boolean;
-  vadModelPath: string | null;
   message: string;
 };
 
@@ -269,7 +262,6 @@ export type BusyAction =
   | "hide"
   | "browse"
   | "downloadModel"
-  | "downloadVadModel"
   | "downloadRuntime"
   | "downloadFfmpeg"
   | "downloadYtdlp"
