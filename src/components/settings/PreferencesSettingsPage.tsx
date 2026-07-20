@@ -1,3 +1,4 @@
+import { ask } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
   AutosaveState,
@@ -161,11 +162,17 @@ export function PreferencesSettingsPage({
             <input
               type="checkbox"
               checked={settingsDraft.features.deleteLocalAudioAfterAnkiPush}
-              onChange={(event) => {
+              onChange={async (event) => {
                 const enabled = event.currentTarget.checked;
                 if (enabled) {
-                  const confirmed = window.confirm(
+                  const confirmed = await ask(
                     "Enable local audio cleanup after Anki push? After Anki successfully copies the audio into its media folder, Wonder of U will delete the local audio file from this machine. The transcript and history stay in Wonder of U, and existing Anki cards are not affected.",
+                    {
+                      title: "Enable audio cleanup?",
+                      kind: "warning",
+                      okLabel: "Enable",
+                      cancelLabel: "Cancel",
+                    },
                   );
                   if (!confirmed) {
                     return;

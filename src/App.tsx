@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { HomePage } from "./components/home/HomePage";
@@ -296,10 +297,16 @@ function App() {
         longestMs >= LONG_VIDEO_MS &&
         !settingsDraft.whisper.highAccuracyTimestamps
       ) {
-        const useAccurate = window.confirm(
+        const useAccurate = await ask(
           `This is a ${Math.round(longestMs / 60000)}-minute video. Use higher timestamp accuracy for it?\n\n` +
             "Best for speech and dialogue — it keeps long transcripts in sync second-for-second. " +
             "Decline for music or songs, which it may skip. Downloads a small (~1 MB) model the first time.",
+          {
+            title: "Higher timestamp accuracy?",
+            kind: "info",
+            okLabel: "Use accuracy (VAD)",
+            cancelLabel: "Transcribe normally",
+          },
         );
         if (useAccurate) {
           if (

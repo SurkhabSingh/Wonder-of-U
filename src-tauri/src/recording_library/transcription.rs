@@ -434,6 +434,17 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     } else {
         None
     };
+    // Recorded so a transcript's timing accuracy is diagnosable from the log: whether the
+    // caller asked for VAD, and whether the model was actually present to honor it.
+    log_event(
+        app,
+        "INFO",
+        "transcription.mode",
+        serde_json::json!({
+            "vadRequested": use_vad,
+            "vadEngaged": vad_model_path.is_some(),
+        }),
+    );
     let language = transcript_language_key(&settings.whisper.language);
     let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
