@@ -296,11 +296,12 @@ pub(crate) async fn transcribe_recordings(
     app: AppHandle,
     file_paths: Vec<String>,
     force: Option<bool>,
+    high_accuracy: Option<bool>,
 ) -> Result<RecordingBatchResult, String> {
     let app_for_blocking = app.clone();
     let force = force.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        transcribe_recordings_inner(&app_for_blocking, file_paths, force)
+        transcribe_recordings_inner(&app_for_blocking, file_paths, force, high_accuracy)
     })
     .await
     .map_err(|error| error.to_string())?

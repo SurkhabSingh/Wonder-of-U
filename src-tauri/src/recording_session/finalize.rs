@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf, sync::atomic::Ordering};
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
     app_runtime::{log_event, update_shell_snapshot},
@@ -91,6 +91,7 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                         shell.last_output_path = Some(recent_recording.file_path.clone());
                     })?;
 
+                    let app_progress = app.clone();
                     match run_whisper_transcription(&WhisperTranscriptionRequest {
                         cli_path: PathBuf::from(
                             whisper_detection
@@ -110,6 +111,8 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                         } else {
                             None
                         },
+                    }, move |percent| {
+                        let _ = app_progress.emit("transcription-progress", percent);
                     }) {
                         Ok(result) => {
                             let mut transcript_path = result.transcript_path;

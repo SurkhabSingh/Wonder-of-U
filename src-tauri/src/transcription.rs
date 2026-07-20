@@ -1,7 +1,10 @@
 use std::{
     env, fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    sync::{Arc, Mutex},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -112,8 +115,21 @@ pub fn verify_whisper_model(model_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse a whisper-cli progress line — `whisper_print_progress_callback: progress = N%`
+/// (variable spacing) — into a clamped 0–100 percent. Non-progress lines return `None`.
+fn parse_whisper_progress_line(line: &str) -> Option<u8> {
+    let rest = line.split("progress =").nth(1)?;
+    let digits: String = rest.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+    let value: u16 = digits.parse().ok()?;
+    Some(value.min(100) as u8)
+}
+
+/// `on_progress` is invoked with a 0–100 percent as whisper reports it (from a drain
+/// thread, so the closure must be `Send + 'static` — callers pass a cloned `AppHandle`
+/// and emit an event). It is a no-op-friendly hook; transcription never fails over it.
 pub fn run_whisper_transcription(
     request: &WhisperTranscriptionRequest,
+    on_progress: impl Fn(u8) + Send + 'static,
 ) -> Result<WhisperTranscriptionResult, String> {
     verify_whisper_cli(&request.cli_path)?;
     verify_whisper_model(&request.model_path)?;
@@ -166,7 +182,11 @@ pub fn run_whisper_transcription(
         .arg("--output-json")
         .arg("--output-file")
         .arg(&output_base)
-        .arg("--no-prints");
+        .arg("--no-prints")
+        // Emits `progress = N%` to stderr; it still prints under `--no-prints`, so we
+        // stream it for the UI progress bar. The transcript is read from the output
+        // files, so this stderr noise never touches the result.
+        .arg("--print-progress");
 
     // Use most cores but leave a couple free so the machine stays responsive during a
     // long transcription. whisper-cli defaults to 4 threads, which idles bigger CPUs.
@@ -201,11 +221,69 @@ pub fn run_whisper_transcription(
         command.arg("--language").arg(request.language.trim());
     }
 
-    let output = command.output().map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let details = cap_details(if !stderr.is_empty() { stderr } else { stdout });
+    // Stream instead of `.output()`: whisper writes the transcript to files, so the only
+    // reason to read its pipes live is the progress bar. Each pipe is drained on its own
+    // thread — stderr also parses `progress = N%` → `on_progress` — into a bounded buffer
+    // the error branches read after the child exits. Mirrors the yt-dlp downloader.
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "whisper-cli produced no stdout stream.".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "whisper-cli produced no stderr stream.".to_string())?;
+
+    let stderr_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let stderr_sink = Arc::clone(&stderr_buffer);
+    let stderr_thread = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(percent) = parse_whisper_progress_line(&line) {
+                on_progress(percent);
+            }
+            if let Ok(mut sink) = stderr_sink.lock() {
+                if sink.len() < 8192 {
+                    sink.push_str(&line);
+                    sink.push('\n');
+                }
+            }
+        }
+    });
+
+    let stdout_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let stdout_sink = Arc::clone(&stdout_buffer);
+    let stdout_thread = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(mut sink) = stdout_sink.lock() {
+                if sink.len() < 8192 {
+                    sink.push_str(&line);
+                    sink.push('\n');
+                }
+            }
+        }
+    });
+
+    let status = child.wait().map_err(|error| error.to_string())?;
+    let _ = stderr_thread.join();
+    let _ = stdout_thread.join();
+
+    let stderr_text = stderr_buffer
+        .lock()
+        .map(|guard| guard.trim().to_string())
+        .unwrap_or_default();
+    let stdout_text = stdout_buffer
+        .lock()
+        .map(|guard| guard.trim().to_string())
+        .unwrap_or_default();
+
+    if !status.success() {
+        let details = cap_details(if !stderr_text.is_empty() {
+            stderr_text
+        } else {
+            stdout_text
+        });
         return Err(if details.is_empty() {
             "whisper-cli failed to transcribe the recording.".into()
         } else {
@@ -214,10 +292,8 @@ pub fn run_whisper_transcription(
     }
 
     if !transcript_path.exists() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let details = cap_details(
-            [stderr, stdout]
+            [stderr_text, stdout_text]
                 .into_iter()
                 .filter(|value| !value.is_empty())
                 .collect::<Vec<_>>()
@@ -258,6 +334,24 @@ mod tests {
             text.contains("wonder-of-u-transcript-"),
             "temp output base should use the fixed ASCII prefix, not a file stem: {text}"
         );
+    }
+
+    #[test]
+    fn parse_whisper_progress_line_reads_and_clamps_percent() {
+        assert_eq!(
+            parse_whisper_progress_line("whisper_print_progress_callback: progress =  96%"),
+            Some(96)
+        );
+        assert_eq!(
+            parse_whisper_progress_line("whisper_print_progress_callback: progress = 100%"),
+            Some(100)
+        );
+        assert_eq!(parse_whisper_progress_line("progress =   7%"), Some(7));
+        // A nonsensical over-100 value is clamped rather than overflowing a u8.
+        assert_eq!(parse_whisper_progress_line("progress = 250%"), Some(100));
+        // Non-progress lines are ignored.
+        assert_eq!(parse_whisper_progress_line("whisper_full_with_state: decode"), None);
+        assert_eq!(parse_whisper_progress_line(""), None);
     }
 
     #[test]

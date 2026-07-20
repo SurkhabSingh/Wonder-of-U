@@ -15,6 +15,7 @@ import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
 import { useSetupActions } from "./hooks/useSetupActions";
+import { useTranscriptionProgress } from "./hooks/useTranscriptionProgress";
 import { useYoutubeQueue } from "./hooks/useYoutubeQueue";
 import type {
   AppPage,
@@ -22,6 +23,10 @@ import type {
   SettingsSection,
   WhisperAssetUpdateResult,
 } from "./types";
+
+// Recordings at least this long trigger the "use higher timestamp accuracy?" prompt —
+// drift only bites on long audio, so shorter clips transcribe without a nag.
+const LONG_VIDEO_MS = 10 * 60 * 1000;
 
 function App() {
   const {
@@ -203,6 +208,7 @@ function App() {
     downloadRecommendedYtdlp,
     downloadRuntimeVersion,
     downloadVadModel,
+    ensureVadModel,
     toggleDownloadPause,
     updateAnkiField,
   } = useSetupActions({
@@ -268,6 +274,63 @@ function App() {
   const expressionFieldMapped = Boolean(settingsDraft.anki.fields.transcription);
   const ankiReachable = displayedAnkiCatalog.status !== "offline";
 
+  const transcriptionProgress = useTranscriptionProgress(
+    bootstrap.shell.phase === "transcribing",
+  );
+
+  // Wraps every transcribe trigger: for a long recording (and when the global accuracy
+  // default is off), offer VAD for THIS run so long dialogue stays second-for-second in
+  // sync — a per-video choice, so a song can decline and keep its vocals. Declining, or a
+  // short clip, transcribes plainly.
+  const handleTranscribe = useCallback(
+    async (filePaths: string[], force = false) => {
+      const longestMs = filePaths.reduce((longest, path) => {
+        const durationMs =
+          bootstrap.recentRecordings.find(
+            (recording) => recording.filePath === path,
+          )?.durationMs ?? 0;
+        return Math.max(longest, durationMs);
+      }, 0);
+
+      if (
+        longestMs >= LONG_VIDEO_MS &&
+        !settingsDraft.whisper.highAccuracyTimestamps
+      ) {
+        const useAccurate = window.confirm(
+          `This is a ${Math.round(longestMs / 60000)}-minute video. Use higher timestamp accuracy for it?\n\n` +
+            "Best for speech and dialogue — it keeps long transcripts in sync second-for-second. " +
+            "Decline for music or songs, which it may skip. Downloads a small (~1 MB) model the first time.",
+        );
+        if (useAccurate) {
+          if (
+            !bootstrap.whisperDetection.vadModelReady &&
+            !(await ensureVadModel())
+          ) {
+            showWarning(
+              "Could not prepare the accuracy model — transcribing normally.",
+            );
+            await transcribeRecordings(filePaths, force, false);
+            return;
+          }
+          await transcribeRecordings(filePaths, force, true);
+          return;
+        }
+        await transcribeRecordings(filePaths, force, false);
+        return;
+      }
+
+      await transcribeRecordings(filePaths, force);
+    },
+    [
+      bootstrap.recentRecordings,
+      bootstrap.whisperDetection.vadModelReady,
+      ensureVadModel,
+      settingsDraft.whisper.highAccuracyTimestamps,
+      showWarning,
+      transcribeRecordings,
+    ],
+  );
+
   return (
     <main className="app-shell">
       <TooltipPrimitive.Provider delayDuration={180}>
@@ -288,6 +351,7 @@ function App() {
         <BusyOverlay
           label={busyOverlayLabel}
           statusText={bootstrap.shell.statusText}
+          progress={transcriptionProgress}
         />
       ) : null}
 
@@ -404,7 +468,7 @@ function App() {
               onToggleSelection={toggleRecordingSelection}
               onClearSelection={clearRecordingSelection}
               onOpenRecordingMenuChange={setOpenRecordingMenuPath}
-              onTranscribe={transcribeRecordings}
+              onTranscribe={handleTranscribe}
               onPushToAnki={pushRecordingsToAnki}
               onAddFurigana={addFuriganaToAnki}
               onTranslate={translateRecordings}
@@ -421,7 +485,7 @@ function App() {
                 recording={viewingRecording}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
-                  void transcribeRecordings([viewingRecording.filePath], force)
+                  void handleTranscribe([viewingRecording.filePath], force)
                 }
                 isReTranscribing={busyAction === "transcribeRecording"}
                 onReTranslate={(force) =>

@@ -4,7 +4,7 @@ use std::{
     sync::Mutex,
 };
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
     app_runtime::{build_app_bootstrap, log_event, update_shell_snapshot},
@@ -397,6 +397,9 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
     force: bool,
+    // Per-run VAD override from the long-video prompt: `Some(true/false)` forces it on/off
+    // for this batch; `None` falls back to the global `highAccuracyTimestamps` setting.
+    high_accuracy: Option<bool>,
 ) -> Result<RecordingBatchResult, String> {
     let settings = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -423,9 +426,10 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             .unwrap_or_default(),
     );
     let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
-    // VAD only when the user opted into higher-accuracy timestamps — it re-anchors
+    // VAD only when opted in (per-run override, else the global setting) — it re-anchors
     // long speech but drops singing/music, so it must never be the default.
-    let vad_model_path = if settings.whisper.high_accuracy_timestamps {
+    let use_vad = high_accuracy.unwrap_or(settings.whisper.high_accuracy_timestamps);
+    let vad_model_path = if use_vad {
         whisper_detection.vad_model_path.clone().map(PathBuf::from)
     } else {
         None
@@ -460,13 +464,19 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             shell.last_output_path = Some(recording.file_path.clone());
         })?;
 
-        let result = run_whisper_transcription(&WhisperTranscriptionRequest {
-            cli_path: cli_path.clone(),
-            model_path: model_path.clone(),
-            audio_path: PathBuf::from(&recording.file_path),
-            language: settings.whisper.language.clone(),
-            vad_model_path: vad_model_path.clone(),
-        })
+        let app_progress = app.clone();
+        let result = run_whisper_transcription(
+            &WhisperTranscriptionRequest {
+                cli_path: cli_path.clone(),
+                model_path: model_path.clone(),
+                audio_path: PathBuf::from(&recording.file_path),
+                language: settings.whisper.language.clone(),
+                vad_model_path: vad_model_path.clone(),
+            },
+            move |percent| {
+                let _ = app_progress.emit("transcription-progress", percent);
+            },
+        )
         .and_then(|result| {
             apply_transcription_result_to_recording(
                 app,
