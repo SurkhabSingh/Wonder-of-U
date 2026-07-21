@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hound = "3.5.1"
 wasapi = "0.23.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "multipart"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tiny_http = "0.12"
 # Frame-synchronous ASR (Silero VAD + Whisper ONNX) for drift-free, language-agnostic

@@ -14,12 +14,12 @@ use crate::{
         RecordingSegment, RecordingTranscript, SharedPersistedState,
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
-    sherpa::{resolve_sherpa_model_paths, run_sherpa_transcription, SherpaTranscriptionRequest},
+    sherpa::{run_sherpa_transcription, sherpa_vad_model_path, SherpaTranscriptionRequest},
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
 
-/// Maps the app's language setting to a sherpa/Whisper-ONNX language code: the app's
-/// `"auto"` (and empty) both mean auto-detect, which the ONNX recognizer expects as `""`.
+/// Maps the app's language setting to a Whisper language code: the app's `"auto"` (and
+/// empty) both mean auto-detect, which Whisper expects as `""`.
 fn sherpa_language_code(language: &str) -> String {
     let trimmed = language.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
@@ -27,6 +27,20 @@ fn sherpa_language_code(language: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// `whisper-server` lives next to `whisper-cli` in the managed Whisper runtime; the sherpa
+/// engine runs the ggml model through it (loaded once) for full-quality text.
+fn whisper_server_sibling(cli_path: &Path) -> PathBuf {
+    let name = if cfg!(windows) {
+        "whisper-server.exe"
+    } else {
+        "whisper-server"
+    };
+    cli_path
+        .parent()
+        .map(|dir| dir.join(name))
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// Recognizer thread count: most cores, leaving two free so the machine stays responsive.
@@ -303,11 +317,35 @@ pub(crate) fn store_segments_sidecar(
 ///    such as a "thanks for watching" line placed past the real end).
 ///
 /// `duration_ms == 0` (unknown duration) skips the bounds pass but keeps the dedup pass.
+/// True when a segment's text is *only* a notorious Whisper hallucination — the phrases it
+/// emits over music/silence that a VAD region flagged as speech (a lone "thanks for
+/// watching", a subscribe plug). Matched whole (after trimming trailing punctuation) so a
+/// real sentence that merely contains such words is never dropped.
+fn is_whisper_hallucination(text: &str) -> bool {
+    let normalized = text
+        .trim()
+        .trim_end_matches(|character| matches!(character, '。' | '.' | '!' | '！' | '\u{3000}' | ' '));
+    const PHRASES: [&str; 6] = [
+        "ご視聴ありがとうございました",
+        "ご視聴ありがとうございます",
+        "ご清聴ありがとうございました",
+        "チャンネル登録お願いします",
+        "Thank you for watching",
+        "Thanks for watching",
+    ];
+    PHRASES
+        .iter()
+        .any(|phrase| normalized.eq_ignore_ascii_case(phrase))
+}
+
 fn clean_segments(segments: Vec<RecordingSegment>, duration_ms: u64) -> Vec<RecordingSegment> {
     const REPEAT_LIMIT: usize = 4;
 
     let bounded: Vec<RecordingSegment> = segments
         .into_iter()
+        // Drop a segment that is only a stock Whisper hallucination phrase (emitted on a
+        // non-speech stretch the VAD flagged as speech).
+        .filter(|segment| !is_whisper_hallucination(&segment.text))
         .filter_map(|mut segment| {
             if duration_ms > 0 {
                 if segment.start_ms >= duration_ms {
@@ -433,19 +471,28 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         .map(PathBuf::from);
     let language = transcript_language_key(&settings.whisper.language);
 
-    // Engine selection: sherpa (Silero VAD + Whisper ONNX, drift-free) by default, or the
-    // legacy whisper-cli path as a fallback. Each engine has its own readiness check.
+    // Both engines rely on the managed Whisper runtime + ggml model: the legacy path runs
+    // whisper-cli directly; the sherpa engine runs the same ggml model through whisper-server
+    // (loaded once) with Silero VAD for drift-free timing. So Whisper must be ready either way.
     let use_sherpa = {
         let engine = settings.whisper.engine.trim();
         engine.is_empty() || engine.eq_ignore_ascii_case("sherpa")
     };
-    let sherpa_paths = resolve_sherpa_model_paths(
-        Path::new(&settings.asset_directory),
-        settings.whisper.sherpa_model_choice.trim(),
-    );
 
-    let mut cli_path = PathBuf::new();
-    let mut model_path = PathBuf::new();
+    let whisper_detection = refresh_whisper_detection_state(app)?;
+    if whisper_detection.status != "ready" {
+        return Ok(RecordingBatchResult {
+            status: "unavailable".into(),
+            message: format!("Whisper is not ready yet: {}", whisper_detection.message),
+            items: Vec::new(),
+            bootstrap: build_app_bootstrap(app)?,
+        });
+    }
+    let cli_path = PathBuf::from(whisper_detection.executable_path.clone().unwrap_or_default());
+    let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
+    let vad_model_path = sherpa_vad_model_path(Path::new(&settings.asset_directory));
+    let whisper_server_path = whisper_server_sibling(&cli_path);
+
     if use_sherpa {
         if ffmpeg_path.is_none() {
             return Ok(RecordingBatchResult {
@@ -455,29 +502,26 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 bootstrap: build_app_bootstrap(app)?,
             });
         }
-        if !sherpa_paths.all_present() {
+        if !vad_model_path.exists() {
             return Ok(RecordingBatchResult {
                 status: "unavailable".into(),
                 message:
-                    "The transcription model has not been downloaded yet. Download it from Settings."
+                    "The speech-detector model has not been downloaded yet. Download it from Settings."
                         .into(),
                 items: Vec::new(),
                 bootstrap: build_app_bootstrap(app)?,
             });
         }
-    } else {
-        let whisper_detection = refresh_whisper_detection_state(app)?;
-        if whisper_detection.status != "ready" {
+        if !whisper_server_path.exists() {
             return Ok(RecordingBatchResult {
                 status: "unavailable".into(),
-                message: format!("Whisper is not ready yet: {}", whisper_detection.message),
+                message:
+                    "whisper-server is missing from the Whisper runtime. Re-download the runtime from Settings."
+                        .into(),
                 items: Vec::new(),
                 bootstrap: build_app_bootstrap(app)?,
             });
         }
-        cli_path =
-            PathBuf::from(whisper_detection.executable_path.clone().unwrap_or_default());
-        model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
     }
     let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
@@ -512,10 +556,9 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         let transcription = if use_sherpa {
             run_sherpa_transcription(
                 &SherpaTranscriptionRequest {
-                    vad_model_path: sherpa_paths.vad_model_path.clone(),
-                    encoder_path: sherpa_paths.encoder_path.clone(),
-                    decoder_path: sherpa_paths.decoder_path.clone(),
-                    tokens_path: sherpa_paths.tokens_path.clone(),
+                    vad_model_path: vad_model_path.clone(),
+                    whisper_server_path: whisper_server_path.clone(),
+                    ggml_model_path: model_path.clone(),
                     audio_path: PathBuf::from(&recording.file_path),
                     ffmpeg_path: ffmpeg_path.clone().unwrap_or_default(),
                     language: sherpa_language_code(&settings.whisper.language),
@@ -870,6 +913,28 @@ mod tests {
         let cleaned = clean_segments(segments, 0);
 
         assert_eq!(cleaned.len(), 3);
+    }
+
+    #[test]
+    fn clean_segments_drops_a_lone_hallucination_phrase() {
+        let seg = |text: &str, from: u64, to: u64| RecordingSegment {
+            text: text.into(),
+            start_ms: from,
+            end_ms: to,
+        };
+        let segments = vec![
+            seg("本物の台詞です", 0, 3000),
+            seg("ご視聴ありがとうございました", 3000, 6000), // stock hallucination -> drop
+            seg("ご視聴ありがとうございました。", 6000, 9000), // trailing 。 variant -> drop
+            seg("Thanks for watching", 9000, 12000),          // english variant -> drop
+            seg("ありがとうございました", 12000, 15000), // generic thanks -> KEEP (may be real)
+        ];
+
+        let cleaned = clean_segments(segments, 0);
+
+        assert_eq!(cleaned.len(), 2, "only the real line and the generic thanks survive");
+        assert_eq!(cleaned[0].text, "本物の台詞です");
+        assert_eq!(cleaned[1].text, "ありがとうございました");
     }
 
     #[test]
