@@ -13,7 +13,6 @@ mod recording_library;
 mod recording_session;
 mod runtime_assets;
 mod settings;
-mod sherpa;
 mod transcription;
 mod translation_bridge;
 

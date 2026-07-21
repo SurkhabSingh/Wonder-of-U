@@ -53,6 +53,12 @@ pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
     },
 ];
 
+/// whisper.cpp's built-in Silero VAD ggml model, used for drift-free speech segmentation.
+/// Tiny (~0.85 MB); lives alongside the ggml Whisper models under `{asset}/models/`.
+pub(crate) const WHISPER_VAD_MODEL_FILE: &str = "ggml-silero-v6.2.0.bin";
+pub(crate) const WHISPER_VAD_MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
+
 pub(crate) fn default_whisper_model_id() -> &'static str {
     "small"
 }
@@ -194,23 +200,6 @@ pub(crate) struct WhisperSettings {
     #[serde(default = "default_whisper_model_choice")]
     pub(crate) model_choice: String,
     pub(crate) language: String,
-    /// Which transcription engine to use: `"sherpa"` (Silero VAD + Whisper ONNX,
-    /// drift-free, the default) or `"whisper"` (the legacy whisper-cli path, kept as a
-    /// fallback). Missing in older saved state → defaults to `"sherpa"`.
-    #[serde(default = "default_transcription_engine")]
-    pub(crate) engine: String,
-    /// Which sherpa Whisper-ONNX model to use (`"base"` | `"small"` | `"medium"` |
-    /// `"large-v3"`). Files live under `{asset}/models/sherpa/{choice}/`.
-    #[serde(default = "default_sherpa_model_choice")]
-    pub(crate) sherpa_model_choice: String,
-}
-
-fn default_transcription_engine() -> String {
-    "sherpa".into()
-}
-
-fn default_sherpa_model_choice() -> String {
-    "large-v3".into()
 }
 
 impl Default for WhisperSettings {
@@ -221,8 +210,6 @@ impl Default for WhisperSettings {
             runtime_version: default_whisper_runtime_version(),
             model_choice: default_whisper_model_id().into(),
             language: "auto".into(),
-            engine: default_transcription_engine(),
-            sherpa_model_choice: default_sherpa_model_choice(),
         }
     }
 }

@@ -14,67 +14,39 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Audio at least this long is transcribed in overlapping ~5-minute chunks so drift
-/// can never accumulate across a long file. Shorter audio takes the single-shot path.
-const CHUNK_LEN_MS: u64 = 300_000;
-/// Each chunk's clip extends this far past its kept window on both sides. whisper
-/// hallucinates near a clip's edges (it treats the cut as an audio boundary), so the
-/// overlap regions — where those artifacts land — are transcribed but then discarded,
-/// leaving only each chunk's clean interior. Validated at ~15s; 20s adds margin.
-const OVERLAP_MS: u64 = 20_000;
+/// Cap a VAD speech region so whisper always gets a clip inside its 30 s window; longer
+/// continuous speech is auto-split by the VAD. Passed to `--vad-max-speech-duration-s`.
+const VAD_MAX_SPEECH_SECONDS: &str = "20";
 
 #[derive(Debug, Clone)]
 pub struct WhisperTranscriptionRequest {
     pub cli_path: PathBuf,
     pub model_path: PathBuf,
+    /// whisper.cpp's built-in Silero VAD ggml model. VAD segments the audio into speech
+    /// regions — drift-free absolute timestamps, and non-speech (music/silence) yields no
+    /// text — superseding the old overlapping-chunk approach.
+    pub vad_model_path: PathBuf,
     pub audio_path: PathBuf,
     pub language: String,
-    /// ffmpeg, used to split long audio into ~5-minute chunks so each is transcribed
-    /// drift-free and stitched by exact time offset (the permanent long-audio timestamp
-    /// fix). `None` → single-shot transcription, no chunking.
-    pub ffmpeg_path: Option<PathBuf>,
-    /// Total audio duration in ms; drives chunk planning. `0` (unknown) → single-shot.
+    /// ffmpeg, used to decode the recording to the 16 kHz mono WAV whisper + VAD require.
+    pub ffmpeg_path: PathBuf,
+    /// Total audio duration in ms; passed through for the downstream segment tail-clamp.
     pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct WhisperTranscriptionResult {
     pub transcript_path: PathBuf,
-    /// Expected path of whisper's `--output-json` sidecar carrying per-segment
-    /// offsets. It may not exist if whisper skipped writing it; callers parse it
-    /// best-effort and never fail transcription over a missing json.
+    /// Expected path of whisper's `--output-json` sidecar carrying per-segment offsets. It
+    /// may not exist if whisper skipped writing it; callers parse it best-effort and never
+    /// fail transcription over a missing json.
     pub json_path: PathBuf,
 }
 
-/// A minimal mirror of whisper's `--output-json` shape — `{ "transcription": [ {
-/// "offsets": { "from", "to" }, "text" } ] }`. `recording_library/transcription.rs`
-/// has its own `Deserialize`-only copy but that module depends on this one (a cycle
-/// blocks importing it upward), so the chunk merger keeps its own `Serialize +
-/// Deserialize` structs. No `deny_unknown_fields`: real chunk JSON carries extra
-/// fields we ignore, and the merged file we write is the exact subset the reader wants.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ChunkOffsets {
-    from: u64,
-    to: u64,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ChunkSegment {
-    #[serde(default)]
-    text: String,
-    offsets: ChunkOffsets,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ChunkJson {
-    #[serde(default)]
-    transcription: Vec<ChunkSegment>,
-}
-
-/// A fixed ASCII output base for whisper's `--output-file`. We deliberately do
-/// NOT derive it from the audio file stem: whisper-cli reads argv through the
-/// Windows ANSI code page, so a non-ASCII stem (e.g. a Japanese recording name)
-/// would be mangled into a "?"-filled path that whisper then fails to write.
+/// A fixed ASCII output base for whisper's `--output-file`. We deliberately do NOT derive it
+/// from the audio file stem: whisper-cli reads argv through the Windows ANSI code page, so a
+/// non-ASCII stem (e.g. a Japanese recording name) would be mangled into a "?"-filled path
+/// that whisper then fails to write.
 fn transcript_output_base() -> PathBuf {
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -88,9 +60,8 @@ fn transcript_output_base() -> PathBuf {
 }
 
 /// Deletes every path it holds when dropped, so temp files (a staged ASCII copy of a
-/// non-ASCII-named recording, or the per-chunk WAVs and outputs of a chunked run) are
-/// cleaned up on every return path — success, error, or unwind — without repeating the
-/// removal at each `return`.
+/// non-ASCII-named recording, or the decoded 16 kHz WAV) are cleaned up on every return path
+/// — success, error, or unwind — without repeating the removal at each `return`.
 struct TempCleanup {
     paths: Vec<PathBuf>,
 }
@@ -113,8 +84,8 @@ impl Drop for TempCleanup {
     }
 }
 
-/// Caps a stderr/stdout dump so a whisper usage/help splurge never surfaces as a
-/// giant user-facing error: first 3 lines, then hard-limited to ~400 chars.
+/// Caps a stderr/stdout dump so a whisper usage/help splurge never surfaces as a giant
+/// user-facing error: first 3 lines, then hard-limited to ~400 chars.
 fn cap_details(details: String) -> String {
     const MAX_CHARS: usize = 400;
     let by_lines = details.lines().take(3).collect::<Vec<_>>().join("\n");
@@ -162,6 +133,17 @@ pub fn verify_whisper_model(model_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub fn verify_whisper_vad_model(vad_model_path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(vad_model_path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("The selected VAD model path is not a file.".into());
+    }
+    if metadata.len() < 100_000 {
+        return Err("The selected VAD model file is unexpectedly small.".into());
+    }
+    Ok(())
+}
+
 /// Parse a whisper-cli progress line — `whisper_print_progress_callback: progress = N%`
 /// (variable spacing) — into a clamped 0–100 percent. Non-progress lines return `None`.
 fn parse_whisper_progress_line(line: &str) -> Option<u8> {
@@ -171,24 +153,19 @@ fn parse_whisper_progress_line(line: &str) -> Option<u8> {
     Some(value.min(100) as u8)
 }
 
-/// Renders milliseconds as ffmpeg's `S.mmm` seconds form for `-ss`/`-to`.
-fn format_ms_timestamp(ms: u64) -> String {
-    format!("{}.{:03}", ms / 1000, ms % 1000)
-}
+/// Decodes any recording to a 16 kHz mono s16le WAV at an ASCII temp path — the format
+/// whisper.cpp and its Silero VAD want. ffmpeg handles non-ASCII *input* paths on Windows,
+/// and the ASCII output name feeds whisper-cli cleanly.
+fn decode_to_wav_16k(ffmpeg_path: &Path, input: &Path) -> Result<PathBuf, String> {
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let output = env::temp_dir().join(format!(
+        "wonder-of-u-input-{}-{unix_ms}.wav",
+        std::process::id()
+    ));
 
-/// Extracts `[start_ms, end_ms)` of `input` to a 16 kHz mono WAV (whisper's native
-/// input). Uses `-ss <start> -t <duration>` before `-i` — an accurate seek plus an
-/// unambiguous duration (the validated form; `-to` before `-i` is version-dependent).
-/// ffmpeg handles non-ASCII input paths on Windows (unlike whisper-cli), and the output
-/// name is ASCII, so the chunk feeds whisper cleanly. On any failure the caller falls
-/// back to single-shot.
-fn extract_audio_chunk(
-    ffmpeg_path: &Path,
-    input: &Path,
-    start_ms: u64,
-    end_ms: u64,
-    output: &Path,
-) -> Result<(), String> {
     let mut command = Command::new(ffmpeg_path);
     hide_command_window(&mut command);
     if let Some(parent) = ffmpeg_path.parent() {
@@ -196,210 +173,68 @@ fn extract_audio_chunk(
             command.current_dir(parent);
         }
     }
-    command.args([
-        "-y",
-        "-nostdin",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-ss",
-        &format_ms_timestamp(start_ms),
-        "-t",
-        &format_ms_timestamp(end_ms.saturating_sub(start_ms)),
-    ]);
+    command.args(["-y", "-nostdin", "-hide_banner", "-loglevel", "error"]);
     command.arg("-i").arg(input);
     command.args([
         "-map", "0:a:0", "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
     ]);
-    command.arg(output);
+    command.arg(&output);
 
     let result = command
         .output()
-        .map_err(|error| format!("Could not run ffmpeg to extract a chunk: {error}"))?;
+        .map_err(|error| format!("Could not run ffmpeg to decode the recording: {error}"))?;
     if !result.status.success() {
         return Err(format!(
-            "ffmpeg failed to extract a chunk: {}",
+            "ffmpeg failed to decode the recording: {}",
             String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
     if !output.exists() {
-        return Err("ffmpeg did not produce the chunk file.".into());
+        return Err("ffmpeg did not produce the decoded audio.".into());
     }
-    Ok(())
+    Ok(output)
 }
 
-/// Reads a chunk's whisper `.json` best-effort. A missing/garbage file yields `None`
-/// (that chunk simply contributes no segments) — never fatal.
-fn read_chunk_segments(json_path: &Path) -> Option<Vec<ChunkSegment>> {
-    let raw = fs::read_to_string(json_path).ok()?;
-    let parsed: ChunkJson = serde_json::from_str(&raw).ok()?;
-    Some(parsed.transcription)
-}
-
-/// Transcribes long audio: it splits into overlapping ~5-minute chunks (drift can't
-/// accumulate within a short chunk), transcribes each, offsets the timestamps by the
-/// exact chunk start, keeps only each chunk's interior, and merges into one `.txt` +
-/// `.json` — identical in shape to a single whisper run. Short audio (or a missing
-/// ffmpeg / unknown duration) transcribes in one shot. A failed chunked run falls back
-/// to a single shot on the whole file.
+/// Transcribes a recording with whisper.cpp using its built-in Silero VAD: the audio is
+/// decoded to 16 kHz mono, then a single whisper-cli pass detects speech regions, transcribes
+/// only those, and maps each region's timestamps back onto the absolute timeline. Drift-free
+/// on arbitrarily long audio, non-speech excluded, no manual chunking. Output is the same
+/// `{txt, json}` a plain whisper run produces.
 ///
-/// `on_progress` is invoked with a 0–100 percent scaled across the whole file (from a
-/// drain thread, so the closure must be `Send + Sync + 'static` — callers pass a cloned
-/// `AppHandle` and emit an event). It is a no-op-friendly hook; transcription never
-/// fails over it.
+/// `on_progress` is invoked with a 0–100 percent (from a drain thread, so the closure must be
+/// `Send + 'static`; callers pass a cloned `AppHandle` and emit an event). It is a
+/// no-op-friendly hook; transcription never fails over it.
 pub fn run_whisper_transcription(
     request: &WhisperTranscriptionRequest,
-    on_progress: impl Fn(u8) + Send + Sync + 'static,
+    on_progress: impl Fn(u8) + Send + 'static,
 ) -> Result<WhisperTranscriptionResult, String> {
     verify_whisper_cli(&request.cli_path)?;
     verify_whisper_model(&request.model_path)?;
+    verify_whisper_vad_model(&request.vad_model_path)?;
 
-    let on_progress = Arc::new(on_progress);
+    // Decode to the 16 kHz mono WAV whisper + Silero VAD want. The decoded WAV is a tracked
+    // temp file cleaned up on every return path.
+    let mut temps = TempCleanup::new();
+    let wav_path = decode_to_wav_16k(&request.ffmpeg_path, &request.audio_path)?;
+    temps.track(wav_path.clone());
 
-    // Chunk only long audio, and only when ffmpeg is available to cut it. Short files
-    // and the unknown-duration case take the single-shot path (short audio doesn't drift).
-    if request.ffmpeg_path.is_some() && request.duration_ms > CHUNK_LEN_MS {
-        let ffmpeg_path = request.ffmpeg_path.clone().unwrap();
-        match run_chunked_transcription(request, &ffmpeg_path, Arc::clone(&on_progress)) {
-            Ok(result) => return Ok(result),
-            Err(_chunk_error) => {
-                // A chunked run failed (ffmpeg vanished mid-run, a chunk errored). Fall
-                // back to a single pass on the whole file — a drift-prone transcript
-                // beats none. If that also fails, its error is returned below.
-            }
-        }
-    }
-
-    let progress = Arc::clone(&on_progress);
     run_whisper_once(
         &request.cli_path,
         &request.model_path,
-        &request.audio_path,
+        &request.vad_model_path,
+        &wav_path,
         &request.language,
         &transcript_output_base(),
-        move |percent| (*progress)(percent),
+        on_progress,
     )
 }
 
-/// Plans the chunk windows for a duration: one entry per ~5-min window as
-/// `(nominal_start, nominal_end, clip_start, clip_end)`. The nominal `[start, end)`
-/// partition the audio (no gaps, no overlap → no duplicate segments); the clip extends
-/// `OVERLAP_MS` past each side (clamped to `[0, duration]`) so the kept interior is
-/// never at a clip edge. Pure, so the planning is unit-testable without whisper/ffmpeg.
-fn plan_chunk_windows(duration_ms: u64) -> Vec<(u64, u64, u64, u64)> {
-    let chunk_count = (duration_ms + CHUNK_LEN_MS - 1) / CHUNK_LEN_MS;
-    (0..chunk_count)
-        .map(|index| {
-            let nominal_start = index * CHUNK_LEN_MS;
-            let nominal_end = ((index + 1) * CHUNK_LEN_MS).min(duration_ms);
-            let clip_start = nominal_start.saturating_sub(OVERLAP_MS);
-            let clip_end = (nominal_end + OVERLAP_MS).min(duration_ms);
-            (nominal_start, nominal_end, clip_start, clip_end)
-        })
-        .collect()
-}
-
-/// The chunked planner: extract → transcribe → offset → interior-keep → merge.
-fn run_chunked_transcription<F: Fn(u8) + Send + Sync + 'static>(
-    request: &WhisperTranscriptionRequest,
-    ffmpeg_path: &Path,
-    on_progress: Arc<F>,
-) -> Result<WhisperTranscriptionResult, String> {
-    let windows = plan_chunk_windows(request.duration_ms);
-    let chunk_count = windows.len() as u64;
-
-    let output_base = transcript_output_base();
-    let transcript_path = PathBuf::from(format!("{}.txt", output_base.display()));
-    let json_path = PathBuf::from(format!("{}.json", output_base.display()));
-
-    let mut temps = TempCleanup::new();
-    let mut kept: Vec<ChunkSegment> = Vec::new();
-
-    for (index, (nominal_start, nominal_end, clip_start, clip_end)) in
-        windows.into_iter().enumerate()
-    {
-        let index = index as u64;
-
-        let unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or(0);
-        let chunk_wav = env::temp_dir().join(format!(
-            "wonder-of-u-chunk-{}-{unix_ms}-{index}.wav",
-            std::process::id()
-        ));
-        temps.track(chunk_wav.clone());
-        extract_audio_chunk(
-            ffmpeg_path,
-            &request.audio_path,
-            clip_start,
-            clip_end,
-            &chunk_wav,
-        )?;
-
-        let chunk_base = env::temp_dir().join(format!(
-            "wonder-of-u-chunk-out-{}-{unix_ms}-{index}",
-            std::process::id()
-        ));
-        temps.track(PathBuf::from(format!("{}.txt", chunk_base.display())));
-        temps.track(PathBuf::from(format!("{}.json", chunk_base.display())));
-
-        let progress = Arc::clone(&on_progress);
-        let chunk_result = run_whisper_once(
-            &request.cli_path,
-            &request.model_path,
-            &chunk_wav,
-            &request.language,
-            &chunk_base,
-            move |percent| {
-                let overall = ((index * 100 + percent as u64) / chunk_count).min(100) as u8;
-                (*progress)(overall);
-            },
-        )?;
-
-        if let Some(segments) = read_chunk_segments(&chunk_result.json_path) {
-            for mut segment in segments {
-                let absolute_from = segment.offsets.from + clip_start;
-                // Keep only the chunk's INTERIOR [nominal_start, nominal_end): the overlap
-                // regions (where whisper hallucinates at the clip edges) are discarded, and
-                // partitioning by start means no segment is duplicated across chunks.
-                if absolute_from >= nominal_start && absolute_from < nominal_end {
-                    segment.offsets.from = absolute_from;
-                    segment.offsets.to = segment.offsets.to + clip_start;
-                    kept.push(segment);
-                }
-            }
-        }
-    }
-
-    let merged = ChunkJson { transcription: kept };
-    let serialized = serde_json::to_string(&merged).map_err(|error| error.to_string())?;
-    fs::write(&json_path, serialized).map_err(|error| error.to_string())?;
-    let text = merged
-        .transcription
-        .iter()
-        .map(|segment| segment.text.trim())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(&transcript_path, format!("{text}\n")).map_err(|error| error.to_string())?;
-
-    // The last chunk's final tick already reaches 100, but emit once more so the bar
-    // always completes even if a chunk produced no progress lines.
-    (*on_progress)(100);
-
-    Ok(WhisperTranscriptionResult {
-        transcript_path,
-        json_path,
-    })
-}
-
-/// One whisper-cli pass over a single audio file to `output_base.{txt,json}`. Assumes
-/// the caller already verified the cli + model. Non-ASCII audio paths are staged to an
-/// ASCII temp copy (chunk WAVs are already ASCII, so it's a no-op there).
+/// One whisper-cli `--vad` pass over a single (already 16 kHz mono) WAV to
+/// `output_base.{txt,json}`. Assumes the caller already verified cli + model + vad model.
 fn run_whisper_once(
     cli_path: &Path,
     model_path: &Path,
+    vad_model_path: &Path,
     audio_path: &Path,
     language: &str,
     output_base: &Path,
@@ -408,10 +243,10 @@ fn run_whisper_once(
     let transcript_path = PathBuf::from(format!("{}.txt", output_base.display()));
     let json_path = PathBuf::from(format!("{}.json", output_base.display()));
 
-    // whisper-cli receives argv via the Windows ANSI code page, so a non-ASCII audio
-    // path arrives as "?????.wav" and the file is "not found". When the path is not pure
-    // ASCII, stage an ASCII-named temp copy and hand whisper that. ASCII paths pass
-    // through untouched to avoid copying large recordings needlessly.
+    // whisper-cli receives argv via the Windows ANSI code page, so a non-ASCII audio path
+    // arrives as "?????.wav" and the file is "not found". When the path is not pure ASCII,
+    // stage an ASCII-named temp copy and hand whisper that. Our decoded WAV is already ASCII,
+    // so this is normally a no-op.
     let mut temp = TempCleanup::new();
     let audio_arg = if audio_path
         .to_str()
@@ -450,22 +285,31 @@ fn run_whisper_once(
         .arg("--output-file")
         .arg(output_base)
         .arg("--no-prints")
-        // Emits `progress = N%` to stderr; it still prints under `--no-prints`, so we
-        // stream it for the UI progress bar. The transcript is read from the output
-        // files, so this stderr noise never touches the result.
+        // Emits `progress = N%` to stderr; it still prints under `--no-prints`, so we stream
+        // it for the UI progress bar. The transcript is read from the output files, so this
+        // stderr noise never touches the result.
         .arg("--print-progress");
 
-    // Use most cores but leave a couple free so the machine stays responsive during a
-    // long transcription. whisper-cli defaults to 4 threads, which idles bigger CPUs.
+    // Use most cores but leave a couple free so the machine stays responsive during a long
+    // transcription. whisper-cli defaults to 4 threads, which idles bigger CPUs.
     let threads = std::thread::available_parallelism()
         .map(|cores| cores.get().saturating_sub(2).max(1))
         .unwrap_or(4);
     command.arg("-t").arg(threads.to_string());
 
-    // Stop whisper's runaway repetition on non-vocal audio (a single line looping to
-    // the end of a song's instrumental outro). `-mc 0` drops the cross-window text
-    // context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
+    // Stop whisper's runaway repetition on non-vocal audio. `-mc 0` drops the cross-window
+    // text context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
     command.arg("-mc").arg("0").arg("--suppress-nst");
+
+    // whisper.cpp's built-in Silero VAD: only detected speech regions are transcribed and
+    // their timestamps mapped back to the absolute timeline — drift-free on long audio, and
+    // non-speech yields no segments. This supersedes the old overlapping-chunk machinery.
+    command
+        .arg("--vad")
+        .arg("--vad-model")
+        .arg(vad_model_path)
+        .arg("--vad-max-speech-duration-s")
+        .arg(VAD_MAX_SPEECH_SECONDS);
 
     if !language.trim().is_empty() {
         command.arg("--language").arg(language.trim());
@@ -473,8 +317,8 @@ fn run_whisper_once(
 
     // Stream instead of `.output()`: whisper writes the transcript to files, so the only
     // reason to read its pipes live is the progress bar. Each pipe is drained on its own
-    // thread — stderr also parses `progress = N%` → `on_progress` — into a bounded buffer
-    // the error branches read after the child exits. Mirrors the yt-dlp downloader.
+    // thread — stderr also parses `progress = N%` → `on_progress` — into a bounded buffer the
+    // error branches read after the child exits. Mirrors the yt-dlp downloader.
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|error| error.to_string())?;
     let stdout = child
@@ -605,54 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn format_ms_timestamp_renders_seconds_and_millis() {
-        assert_eq!(format_ms_timestamp(0), "0.000");
-        assert_eq!(format_ms_timestamp(900_000), "900.000");
-        assert_eq!(format_ms_timestamp(905_250), "905.250");
-        assert_eq!(format_ms_timestamp(1_419_970), "1419.970");
-    }
-
-    #[test]
-    fn plan_chunk_windows_partitions_with_clamped_overlap() {
-        let windows = plan_chunk_windows(1_419_970); // 23m40s
-        assert_eq!(windows.len(), 5);
-        // First window: overlap before 0 is clamped away.
-        assert_eq!(windows[0], (0, 300_000, 0, 320_000));
-        // Interior window: 20s overlap on both sides.
-        assert_eq!(windows[2], (600_000, 900_000, 580_000, 920_000));
-        // Last window: nominal end and clip end both clamp to the real duration.
-        assert_eq!(windows[4], (1_200_000, 1_419_970, 1_180_000, 1_419_970));
-        // Nominal windows partition the timeline with no gaps or overlap.
-        for pair in windows.windows(2) {
-            assert_eq!(pair[0].1, pair[1].0, "each nominal end must meet the next start");
-        }
-    }
-
-    #[test]
-    fn plan_chunk_windows_count_is_ceil_of_duration() {
-        assert_eq!(plan_chunk_windows(300_000).len(), 1);
-        assert_eq!(plan_chunk_windows(300_001).len(), 2);
-        assert_eq!(plan_chunk_windows(600_000).len(), 2);
-        assert_eq!(plan_chunk_windows(600_001).len(), 3);
-    }
-
-    #[test]
-    fn interior_keep_drops_overlap_regions_after_absolute_offset() {
-        // Window 2's clip runs 580s..920s. A segment is kept only if its ABSOLUTE start
-        // (chunk-relative + clip_start) lands in the nominal interior [600s, 900s).
-        let clip_start = 580_000u64;
-        let (nominal_start, nominal_end) = (600_000u64, 900_000u64);
-        let kept = |relative_from: u64| {
-            let absolute = relative_from + clip_start;
-            absolute >= nominal_start && absolute < nominal_end
-        };
-        assert!(kept(25_000), "605s is interior → kept");
-        assert!(!kept(5_000), "585s is leading overlap → dropped");
-        assert!(!kept(345_000), "925s is trailing overlap → dropped");
-        assert_eq!(25_000u64 + clip_start, 605_000, "offset is exact addition");
-    }
-
-    #[test]
     fn cap_details_limits_a_giant_dump() {
         let dump = "x".repeat(5000);
         let capped = cap_details(dump);
@@ -661,5 +457,41 @@ mod tests {
             "capped details should stay bounded, got {} chars",
             capped.chars().count()
         );
+    }
+
+    /// Manual end-to-end check of the real engine (ffmpeg decode -> whisper-cli --vad ->
+    /// segment JSON). Ignored by default. Run with:
+    ///   WOU_CLI=".../whisper-cli.exe" WOU_MODEL=".../ggml-large-v3.bin" \
+    ///   WOU_VAD=".../ggml-silero-v6.2.0.bin" WOU_FFMPEG=".../ffmpeg.exe" \
+    ///   WOU_AUDIO=".../clip.mp3" WOU_LANG=ja \
+    ///   cargo test --release end_to_end_vad -- --ignored --nocapture
+    #[test]
+    #[ignore = "manual: needs local cli + models + ffmpeg + audio"]
+    fn end_to_end_vad() {
+        let request = WhisperTranscriptionRequest {
+            cli_path: PathBuf::from(std::env::var("WOU_CLI").expect("WOU_CLI")),
+            model_path: PathBuf::from(std::env::var("WOU_MODEL").expect("WOU_MODEL")),
+            vad_model_path: PathBuf::from(std::env::var("WOU_VAD").expect("WOU_VAD")),
+            audio_path: PathBuf::from(std::env::var("WOU_AUDIO").expect("WOU_AUDIO")),
+            ffmpeg_path: PathBuf::from(std::env::var("WOU_FFMPEG").expect("WOU_FFMPEG")),
+            language: std::env::var("WOU_LANG").unwrap_or_default(),
+            duration_ms: 0,
+        };
+        let result = run_whisper_transcription(&request, |percent| {
+            if percent % 25 == 0 {
+                eprintln!("progress {percent}%");
+            }
+        })
+        .expect("transcription should succeed");
+        let json = fs::read_to_string(&result.json_path).expect("json written");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        let segments = parsed["transcription"].as_array().expect("segments array");
+        eprintln!("RESULT segments={}", segments.len());
+        for seg in segments.iter().take(5) {
+            eprintln!("  [{}->{}] {}", seg["offsets"]["from"], seg["offsets"]["to"], seg["text"]);
+        }
+        assert!(!segments.is_empty());
+        let _ = fs::remove_file(&result.json_path);
+        let _ = fs::remove_file(&result.transcript_path);
     }
 }

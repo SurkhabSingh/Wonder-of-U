@@ -103,22 +103,6 @@ pub(crate) fn normalize_settings<R: Runtime>(
             } else {
                 language.to_string()
             },
-            engine: {
-                let engine = settings.whisper.engine.trim();
-                if engine.is_empty() {
-                    "sherpa".into()
-                } else {
-                    engine.to_string()
-                }
-            },
-            sherpa_model_choice: {
-                let choice = settings.whisper.sherpa_model_choice.trim();
-                if choice.is_empty() {
-                    "large-v3".into()
-                } else {
-                    choice.to_string()
-                }
-            },
         },
         anki: AnkiSettings {
             deck_name: settings.anki.deck_name.trim().to_string(),

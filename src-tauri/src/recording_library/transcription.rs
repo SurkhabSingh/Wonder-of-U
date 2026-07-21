@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::Mutex,
 };
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -11,45 +11,11 @@ use crate::{
     app_state::{derive_transcript_language_from_path, sanitize_recording_name},
     app_types::{
         transcript_language_key, RecentRecording, RecordingActionItem, RecordingBatchResult,
-        RecordingSegment, RecordingTranscript, SharedPersistedState,
+        RecordingSegment, RecordingTranscript, SharedPersistedState, WHISPER_VAD_MODEL_FILE,
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
-    sherpa::{run_sherpa_transcription, sherpa_vad_model_path, SherpaTranscriptionRequest},
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
-
-/// Maps the app's language setting to a Whisper language code: the app's `"auto"` (and
-/// empty) both mean auto-detect, which Whisper expects as `""`.
-fn sherpa_language_code(language: &str) -> String {
-    let trimmed = language.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
-        String::new()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// `whisper-server` lives next to `whisper-cli` in the managed Whisper runtime; the sherpa
-/// engine runs the ggml model through it (loaded once) for full-quality text.
-fn whisper_server_sibling(cli_path: &Path) -> PathBuf {
-    let name = if cfg!(windows) {
-        "whisper-server.exe"
-    } else {
-        "whisper-server"
-    };
-    cli_path
-        .parent()
-        .map(|dir| dir.join(name))
-        .unwrap_or_else(|| PathBuf::from(name))
-}
-
-/// Recognizer thread count: most cores, leaving two free so the machine stays responsive.
-/// (Phase 2 makes this a user-facing CPU-usage setting.)
-fn transcription_thread_count() -> i32 {
-    std::thread::available_parallelism()
-        .map(|cores| cores.get().saturating_sub(2).max(1))
-        .unwrap_or(4) as i32
-}
 
 use super::{actions::auto_translate_after_transcription, update_recent_recording};
 
@@ -464,21 +430,10 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             .map_err(|_| "Could not inspect transcription settings.".to_string())?;
         persisted.settings.clone()
     };
-    // ffmpeg is needed by both engines (sherpa decodes to 16 kHz mono; whisper-cli chunks
-    // long audio), so resolve it up front.
-    let ffmpeg_path = detect_local_ffmpeg(&settings)
-        .executable_path
-        .map(PathBuf::from);
     let language = transcript_language_key(&settings.whisper.language);
 
-    // Both engines rely on the managed Whisper runtime + ggml model: the legacy path runs
-    // whisper-cli directly; the sherpa engine runs the same ggml model through whisper-server
-    // (loaded once) with Silero VAD for drift-free timing. So Whisper must be ready either way.
-    let use_sherpa = {
-        let engine = settings.whisper.engine.trim();
-        engine.is_empty() || engine.eq_ignore_ascii_case("sherpa")
-    };
-
+    // The engine decodes with ffmpeg, then runs whisper-cli with its built-in Silero VAD, so
+    // the managed Whisper runtime + ggml model, ffmpeg, and the VAD model must all be present.
     let whisper_detection = refresh_whisper_detection_state(app)?;
     if whisper_detection.status != "ready" {
         return Ok(RecordingBatchResult {
@@ -490,11 +445,10 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     }
     let cli_path = PathBuf::from(whisper_detection.executable_path.clone().unwrap_or_default());
     let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
-    let vad_model_path = sherpa_vad_model_path(Path::new(&settings.asset_directory));
-    let whisper_server_path = whisper_server_sibling(&cli_path);
 
-    if use_sherpa {
-        if ffmpeg_path.is_none() {
+    let ffmpeg_path = match detect_local_ffmpeg(&settings).executable_path {
+        Some(path) => PathBuf::from(path),
+        None => {
             return Ok(RecordingBatchResult {
                 status: "unavailable".into(),
                 message: "FFmpeg is required for transcription. Download it from Settings.".into(),
@@ -502,26 +456,20 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 bootstrap: build_app_bootstrap(app)?,
             });
         }
-        if !vad_model_path.exists() {
-            return Ok(RecordingBatchResult {
-                status: "unavailable".into(),
-                message:
-                    "The speech-detector model has not been downloaded yet. Download it from Settings."
-                        .into(),
-                items: Vec::new(),
-                bootstrap: build_app_bootstrap(app)?,
-            });
-        }
-        if !whisper_server_path.exists() {
-            return Ok(RecordingBatchResult {
-                status: "unavailable".into(),
-                message:
-                    "whisper-server is missing from the Whisper runtime. Re-download the runtime from Settings."
-                        .into(),
-                items: Vec::new(),
-                bootstrap: build_app_bootstrap(app)?,
-            });
-        }
+    };
+
+    let vad_model_path = Path::new(&settings.asset_directory)
+        .join("models")
+        .join(WHISPER_VAD_MODEL_FILE);
+    if !vad_model_path.exists() {
+        return Ok(RecordingBatchResult {
+            status: "unavailable".into(),
+            message:
+                "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
+                    .into(),
+            items: Vec::new(),
+            bootstrap: build_app_bootstrap(app)?,
+        });
     }
     let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
@@ -553,39 +501,21 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         })?;
 
         let app_progress = app.clone();
-        let transcription = if use_sherpa {
-            run_sherpa_transcription(
-                &SherpaTranscriptionRequest {
-                    vad_model_path: vad_model_path.clone(),
-                    whisper_server_path: whisper_server_path.clone(),
-                    ggml_model_path: model_path.clone(),
-                    audio_path: PathBuf::from(&recording.file_path),
-                    ffmpeg_path: ffmpeg_path.clone().unwrap_or_default(),
-                    language: sherpa_language_code(&settings.whisper.language),
-                    num_threads: transcription_thread_count(),
-                    duration_ms: recording.duration_ms,
-                },
-                move |percent| {
-                    let _ = app_progress.emit("transcription-progress", percent);
-                },
-                Arc::new(AtomicBool::new(false)),
-            )
-        } else {
-            run_whisper_transcription(
-                &WhisperTranscriptionRequest {
-                    cli_path: cli_path.clone(),
-                    model_path: model_path.clone(),
-                    audio_path: PathBuf::from(&recording.file_path),
-                    language: settings.whisper.language.clone(),
-                    ffmpeg_path: ffmpeg_path.clone(),
-                    duration_ms: recording.duration_ms,
-                },
-                move |percent| {
-                    let _ = app_progress.emit("transcription-progress", percent);
-                },
-            )
-        };
-        let result = transcription.and_then(|result| {
+        let result = run_whisper_transcription(
+            &WhisperTranscriptionRequest {
+                cli_path: cli_path.clone(),
+                model_path: model_path.clone(),
+                vad_model_path: vad_model_path.clone(),
+                audio_path: PathBuf::from(&recording.file_path),
+                language: settings.whisper.language.clone(),
+                ffmpeg_path: ffmpeg_path.clone(),
+                duration_ms: recording.duration_ms,
+            },
+            move |percent| {
+                let _ = app_progress.emit("transcription-progress", percent);
+            },
+        )
+        .and_then(|result| {
             apply_transcription_result_to_recording(
                 app,
                 &original_file_path,

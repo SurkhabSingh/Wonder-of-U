@@ -5,7 +5,10 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     app_runtime::{log_event, update_shell_snapshot},
     app_state::write_persisted_data,
-    app_types::{whisper_model_spec, SharedPersistedState, SharedShellState},
+    app_types::{
+        whisper_model_spec, SharedPersistedState, SharedShellState, WHISPER_VAD_MODEL_FILE,
+        WHISPER_VAD_MODEL_URL,
+    },
     runtime_assets::refresh_whisper_detection_state,
     transcription::verify_whisper_model,
 };
@@ -103,6 +106,21 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
                         &target_path,
                         "model",
                         &format!("the {} Whisper model", model_spec.label),
+                    )?;
+                }
+                // The engine also needs whisper.cpp's built-in Silero VAD model (tiny). Fetch
+                // it into the same models directory so one download provisions both.
+                let vad_target = target_path
+                    .parent()
+                    .map(|dir| dir.join(WHISPER_VAD_MODEL_FILE))
+                    .unwrap_or_else(|| PathBuf::from(WHISPER_VAD_MODEL_FILE));
+                if !vad_target.exists() {
+                    download_file_to_path_with_progress(
+                        &app_handle,
+                        WHISPER_VAD_MODEL_URL,
+                        &vad_target,
+                        "model",
+                        "the speech-detector (VAD) model",
                     )?;
                 }
                 verify_whisper_model(&target_path)?;

@@ -102,11 +102,16 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                         model_path: PathBuf::from(
                             whisper_detection.model_path.clone().unwrap_or_default(),
                         ),
+                        vad_model_path: std::path::Path::new(&settings.asset_directory)
+                            .join("models")
+                            .join(crate::app_types::WHISPER_VAD_MODEL_FILE),
                         audio_path: PathBuf::from(&recent_recording.file_path),
                         language: settings.whisper.language.clone(),
-                        ffmpeg_path: detect_local_ffmpeg(&settings)
-                            .executable_path
-                            .map(PathBuf::from),
+                        ffmpeg_path: PathBuf::from(
+                            detect_local_ffmpeg(&settings)
+                                .executable_path
+                                .unwrap_or_default(),
+                        ),
                         duration_ms: recent_recording.duration_ms,
                     }, move |percent| {
                         let _ = app_progress.emit("transcription-progress", percent);
