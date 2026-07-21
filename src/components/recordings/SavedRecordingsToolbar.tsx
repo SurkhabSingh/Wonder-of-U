@@ -127,7 +127,6 @@ export function SavedRecordingsToolbar({
                   untranscribedRecordings.map((recording) => recording.filePath),
                 )
               }
-              disabled={busyAction === "transcribeRecording"}
             >
               Transcribe All
             </button>

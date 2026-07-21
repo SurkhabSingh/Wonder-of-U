@@ -103,6 +103,14 @@ pub(crate) fn normalize_settings<R: Runtime>(
             } else {
                 language.to_string()
             },
+            cpu_usage: {
+                let v = settings.whisper.cpu_usage.trim();
+                if v.is_empty() {
+                    "balanced".into()
+                } else {
+                    v.to_string()
+                }
+            },
         },
         anki: AnkiSettings {
             deck_name: settings.anki.deck_name.trim().to_string(),

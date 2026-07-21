@@ -71,6 +71,12 @@ pub(crate) fn default_whisper_runtime_version() -> String {
     RECOMMENDED_WHISPER_RUNTIME_VERSION.to_string()
 }
 
+/// Default CPU-usage preference for transcription: `"balanced"` uses about half the cores.
+/// The other accepted values are `"low"` and `"high"` (see `transcription_thread_count`).
+fn default_cpu_usage() -> String {
+    "balanced".into()
+}
+
 pub(crate) fn whisper_model_spec(model_id: &str) -> &'static WhisperModelSpec {
     WHISPER_MODEL_SPECS
         .iter()
@@ -200,6 +206,10 @@ pub(crate) struct WhisperSettings {
     #[serde(default = "default_whisper_model_choice")]
     pub(crate) model_choice: String,
     pub(crate) language: String,
+    /// How much of the machine transcription may use: `"low" | "balanced" | "high"`. Maps to
+    /// a whisper-cli `-t` thread count via `transcription_thread_count`.
+    #[serde(default = "default_cpu_usage")]
+    pub(crate) cpu_usage: String,
 }
 
 impl Default for WhisperSettings {
@@ -210,6 +220,7 @@ impl Default for WhisperSettings {
             runtime_version: default_whisper_runtime_version(),
             model_choice: default_whisper_model_id().into(),
             language: "auto".into(),
+            cpu_usage: default_cpu_usage(),
         }
     }
 }

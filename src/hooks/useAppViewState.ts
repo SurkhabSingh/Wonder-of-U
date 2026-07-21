@@ -83,23 +83,24 @@ export function useAppViewState({
   const isRecording = bootstrap.shell.phase === "recording";
   const isSaving = bootstrap.shell.phase === "saving";
   const isTranscribing = bootstrap.shell.phase === "transcribing";
+  // `isTranscribing` is the recorder shell's auto-transcribe-after-recording
+  // phase, which still blocks. Manual/re-transcribe now runs through the
+  // non-blocking transcription queue, so it no longer raises this overlay.
   const recorderBusy =
     isRecording ||
     isSaving ||
     isTranscribing ||
     busyAction === "start" ||
-    busyAction === "stop" ||
-    busyAction === "transcribeRecording";
+    busyAction === "stop";
   const showBusyOverlay =
     isSaving ||
     isTranscribing ||
-    busyAction === "transcribeRecording" ||
     busyAction === "translateRecording" ||
     busyAction === "pushAnki" ||
     busyAction === "addFurigana" ||
     busyAction === "deleteRecording" ||
     busyAction === "convertMp3";
-  const busyOverlayLabel = isTranscribing || busyAction === "transcribeRecording"
+  const busyOverlayLabel = isTranscribing
     ? "Transcribing saved audio..."
     : busyAction === "translateRecording"
       ? "Translating transcript..."

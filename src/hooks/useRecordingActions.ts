@@ -380,38 +380,9 @@ export function useRecordingActions({
     ],
   );
 
-  const transcribeRecordings = useCallback(
-    // `force` bypasses the has-transcript skip so an existing recording can be
-    // re-run for the SAME language to backfill the segments sidecar.
-    async (filePaths: string[], force = false) => {
-      try {
-        setBusyAction("transcribeRecording");
-        await persistSettingsIfNeeded();
-        const result = await invoke<RecordingBatchResult>("transcribe_recordings", {
-          filePaths,
-          force,
-        });
-        applyBootstrap(result.bootstrap);
-        const message = formatBatchToastMessage("transcribe", result);
-        setRecordingActionMessage(message);
-        notifyBatchResult(result, message);
-      } catch (error) {
-        setLoadError(
-          errorMessage(error, "The recordings could not be transcribed."),
-        );
-      } finally {
-        setBusyAction(null);
-      }
-    },
-    [
-      applyBootstrap,
-      notifyBatchResult,
-      persistSettingsIfNeeded,
-      setBusyAction,
-      setLoadError,
-      setRecordingActionMessage,
-    ],
-  );
+  // Transcription is no longer a blocking action here — it runs through the
+  // frontend-driven, non-blocking `useTranscriptionQueue` (mirroring the YouTube
+  // import queue) so the app stays usable while whisper-cli works.
 
   const translateRecordings = useCallback(
     // `force` bypasses the has-translation skip so a recording that is already
@@ -504,7 +475,6 @@ export function useRecordingActions({
     mineSegment,
     playRecording,
     pushRecordingsToAnki,
-    transcribeRecordings,
     translateRecordings,
   };
 }

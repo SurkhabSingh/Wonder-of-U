@@ -1,9 +1,15 @@
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import type { RecordingFilterTab } from "../../lib/navigation";
-import type { BusyAction, RecentRecording, RecordingFilter } from "../../types";
+import type {
+  BusyAction,
+  RecentRecording,
+  RecordingFilter,
+  TranscriptionQueueItem,
+} from "../../types";
 import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { RecordingCard } from "./RecordingCard";
 import { SavedRecordingsToolbar } from "./SavedRecordingsToolbar";
+import { TranscriptionQueuePanel } from "./TranscriptionQueuePanel";
 
 type RecordingAction = (filePaths: string[]) => void | Promise<void>;
 type SingleRecordingAction = (filePath: string) => void | Promise<void>;
@@ -64,6 +70,14 @@ export function SavedRecordingsPage({
   onDeleteRecording,
   onDeleteRecordings,
   onView,
+  transcriptionItems,
+  transcriptionActiveProgress,
+  transcriptionCurrentIndex,
+  transcriptionTotal,
+  transcriptionFinishedCount,
+  onCancelTranscription,
+  onRemoveTranscription,
+  onClearFinishedTranscription,
 }: {
   recordingActionMessage: string;
   recentRecordings: RecentRecording[];
@@ -114,6 +128,16 @@ export function SavedRecordingsPage({
   onDeleteRecording: SingleRecordingAction;
   onDeleteRecordings: RecordingAction;
   onView: SingleRecordingAction;
+  // Non-blocking transcription queue: state + controls threaded from App, the
+  // same shape as the Home YouTube queue.
+  transcriptionItems: TranscriptionQueueItem[];
+  transcriptionActiveProgress: number | null;
+  transcriptionCurrentIndex: number;
+  transcriptionTotal: number;
+  transcriptionFinishedCount: number;
+  onCancelTranscription: () => void;
+  onRemoveTranscription: (id: string) => void;
+  onClearFinishedTranscription: () => void;
 }) {
   const selectedRecordingSet = new Set(selectedRecordings);
   const useBatchActionsOnly = visibleSelectedPaths.length > 1;
@@ -202,6 +226,17 @@ export function SavedRecordingsPage({
             onClearSelection={onClearSelection}
           />
         ) : null}
+
+        <TranscriptionQueuePanel
+          items={transcriptionItems}
+          activeProgress={transcriptionActiveProgress}
+          currentIndex={transcriptionCurrentIndex}
+          total={transcriptionTotal}
+          finishedCount={transcriptionFinishedCount}
+          onCancel={onCancelTranscription}
+          onRemove={onRemoveTranscription}
+          onClearFinished={onClearFinishedTranscription}
+        />
 
         {recentRecordings.length === 0 ? (
           <p className="empty-state">No recordings yet</p>

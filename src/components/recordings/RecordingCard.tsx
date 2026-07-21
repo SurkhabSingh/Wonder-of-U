@@ -147,8 +147,10 @@ export function RecordingCard({
   const primaryAction = !hasSelectedTranscript
     ? {
         label: "Transcribe",
+        // Enqueues into the non-blocking transcription queue — stays enabled
+        // (re-clicks dedupe on file path), like the YouTube queue's Add.
         onClick: () => void onTranscribe([recording.filePath]),
-        disabled: busyAction === "transcribeRecording",
+        disabled: false,
       }
     : recording.transcriptPath && recording.translationPath === null
       ? {
@@ -319,7 +321,6 @@ export function RecordingCard({
                 <DropdownMenuPrimitive.Item
                   className="action-menu-item"
                   onSelect={() => void onTranscribe([recording.filePath])}
-                  disabled={busyAction === "transcribeRecording"}
                 >
                   Transcribe in {selectedLanguageLabel}
                 </DropdownMenuPrimitive.Item>

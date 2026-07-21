@@ -113,7 +113,32 @@ export function ModelSettingsPage({
             }
           />
         </label>
+
+        <label className="field">
+          <span>CPU usage during transcription</span>
+          <ThemedSelect
+            value={settingsDraft.whisper.cpuUsage || "balanced"}
+            options={[
+              { value: "low", label: "Low" },
+              { value: "balanced", label: "Balanced" },
+              { value: "high", label: "High" },
+            ]}
+            placeholder="CPU usage"
+            onChange={(nextValue) =>
+              onUpdateSettings({
+                whisper: {
+                  cpuUsage: nextValue,
+                },
+              })
+            }
+          />
+        </label>
       </div>
+
+      <p className="microcopy">
+        Higher uses more CPU cores for faster transcription; lower uses fewer, so
+        the machine stays responsive while it runs.
+      </p>
 
       <div
         className="model-summary"

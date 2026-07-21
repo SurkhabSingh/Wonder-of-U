@@ -2986,6 +2986,109 @@ input::placeholder {
   line-height: 1;
 }
 
+/* Transcription queue — the non-blocking, per-file queue that replaces the old
+   blocking transcribe overlay. Mirrors the Home YouTube queue: a flat list of
+   status rows, the one active row carrying a live progress bar + Cancel. Sits
+   above the Library list inside the recent panel. */
+.transcription-queue {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.transcription-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.transcription-queue-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-mid);
+}
+
+/* Sized to match the active row's Cancel so the two ghosts read as one weight. */
+.transcription-queue-clear {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
+  line-height: 1.8;
+}
+
+/* "Transcribing N of M…" line — a quiet running total above the queue list. */
+.transcription-queue-progress {
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+}
+
+.transcription-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.transcription-queue-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.transcription-queue-glyph {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.transcription-queue-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+/* The single active row drops a lightweight progress bar + Cancel onto its own
+   full-width line below the glyph + title. The bar is live feedback only —
+   completion is the awaited invoke resolving, not this hitting 100. */
+.transcription-queue-active {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.transcription-queue-active .progress-track {
+  flex: 1 1 auto;
+}
+
+.transcription-queue-cancel {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
+  line-height: 1.8;
+}
+
+.transcription-queue-remove {
+  min-height: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
 /* Library name search — sits in the panel header. */
 .library-search {
   flex: 0 1 220px;

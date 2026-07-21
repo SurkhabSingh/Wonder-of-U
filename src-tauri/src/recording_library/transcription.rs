@@ -1,10 +1,13 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, EventId, Listener, Manager, Runtime};
 
 use crate::{
     app_runtime::{build_app_bootstrap, log_event, update_shell_snapshot},
@@ -14,7 +17,10 @@ use crate::{
         RecordingSegment, RecordingTranscript, SharedPersistedState, WHISPER_VAD_MODEL_FILE,
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
-    transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
+    transcription::{
+        run_whisper_transcription, transcription_thread_count, WhisperTranscriptionRequest,
+        TRANSCRIPTION_CANCELLED,
+    },
 };
 
 use super::{actions::auto_translate_after_transcription, update_recent_recording};
@@ -417,6 +423,48 @@ fn move_file(source: &Path, target: &Path) -> Result<(), String> {
     }
 }
 
+/// Owns the batch transcription's `transcription-cancel` listener for the whole run.
+///
+/// Registered before the recordings loop so a Cancel clicked at any point during the batch —
+/// including while a long whisper-cli pass is mid-flight — reaches the flag. Mirrors the
+/// yt-dlp import's `CancelListener`: `Drop` unregisters the `once` handler so a batch that
+/// finished normally never leaves it (and the `Arc` it pins) registered for the session.
+struct CancelListener<R: Runtime> {
+    app: AppHandle<R>,
+    event_id: EventId,
+    flag: Arc<AtomicBool>,
+}
+
+impl<R: Runtime> CancelListener<R> {
+    fn register(app: &AppHandle<R>) -> Self {
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag_for_listener = Arc::clone(&flag);
+        let event_id = app.once("transcription-cancel", move |_| {
+            flag_for_listener.store(true, Ordering::Relaxed);
+        });
+
+        Self {
+            app: app.clone(),
+            event_id,
+            flag,
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+
+    fn flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.flag)
+    }
+}
+
+impl<R: Runtime> Drop for CancelListener<R> {
+    fn drop(&mut self) {
+        self.app.unlisten(self.event_id);
+    }
+}
+
 pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_paths: Vec<String>,
@@ -475,7 +523,26 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     let total = recordings.len();
     let mut items = Vec::new();
 
+    // Register the Cancel listener before the loop so a Cancel clicked at any point during
+    // the batch — including mid-pass — reaches the flag; `Drop` unregisters it on return.
+    let cancel_listener = CancelListener::register(app);
+    // The CPU-usage preference does not change during a batch, so resolve the whisper-cli
+    // thread count once and reuse it for every recording.
+    let thread_count = transcription_thread_count(&settings.whisper.cpu_usage);
+
     for (index, recording) in recordings.into_iter().enumerate() {
+        // A Cancel that arrived (during a previous item's pass, or before this one started)
+        // stops the batch here: mark this item cancelled and leave the rest unprocessed.
+        if cancel_listener.is_cancelled() {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "cancelled".into(),
+                message: "Transcription cancelled.".into(),
+                note_id: recording.anki_note_id,
+            });
+            break;
+        }
+
         if !force && recording.has_transcript_for_language(&language) {
             items.push(RecordingActionItem {
                 file_path: recording.file_path,
@@ -510,7 +577,9 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 language: settings.whisper.language.clone(),
                 ffmpeg_path: ffmpeg_path.clone(),
                 duration_ms: recording.duration_ms,
+                thread_count,
             },
+            cancel_listener.flag(),
             move |percent| {
                 let _ = app_progress.emit("transcription-progress", percent);
             },
@@ -560,6 +629,17 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 });
             }
             Err(error) => {
+                // A cancellation surfaces as this exact error from the engine: treat it as a
+                // clean stop (not a failure), mark the item, and leave the rest unprocessed.
+                if error == TRANSCRIPTION_CANCELLED {
+                    items.push(RecordingActionItem {
+                        file_path: original_file_path,
+                        status: "cancelled".into(),
+                        message: "Transcription cancelled.".into(),
+                        note_id: None,
+                    });
+                    break;
+                }
                 log_event(
                     app,
                     "ERROR",

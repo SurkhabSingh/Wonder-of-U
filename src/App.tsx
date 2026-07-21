@@ -16,7 +16,9 @@ import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
 import { useSetupActions } from "./hooks/useSetupActions";
 import { useTranscriptionProgress } from "./hooks/useTranscriptionProgress";
+import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import { useYoutubeQueue } from "./hooks/useYoutubeQueue";
+import { fileNameFromPath } from "./lib/format";
 import type {
   AppPage,
   BusyAction,
@@ -237,7 +239,6 @@ function App() {
     importYoutube,
     mineSegment,
     pushRecordingsToAnki,
-    transcribeRecordings,
     translateRecordings,
   } = useRecordingActions({
     applyBootstrap,
@@ -260,6 +261,33 @@ function App() {
       }
     },
   });
+
+  // Sequential frontend queue over the single-file transcribe command, so
+  // transcription runs NON-blocking (the app stays usable while this queue shows
+  // progress) instead of the old full-screen busy overlay. Each item applies its
+  // returned bootstrap, so the Library refreshes as transcripts land.
+  const transcriptionQueue = useTranscriptionQueue({
+    applyBootstrap,
+    persistSettingsIfNeeded,
+  });
+
+  // Adapt the shared `(filePaths, force)` action shape the Transcribe buttons use
+  // to the queue's enqueue, stamping each row with the recording's display name.
+  const enqueueTranscriptions = useCallback(
+    (filePaths: string[], force = false) => {
+      const files = filePaths.map((filePath) => {
+        const recording = bootstrap.recentRecordings.find(
+          (candidate) => candidate.filePath === filePath,
+        );
+        return {
+          filePath,
+          title: recording?.fileName ?? fileNameFromPath(filePath),
+        };
+      });
+      transcriptionQueue.enqueue(files, force);
+    },
+    [bootstrap.recentRecordings, transcriptionQueue],
+  );
 
   // Sentence mining needs a mapped expression field to write to and a reachable
   // Anki. `offline` is the only catalog status that definitively means "not
@@ -409,7 +437,7 @@ function App() {
               onToggleSelection={toggleRecordingSelection}
               onClearSelection={clearRecordingSelection}
               onOpenRecordingMenuChange={setOpenRecordingMenuPath}
-              onTranscribe={transcribeRecordings}
+              onTranscribe={enqueueTranscriptions}
               onPushToAnki={pushRecordingsToAnki}
               onAddFurigana={addFuriganaToAnki}
               onTranslate={translateRecordings}
@@ -417,6 +445,14 @@ function App() {
               onDeleteRecording={deleteRecording}
               onDeleteRecordings={deleteRecordings}
               onView={openTranscriptViewer}
+              transcriptionItems={transcriptionQueue.items}
+              transcriptionActiveProgress={transcriptionQueue.activeProgress}
+              transcriptionCurrentIndex={transcriptionQueue.currentIndex}
+              transcriptionTotal={transcriptionQueue.total}
+              transcriptionFinishedCount={transcriptionQueue.finishedCount}
+              onCancelTranscription={transcriptionQueue.cancelActive}
+              onRemoveTranscription={transcriptionQueue.remove}
+              onClearFinishedTranscription={transcriptionQueue.clearFinished}
             />
           ) : null}
 
@@ -426,9 +462,13 @@ function App() {
                 recording={viewingRecording}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
-                  void transcribeRecordings([viewingRecording.filePath], force)
+                  enqueueTranscriptions([viewingRecording.filePath], force)
                 }
-                isReTranscribing={busyAction === "transcribeRecording"}
+                isReTranscribing={transcriptionQueue.items.some(
+                  (item) =>
+                    item.filePath === viewingRecording.filePath &&
+                    (item.status === "queued" || item.status === "active"),
+                )}
                 onReTranslate={(force) =>
                   void translateRecordings([viewingRecording.filePath], force)
                 }

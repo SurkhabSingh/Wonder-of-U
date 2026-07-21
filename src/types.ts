@@ -56,6 +56,9 @@ export type WhisperSettings = {
   runtimeVersion: string;
   modelChoice: string;
   language: string;
+  // How much of the machine transcription may use: "low" | "balanced" | "high".
+  // The backend maps it to a whisper-cli thread count; "balanced" is the default.
+  cpuUsage: string;
 };
 
 export type TranslationProvider = "google-translate" | "deepl";
@@ -256,6 +259,18 @@ export type YoutubeQueueItem = {
   message?: string;
 };
 
+// One row in the Library transcription queue. The backend transcribe command is
+// single-file; this is a frontend-only sequential queue built on top of it, so
+// transcription runs NON-blocking (like the YouTube import queue) instead of the
+// old full-screen busy overlay.
+export type TranscriptionQueueItem = {
+  id: string;
+  filePath: string;
+  title?: string;
+  status: "queued" | "active" | "done" | "failed" | "cancelled";
+  message?: string;
+};
+
 export type BusyAction =
   | "start"
   | "stop"
@@ -276,7 +291,6 @@ export type BusyAction =
   | "mineSegment"
   | "addFurigana"
   | "translateRecording"
-  | "transcribeRecording"
   | "convertMp3"
   | "importMedia"
   | null;

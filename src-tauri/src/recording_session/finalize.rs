@@ -14,7 +14,9 @@ use crate::{
         rename_recording_outputs_from_transcript, store_segments_sidecar,
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
-    transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
+    transcription::{
+        run_whisper_transcription, transcription_thread_count, WhisperTranscriptionRequest,
+    },
 };
 
 pub(super) fn finalize_recording_pipeline<R: Runtime>(
@@ -113,7 +115,8 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                                 .unwrap_or_default(),
                         ),
                         duration_ms: recent_recording.duration_ms,
-                    }, move |percent| {
+                        thread_count: transcription_thread_count(&settings.whisper.cpu_usage),
+                    }, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move |percent| {
                         let _ = app_progress.emit("transcription-progress", percent);
                     }) {
                         Ok(result) => {

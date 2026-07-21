@@ -74,7 +74,6 @@ export function SelectionActionBar({
           <ActionButton
             label="Transcribe"
             count={selectedUntranscribedRecordings.length}
-            disabled={busyAction === "transcribeRecording"}
             onClick={() => void onTranscribe(paths(selectedUntranscribedRecordings))}
           />
         ) : null}

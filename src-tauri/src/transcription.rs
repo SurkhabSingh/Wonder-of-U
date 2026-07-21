@@ -3,9 +3,12 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(target_os = "windows")]
@@ -17,6 +20,14 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// Cap a VAD speech region so whisper always gets a clip inside its 30 s window; longer
 /// continuous speech is auto-split by the VAD. Passed to `--vad-max-speech-duration-s`.
 const VAD_MAX_SPEECH_SECONDS: &str = "20";
+
+/// The error string a transcription returns once it has been cancelled. Callers compare
+/// against it to treat a Cancel as a clean stop rather than a failure.
+pub const TRANSCRIPTION_CANCELLED: &str = "transcription cancelled.";
+
+/// How often the wait wakes to re-read the cancel flag while whisper-cli's pipes are silent.
+/// This bounds how long Cancel can appear to do nothing. Mirrors the yt-dlp downloader.
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct WhisperTranscriptionRequest {
@@ -32,6 +43,10 @@ pub struct WhisperTranscriptionRequest {
     pub ffmpeg_path: PathBuf,
     /// Total audio duration in ms; passed through for the downstream segment tail-clamp.
     pub duration_ms: u64,
+    /// whisper-cli worker-thread count (`-t`), derived from the user's CPU-usage preference
+    /// via `transcription_thread_count`. Bounds how much of the machine a long transcription
+    /// consumes so it never maxes out the box.
+    pub thread_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +116,22 @@ fn hide_command_window(command: &mut Command) {
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+/// Maps the user's CPU-usage preference to a whisper-cli `-t` worker-thread count so a long
+/// transcription never has to max out the machine. `"high"` uses most cores but leaves a
+/// couple free, `"low"` uses about a quarter, and anything else (the `"balanced"` default)
+/// uses about half. Always at least one thread. whisper-cli defaults to 4 threads, which
+/// idles bigger CPUs, so we compute from the actual core count.
+pub(crate) fn transcription_thread_count(cpu_usage: &str) -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|c| c.get())
+        .unwrap_or(4);
+    match cpu_usage {
+        "high" => cores.saturating_sub(2).max(1),
+        "low" => (cores / 4).max(1),
+        _ => (cores / 2).max(1),
     }
 }
 
@@ -206,11 +237,18 @@ fn decode_to_wav_16k(ffmpeg_path: &Path, input: &Path) -> Result<PathBuf, String
 /// no-op-friendly hook; transcription never fails over it.
 pub fn run_whisper_transcription(
     request: &WhisperTranscriptionRequest,
+    cancel: Arc<AtomicBool>,
     on_progress: impl Fn(u8) + Send + 'static,
 ) -> Result<WhisperTranscriptionResult, String> {
     verify_whisper_cli(&request.cli_path)?;
     verify_whisper_model(&request.model_path)?;
     verify_whisper_vad_model(&request.vad_model_path)?;
+
+    // A Cancel that arrived before the decode started skips it entirely — there is no point
+    // decoding audio for a transcription that will never run.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(TRANSCRIPTION_CANCELLED.into());
+    }
 
     // Decode to the 16 kHz mono WAV whisper + Silero VAD want. The decoded WAV is a tracked
     // temp file cleaned up on every return path.
@@ -225,12 +263,15 @@ pub fn run_whisper_transcription(
         &wav_path,
         &request.language,
         &transcript_output_base(),
+        request.thread_count,
+        cancel,
         on_progress,
     )
 }
 
 /// One whisper-cli `--vad` pass over a single (already 16 kHz mono) WAV to
 /// `output_base.{txt,json}`. Assumes the caller already verified cli + model + vad model.
+#[allow(clippy::too_many_arguments)]
 fn run_whisper_once(
     cli_path: &Path,
     model_path: &Path,
@@ -238,6 +279,8 @@ fn run_whisper_once(
     audio_path: &Path,
     language: &str,
     output_base: &Path,
+    thread_count: usize,
+    cancel: Arc<AtomicBool>,
     on_progress: impl Fn(u8) + Send + 'static,
 ) -> Result<WhisperTranscriptionResult, String> {
     let transcript_path = PathBuf::from(format!("{}.txt", output_base.display()));
@@ -290,12 +333,11 @@ fn run_whisper_once(
         // stderr noise never touches the result.
         .arg("--print-progress");
 
-    // Use most cores but leave a couple free so the machine stays responsive during a long
-    // transcription. whisper-cli defaults to 4 threads, which idles bigger CPUs.
-    let threads = std::thread::available_parallelism()
-        .map(|cores| cores.get().saturating_sub(2).max(1))
-        .unwrap_or(4);
-    command.arg("-t").arg(threads.to_string());
+    // Worker-thread count from the user's CPU-usage preference (see
+    // `transcription_thread_count`): fewer threads keep the machine responsive during a long
+    // transcription, more finish it sooner. whisper-cli defaults to 4 threads, which idles
+    // bigger CPUs.
+    command.arg("-t").arg(thread_count.to_string());
 
     // Stop whisper's runaway repetition on non-vocal audio. `-mc 0` drops the cross-window
     // text context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
@@ -346,9 +388,14 @@ fn run_whisper_once(
         }
     });
 
+    // The stdout drain owns the `done` sender and never sends on it: dropping the sender when
+    // the drain hits EOF IS the signal that whisper-cli closed its pipes, so the wait below
+    // returns `Disconnected` the moment it exits. Mirrors the yt-dlp downloader.
+    let (done_sender, done_receiver) = mpsc::channel::<()>();
     let stdout_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let stdout_sink = Arc::clone(&stdout_buffer);
     let stdout_thread = thread::spawn(move || {
+        let _done_sender = done_sender;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             if let Ok(mut sink) = stdout_sink.lock() {
                 if sink.len() < 8192 {
@@ -359,9 +406,39 @@ fn run_whisper_once(
         }
     });
 
+    // Wake every tick to re-read the cancel flag regardless of whether the pipes said
+    // anything, so a Cancel lands even during whisper's long silent decode/VAD phases. The
+    // stderr drain still parses progress on its own thread throughout.
+    loop {
+        match done_receiver.recv_timeout(CANCEL_POLL_INTERVAL) {
+            // The drain thread dropped its sender: stdout hit EOF, so whisper-cli has closed
+            // its pipes and `wait` below will reap it immediately.
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if cancel.load(Ordering::Relaxed) {
+                    // Sweep the tree first, then kill the child directly as the backstop that
+                    // cannot fail to land, so `wait` below always returns. whisper-cli spawns
+                    // no grandchildren, so `child.kill()` alone would suffice — `taskkill /T`
+                    // is the robust backstop.
+                    kill_process_tree(child.id());
+                    let _ = child.kill();
+                    break;
+                }
+            }
+        }
+    }
+
+    // Reap on EVERY path — a killed child still has to be waited on — and only then join the
+    // drains, which end as soon as the reaped process's pipes close.
     let status = child.wait().map_err(|error| error.to_string())?;
     let _ = stderr_thread.join();
     let _ = stdout_thread.join();
+
+    // A Cancel reached the child (killed in the loop above and reaped by `wait`): report the
+    // cancellation rather than whisper's non-zero exit status or a missing transcript file.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(TRANSCRIPTION_CANCELLED.into());
+    }
 
     let stderr_text = stderr_buffer
         .lock()
@@ -413,6 +490,20 @@ fn run_whisper_once(
     })
 }
 
+/// Best-effort kill of the whole process tree rooted at `pid`. whisper-cli spawns no
+/// grandchildren, so a bare `child.kill()` already lands; `taskkill /T` is the robust
+/// backstop that also sweeps any child a future whisper build might spawn. Errors are
+/// swallowed: the process may already be gone, which is the desired end state.
+#[cfg(target_os = "windows")]
+fn kill_process_tree(pid: u32) {
+    let mut command = Command::new("taskkill");
+    hide_command_window(&mut command);
+    let _ = command.args(["/F", "/T", "/PID", &pid.to_string()]).output();
+}
+
+#[cfg(not(target_os = "windows"))]
+fn kill_process_tree(_pid: u32) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +550,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn transcription_thread_count_is_bounded_and_ordered() {
+        let low = transcription_thread_count("low");
+        let balanced = transcription_thread_count("balanced");
+        let high = transcription_thread_count("high");
+        // whisper-cli must always get at least one worker thread — never zero.
+        assert!(low >= 1, "low must be at least 1, got {low}");
+        assert!(balanced >= 1, "balanced must be at least 1, got {balanced}");
+        assert!(high >= 1, "high must be at least 1, got {high}");
+        // More CPU budget never means fewer threads.
+        assert!(low <= balanced, "low ({low}) must not exceed balanced ({balanced})");
+        assert!(balanced <= high, "balanced ({balanced}) must not exceed high ({high})");
+        // Any unrecognized value falls back to the balanced mapping.
+        assert_eq!(transcription_thread_count("nonsense"), balanced);
+    }
+
     /// Manual end-to-end check of the real engine (ffmpeg decode -> whisper-cli --vad ->
     /// segment JSON). Ignored by default. Run with:
     ///   WOU_CLI=".../whisper-cli.exe" WOU_MODEL=".../ggml-large-v3.bin" \
@@ -476,8 +583,9 @@ mod tests {
             ffmpeg_path: PathBuf::from(std::env::var("WOU_FFMPEG").expect("WOU_FFMPEG")),
             language: std::env::var("WOU_LANG").unwrap_or_default(),
             duration_ms: 0,
+            thread_count: transcription_thread_count("balanced"),
         };
-        let result = run_whisper_transcription(&request, |percent| {
+        let result = run_whisper_transcription(&request, Arc::new(AtomicBool::new(false)), |percent| {
             if percent % 25 == 0 {
                 eprintln!("progress {percent}%");
             }
