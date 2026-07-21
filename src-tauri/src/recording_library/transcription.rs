@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -14,8 +14,28 @@ use crate::{
         RecordingSegment, RecordingTranscript, SharedPersistedState,
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
+    sherpa::{resolve_sherpa_model_paths, run_sherpa_transcription, SherpaTranscriptionRequest},
     transcription::{run_whisper_transcription, WhisperTranscriptionRequest},
 };
+
+/// Maps the app's language setting to a sherpa/Whisper-ONNX language code: the app's
+/// `"auto"` (and empty) both mean auto-detect, which the ONNX recognizer expects as `""`.
+fn sherpa_language_code(language: &str) -> String {
+    let trimmed = language.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        String::new()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Recognizer thread count: most cores, leaving two free so the machine stays responsive.
+/// (Phase 2 makes this a user-facing CPU-usage setting.)
+fn transcription_thread_count() -> i32 {
+    std::thread::available_parallelism()
+        .map(|cores| cores.get().saturating_sub(2).max(1))
+        .unwrap_or(4) as i32
+}
 
 use super::{actions::auto_translate_after_transcription, update_recent_recording};
 
@@ -406,29 +426,59 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             .map_err(|_| "Could not inspect transcription settings.".to_string())?;
         persisted.settings.clone()
     };
-    let whisper_detection = refresh_whisper_detection_state(app)?;
-    if whisper_detection.status != "ready" {
-        return Ok(RecordingBatchResult {
-            status: "unavailable".into(),
-            message: format!("Whisper is not ready yet: {}", whisper_detection.message),
-            items: Vec::new(),
-            bootstrap: build_app_bootstrap(app)?,
-        });
-    }
-
-    let cli_path = PathBuf::from(
-        whisper_detection
-            .executable_path
-            .clone()
-            .unwrap_or_default(),
-    );
-    let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
-    // ffmpeg (when available) lets long recordings be transcribed in overlapping chunks so
-    // their timestamps stay accurate over the whole file; absent, a single pass is used.
+    // ffmpeg is needed by both engines (sherpa decodes to 16 kHz mono; whisper-cli chunks
+    // long audio), so resolve it up front.
     let ffmpeg_path = detect_local_ffmpeg(&settings)
         .executable_path
         .map(PathBuf::from);
     let language = transcript_language_key(&settings.whisper.language);
+
+    // Engine selection: sherpa (Silero VAD + Whisper ONNX, drift-free) by default, or the
+    // legacy whisper-cli path as a fallback. Each engine has its own readiness check.
+    let use_sherpa = {
+        let engine = settings.whisper.engine.trim();
+        engine.is_empty() || engine.eq_ignore_ascii_case("sherpa")
+    };
+    let sherpa_paths = resolve_sherpa_model_paths(
+        Path::new(&settings.asset_directory),
+        settings.whisper.sherpa_model_choice.trim(),
+    );
+
+    let mut cli_path = PathBuf::new();
+    let mut model_path = PathBuf::new();
+    if use_sherpa {
+        if ffmpeg_path.is_none() {
+            return Ok(RecordingBatchResult {
+                status: "unavailable".into(),
+                message: "FFmpeg is required for transcription. Download it from Settings.".into(),
+                items: Vec::new(),
+                bootstrap: build_app_bootstrap(app)?,
+            });
+        }
+        if !sherpa_paths.all_present() {
+            return Ok(RecordingBatchResult {
+                status: "unavailable".into(),
+                message:
+                    "The transcription model has not been downloaded yet. Download it from Settings."
+                        .into(),
+                items: Vec::new(),
+                bootstrap: build_app_bootstrap(app)?,
+            });
+        }
+    } else {
+        let whisper_detection = refresh_whisper_detection_state(app)?;
+        if whisper_detection.status != "ready" {
+            return Ok(RecordingBatchResult {
+                status: "unavailable".into(),
+                message: format!("Whisper is not ready yet: {}", whisper_detection.message),
+                items: Vec::new(),
+                bootstrap: build_app_bootstrap(app)?,
+            });
+        }
+        cli_path =
+            PathBuf::from(whisper_detection.executable_path.clone().unwrap_or_default());
+        model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
+    }
     let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
     let mut items = Vec::new();
@@ -459,20 +509,40 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         })?;
 
         let app_progress = app.clone();
-        let result = run_whisper_transcription(
-            &WhisperTranscriptionRequest {
-                cli_path: cli_path.clone(),
-                model_path: model_path.clone(),
-                audio_path: PathBuf::from(&recording.file_path),
-                language: settings.whisper.language.clone(),
-                ffmpeg_path: ffmpeg_path.clone(),
-                duration_ms: recording.duration_ms,
-            },
-            move |percent| {
-                let _ = app_progress.emit("transcription-progress", percent);
-            },
-        )
-        .and_then(|result| {
+        let transcription = if use_sherpa {
+            run_sherpa_transcription(
+                &SherpaTranscriptionRequest {
+                    vad_model_path: sherpa_paths.vad_model_path.clone(),
+                    encoder_path: sherpa_paths.encoder_path.clone(),
+                    decoder_path: sherpa_paths.decoder_path.clone(),
+                    tokens_path: sherpa_paths.tokens_path.clone(),
+                    audio_path: PathBuf::from(&recording.file_path),
+                    ffmpeg_path: ffmpeg_path.clone().unwrap_or_default(),
+                    language: sherpa_language_code(&settings.whisper.language),
+                    num_threads: transcription_thread_count(),
+                    duration_ms: recording.duration_ms,
+                },
+                move |percent| {
+                    let _ = app_progress.emit("transcription-progress", percent);
+                },
+                Arc::new(AtomicBool::new(false)),
+            )
+        } else {
+            run_whisper_transcription(
+                &WhisperTranscriptionRequest {
+                    cli_path: cli_path.clone(),
+                    model_path: model_path.clone(),
+                    audio_path: PathBuf::from(&recording.file_path),
+                    language: settings.whisper.language.clone(),
+                    ffmpeg_path: ffmpeg_path.clone(),
+                    duration_ms: recording.duration_ms,
+                },
+                move |percent| {
+                    let _ = app_progress.emit("transcription-progress", percent);
+                },
+            )
+        };
+        let result = transcription.and_then(|result| {
             apply_transcription_result_to_recording(
                 app,
                 &original_file_path,

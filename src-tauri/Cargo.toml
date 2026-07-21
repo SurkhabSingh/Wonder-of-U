@@ -30,6 +30,12 @@ wasapi = "0.23.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tiny_http = "0.12"
+# Frame-synchronous ASR (Silero VAD + Whisper ONNX) for drift-free, language-agnostic
+# transcription. `shared` (not the default `static`): the prebuilt static lib needs a
+# newer MSVC STL than the local toolchain provides, so we link the DLLs instead — the
+# build script copies onnxruntime.dll + sherpa-onnx-c-api.dll into target, and they are
+# bundled next to the exe (see tauri.conf.json bundle.resources).
+sherpa-onnx = { version = "1", default-features = false, features = ["shared"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10.1"
