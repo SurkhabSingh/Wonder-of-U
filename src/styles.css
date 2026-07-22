@@ -3144,7 +3144,8 @@ input::placeholder {
 }
 
 .now-playing-toggle,
-.now-playing-close {
+.now-playing-close,
+.now-playing-repeat {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -3171,12 +3172,52 @@ input::placeholder {
   border-color: var(--accent);
 }
 
-.now-playing-close {
+.now-playing-close,
+.now-playing-repeat {
   color: var(--text-subtle);
 }
 
-.now-playing-close:hover:not(:disabled) {
+.now-playing-close:hover:not(:disabled),
+.now-playing-repeat:hover:not(:disabled) {
   color: var(--text-strong);
+}
+
+/* Repeat-the-sentence toggle lights up in the accent when armed. */
+.now-playing-repeat.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-primary);
+}
+
+/* Keep the armed glyph readable on hover — the shared neutral hover would otherwise
+   repaint it with --text-strong on top of the accent fill (like the play toggle,
+   which only dims). */
+.now-playing-repeat.is-active:hover:not(:disabled) {
+  color: var(--on-primary);
+  opacity: 0.9;
+}
+
+/* Repeat + speed grouped as one "playback options" cluster, spaced a little tighter
+   than the bar's own gap so they read as a related pair. */
+.now-playing-options {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Speed control reuses the app's ThemedSelect, compacted to align with the 30px
+   transport buttons (auto width, inline in the bar). */
+.now-playing-speed-trigger {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .now-playing-name {

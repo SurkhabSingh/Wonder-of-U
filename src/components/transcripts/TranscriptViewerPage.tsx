@@ -512,6 +512,10 @@ export function TranscriptViewerPage({
           }
           onToggle={handleTogglePlayback}
           onSeek={handleSeekPlayback}
+          playbackRate={player.playbackRate}
+          onSetPlaybackRate={player.setPlaybackRate}
+          isRepeating={player.isRepeating}
+          onToggleRepeat={player.toggleRepeat}
         />
       )}
 

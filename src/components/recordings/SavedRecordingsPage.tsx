@@ -185,6 +185,8 @@ export function SavedRecordingsPage({
             onToggle={player.toggle}
             onSeek={player.seekMs}
             onStop={player.stop}
+            playbackRate={player.playbackRate}
+            onSetPlaybackRate={player.setPlaybackRate}
           />
         ) : null}
 

@@ -18,6 +18,7 @@ export function ThemedSelect({
   placeholder = "Select option",
   disabled = false,
   title,
+  triggerClassName,
 }: {
   value: string;
   options: SelectOption[];
@@ -25,6 +26,9 @@ export function ThemedSelect({
   placeholder?: string;
   disabled?: boolean;
   title?: string;
+  // Extra class on the trigger, so a caller can compact it (e.g. the player bar)
+  // without forking the component or its styled dropdown.
+  triggerClassName?: string;
 }) {
   return (
     <SelectPrimitive.Root
@@ -33,7 +37,7 @@ export function ThemedSelect({
       disabled={disabled}
     >
       <SelectPrimitive.Trigger
-        className="themed-select-trigger"
+        className={`themed-select-trigger${triggerClassName ? ` ${triggerClassName}` : ""}`}
         title={title}
         aria-label={placeholder}
       >
