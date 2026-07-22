@@ -81,6 +81,10 @@ fn default_audio_type() -> String {
     "speech".into()
 }
 
+fn default_clip_padding_ms() -> u64 {
+    250
+}
+
 pub(crate) fn whisper_model_spec(model_id: &str) -> &'static WhisperModelSpec {
     WHISPER_MODEL_SPECS
         .iter()
@@ -191,13 +195,28 @@ pub(crate) struct AnkiFieldMapping {
     pub(crate) position: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AnkiSettings {
     pub(crate) deck_name: String,
     pub(crate) note_type: String,
     #[serde(default)]
     pub(crate) fields: AnkiFieldMapping,
+    /// Milliseconds of audio padding added to each side of a mined sentence clip so it does
+    /// not cut the first/last syllable. Clamped to the file start on the low side.
+    #[serde(default = "default_clip_padding_ms")]
+    pub(crate) clip_padding_ms: u64,
+}
+
+impl Default for AnkiSettings {
+    fn default() -> Self {
+        Self {
+            deck_name: String::new(),
+            note_type: String::new(),
+            fields: AnkiFieldMapping::default(),
+            clip_padding_ms: default_clip_padding_ms(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

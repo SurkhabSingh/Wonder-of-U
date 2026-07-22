@@ -285,6 +285,45 @@ export function AnkiMappingSettingsPage({
       </div>
 
       <div className="info-note">
+        <label className="field">
+          <span>Mined clip padding</span>
+          <ThemedSelect
+            value={String(settingsDraft.anki.clipPaddingMs ?? 250)}
+            options={[
+              // Surface a hand-edited value that isn't one of the presets, so the
+              // dropdown reflects the active padding instead of an empty placeholder.
+              ...([0, 100, 250, 500, 750].includes(
+                settingsDraft.anki.clipPaddingMs ?? 250,
+              )
+                ? []
+                : [
+                    {
+                      value: String(settingsDraft.anki.clipPaddingMs),
+                      label: `${settingsDraft.anki.clipPaddingMs} ms`,
+                    },
+                  ]),
+              { value: "0", label: "None (0 ms)" },
+              { value: "100", label: "100 ms" },
+              { value: "250", label: "250 ms (default)" },
+              { value: "500", label: "500 ms" },
+              { value: "750", label: "750 ms" },
+            ]}
+            placeholder="Clip padding"
+            onChange={(nextValue) =>
+              onUpdateSettings({
+                anki: { clipPaddingMs: Number(nextValue) },
+              })
+            }
+          />
+        </label>
+        <p className="microcopy">
+          Extra audio kept on each side of a mined sentence&rsquo;s clip so it
+          doesn&rsquo;t cut the first or last syllable. Larger values add more lead-in
+          and tail; smaller values make tighter clips.
+        </p>
+      </div>
+
+      <div className="info-note">
         <label className="toggle inline-toggle">
           <input
             type="checkbox"

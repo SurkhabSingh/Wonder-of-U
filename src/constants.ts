@@ -281,6 +281,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         title: "",
         position: "",
       },
+      clipPaddingMs: 250,
     },
     features: {
       transcription: true,

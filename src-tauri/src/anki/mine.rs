@@ -30,10 +30,6 @@ use crate::{
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Padding added to each side of the requested segment so the clip does not clip
-/// the first or last syllable. Clamped to the start of the file on the low side.
-const SEGMENT_PADDING_MS: u64 = 250;
-
 fn hide_command_window(command: &mut Command) {
     #[cfg(target_os = "windows")]
     {
@@ -51,9 +47,15 @@ fn format_ffmpeg_timestamp(ms: u64) -> String {
 /// out of `input` into `output`. Kept pure so the ordering and timestamp
 /// formatting can be unit-tested without spawning ffmpeg. `-ss`/`-to` come before
 /// `-i` so ffmpeg seeks by keyframe before decoding.
-fn slice_ffmpeg_args(start_ms: u64, end_ms: u64, input: &str, output: &str) -> Vec<String> {
-    let start = start_ms.saturating_sub(SEGMENT_PADDING_MS);
-    let end = end_ms.saturating_add(SEGMENT_PADDING_MS);
+fn slice_ffmpeg_args(
+    start_ms: u64,
+    end_ms: u64,
+    padding_ms: u64,
+    input: &str,
+    output: &str,
+) -> Vec<String> {
+    let start = start_ms.saturating_sub(padding_ms);
+    let end = end_ms.saturating_add(padding_ms);
     vec![
         "-y".into(),
         "-nostdin".into(),
@@ -107,6 +109,7 @@ fn slice_segment_clip(
     command.args(slice_ffmpeg_args(
         start_ms,
         end_ms,
+        settings.anki.clip_padding_ms,
         &audio_path.display().to_string(),
         &clip_path.display().to_string(),
     ));
@@ -481,7 +484,7 @@ mod tests {
 
     #[test]
     fn slice_args_pad_the_window_and_order_seek_before_input() {
-        let args = slice_ffmpeg_args(1000, 2000, "in.wav", "out.mp3");
+        let args = slice_ffmpeg_args(1000, 2000, 250, "in.wav", "out.mp3");
 
         let ss = args.iter().position(|arg| arg == "-ss").expect("-ss present");
         let to = args.iter().position(|arg| arg == "-to").expect("-to present");
@@ -502,7 +505,7 @@ mod tests {
 
     #[test]
     fn slice_args_clamp_padding_at_the_start_of_the_file() {
-        let args = slice_ffmpeg_args(100, 500, "in.wav", "out.mp3");
+        let args = slice_ffmpeg_args(100, 500, 250, "in.wav", "out.mp3");
         let ss = args.iter().position(|arg| arg == "-ss").expect("-ss present");
         // 100ms - 250ms padding saturates to the start of the file.
         assert_eq!(args[ss + 1], "0.000");

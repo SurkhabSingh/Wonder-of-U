@@ -48,6 +48,8 @@ export type AnkiSettings = {
   deckName: string;
   noteType: string;
   fields: AnkiFieldMapping;
+  // Milliseconds of audio padding added to each side of a mined sentence clip.
+  clipPaddingMs: number;
 };
 
 export type WhisperSettings = {
