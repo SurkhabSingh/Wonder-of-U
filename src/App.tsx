@@ -16,7 +16,6 @@ import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
 import { useSetupActions } from "./hooks/useSetupActions";
-import { useTranscriptionProgress } from "./hooks/useTranscriptionProgress";
 import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import { useYoutubeQueue } from "./hooks/useYoutubeQueue";
 import { fileNameFromPath } from "./lib/format";
@@ -320,10 +319,6 @@ function App() {
   const expressionFieldMapped = Boolean(settingsDraft.anki.fields.transcription);
   const ankiReachable = displayedAnkiCatalog.status !== "offline";
 
-  const transcriptionProgress = useTranscriptionProgress(
-    bootstrap.shell.phase === "transcribing",
-  );
-
   return (
     <main className="app-shell">
       <TooltipPrimitive.Provider delayDuration={180}>
@@ -344,7 +339,6 @@ function App() {
         <BusyOverlay
           label={busyOverlayLabel}
           statusText={bootstrap.shell.statusText}
-          progress={transcriptionProgress}
         />
       ) : null}
 

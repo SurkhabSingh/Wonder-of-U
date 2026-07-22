@@ -41,8 +41,6 @@ pub struct WhisperTranscriptionRequest {
     pub language: String,
     /// ffmpeg, used to decode the recording to the 16 kHz mono WAV whisper + VAD require.
     pub ffmpeg_path: PathBuf,
-    /// Total audio duration in ms; passed through for the downstream segment tail-clamp.
-    pub duration_ms: u64,
     /// whisper-cli worker-thread count (`-t`), derived from the user's CPU-usage preference
     /// via `transcription_thread_count`. Bounds how much of the machine a long transcription
     /// consumes so it never maxes out the box.
@@ -582,7 +580,6 @@ mod tests {
             audio_path: PathBuf::from(std::env::var("WOU_AUDIO").expect("WOU_AUDIO")),
             ffmpeg_path: PathBuf::from(std::env::var("WOU_FFMPEG").expect("WOU_FFMPEG")),
             language: std::env::var("WOU_LANG").unwrap_or_default(),
-            duration_ms: 0,
             thread_count: transcription_thread_count("balanced"),
         };
         let result = run_whisper_transcription(&request, Arc::new(AtomicBool::new(false)), |percent| {

@@ -576,7 +576,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 audio_path: PathBuf::from(&recording.file_path),
                 language: settings.whisper.language.clone(),
                 ffmpeg_path: ffmpeg_path.clone(),
-                duration_ms: recording.duration_ms,
                 thread_count,
             },
             cancel_listener.flag(),
