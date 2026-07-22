@@ -1,22 +1,11 @@
-use std::{fs, path::PathBuf, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
     app_runtime::{log_event, update_shell_snapshot},
-    app_state::derive_transcript_language_from_path,
-    app_types::{
-        transcript_language_key, ActiveRecording, RecentRecording, RecordingTranscript,
-        SharedPersistedState,
-    },
-    recording_library::{
-        auto_translate_after_transcription, insert_recent_recording,
-        rename_recording_outputs_from_transcript, store_segments_sidecar,
-    },
-    runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
-    transcription::{
-        run_whisper_transcription, transcription_thread_count, WhisperTranscriptionRequest,
-    },
+    app_types::{ActiveRecording, RecentRecording, SharedPersistedState},
+    recording_library::insert_recent_recording,
 };
 
 pub(super) fn finalize_recording_pipeline<R: Runtime>(
@@ -31,7 +20,7 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
 
     match result {
         Ok(capture) => {
-            let mut recent_recording = RecentRecording {
+            let recent_recording = RecentRecording {
                 file_name: capture
                     .output_path
                     .file_name()
@@ -78,217 +67,13 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                 persisted.settings.clone()
             };
 
-            if settings.features.transcription {
-                let whisper_detection = refresh_whisper_detection_state(&app)?;
-
-                if whisper_detection.status == "ready" {
-                    update_shell_snapshot(&app, |shell| {
-                        shell.phase = "transcribing".into();
-                        shell.status_text = format!(
-                            "Saved {}. Running Whisper transcription...",
-                            recent_recording.file_name
-                        );
-                        shell.started_at_ms = None;
-                        shell.current_recording_name = None;
-                        shell.last_output_path = Some(recent_recording.file_path.clone());
-                    })?;
-
-                    let app_progress = app.clone();
-                    match run_whisper_transcription(&WhisperTranscriptionRequest {
-                        cli_path: PathBuf::from(
-                            whisper_detection
-                                .executable_path
-                                .clone()
-                                .unwrap_or_default(),
-                        ),
-                        model_path: PathBuf::from(
-                            whisper_detection.model_path.clone().unwrap_or_default(),
-                        ),
-                        vad_model_path: std::path::Path::new(&settings.asset_directory)
-                            .join("models")
-                            .join(crate::app_types::WHISPER_VAD_MODEL_FILE),
-                        audio_path: PathBuf::from(&recent_recording.file_path),
-                        language: settings.whisper.language.clone(),
-                        ffmpeg_path: PathBuf::from(
-                            detect_local_ffmpeg(&settings)
-                                .executable_path
-                                .unwrap_or_default(),
-                        ),
-                        duration_ms: recent_recording.duration_ms,
-                        thread_count: transcription_thread_count(&settings.whisper.cpu_usage),
-                    }, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move |percent| {
-                        let _ = app_progress.emit("transcription-progress", percent);
-                    }) {
-                        Ok(result) => {
-                            let mut transcript_path = result.transcript_path;
-                            let mut audio_path = PathBuf::from(&recent_recording.file_path);
-
-                            match rename_recording_outputs_from_transcript(
-                                &audio_path,
-                                &transcript_path,
-                                recent_recording.created_at_ms,
-                            ) {
-                                Ok((renamed_audio_path, renamed_transcript_path)) => {
-                                    audio_path = renamed_audio_path;
-                                    transcript_path = renamed_transcript_path;
-                                }
-                                Err(error) => {
-                                    log_event(
-                                        &app,
-                                        "ERROR",
-                                        "recording.rename_from_transcript_failed",
-                                        serde_json::json!({
-                                            "audioPath": recent_recording.file_path,
-                                            "message": error
-                                        }),
-                                    );
-                                }
-                            }
-
-                            recent_recording.file_name = audio_path
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .unwrap_or("recording.wav")
-                                .to_string();
-                            recent_recording.file_path = audio_path.display().to_string();
-                            recent_recording.transcript_path =
-                                Some(transcript_path.display().to_string());
-                            recent_recording.transcript_language =
-                                derive_transcript_language_from_path(
-                                    &transcript_path,
-                                    &settings.whisper.language,
-                                );
-
-                            // Write the per-sentence segments sidecar so a
-                            // recording transcribed on stop gets timestamps just
-                            // like one transcribed from the library — otherwise it
-                            // would need a manual re-transcribe to gain them. The
-                            // audio path is final (renamed) here, so the sidecar
-                            // stem matches. Best-effort: a missing/unparseable json
-                            // simply leaves segments None.
-                            let language_key =
-                                transcript_language_key(&settings.whisper.language);
-                            let segments_path = match store_segments_sidecar(
-                                &recent_recording.file_path,
-                                &result.json_path,
-                                &language_key,
-                                &transcript_path,
-                                recent_recording.duration_ms,
-                            ) {
-                                Ok(path) => path.map(|path| path.display().to_string()),
-                                Err(error) => {
-                                    log_event(
-                                        &app,
-                                        "ERROR",
-                                        "recording.store_segments_failed",
-                                        serde_json::json!({
-                                            "audioPath": recent_recording.file_path,
-                                            "message": error
-                                        }),
-                                    );
-                                    None
-                                }
-                            };
-                            let _ = fs::remove_file(&result.json_path);
-
-                            recent_recording.transcripts.push(RecordingTranscript {
-                                language: language_key,
-                                file_path: transcript_path.display().to_string(),
-                                detected_language: recent_recording.transcript_language.clone(),
-                                segments_path,
-                            });
-                            recent_recording.bytes_written = fs::metadata(&audio_path)
-                                .map(|metadata| metadata.len())
-                                .unwrap_or(recent_recording.bytes_written);
-
-                            insert_recent_recording(&app, recent_recording.clone())?;
-
-                            log_event(
-                                &app,
-                                "INFO",
-                                "transcription.saved",
-                                serde_json::json!({
-                                    "audioPath": recent_recording.file_path,
-                                    "transcriptPath": recent_recording.transcript_path
-                                }),
-                            );
-
-                            update_shell_snapshot(&app, |shell| {
-                                shell.phase = "idle".into();
-                                shell.status_text =
-                                    format!("Saved {} and transcript.", recent_recording.file_name);
-                                shell.started_at_ms = None;
-                                shell.current_recording_name = None;
-                                shell.last_output_path = Some(recent_recording.file_path.clone());
-                                shell.last_transcript_path =
-                                    recent_recording.transcript_path.clone();
-                                shell.transition_count += 1;
-                            })?;
-
-                            // Deliberately after the snapshot returns to "idle".
-                            // Translation blocks for as long as the browser takes,
-                            // and both start_recording and stop_recording refuse to
-                            // run unless the phase is idle — translating first would
-                            // lock the user out of recording for the whole wait.
-                            if settings.features.translate_after_transcription {
-                                if let Some(note) = auto_translate_after_transcription(
-                                    &app,
-                                    &recent_recording.file_path,
-                                ) {
-                                    let file_name = recent_recording.file_name.clone();
-                                    update_shell_snapshot(&app, |shell| {
-                                        shell.status_text =
-                                            format!("Saved {file_name} and transcript. {note}");
-                                    })?;
-                                }
-                            }
-
-                            return Ok(());
-                        }
-                        Err(error) => {
-                            log_event(
-                                &app,
-                                "ERROR",
-                                "transcription.failed",
-                                serde_json::json!({
-                                    "audioPath": recent_recording.file_path,
-                                    "message": error
-                                }),
-                            );
-                            insert_recent_recording(&app, recent_recording.clone())?;
-                            update_shell_snapshot(&app, |shell| {
-                                shell.phase = "idle".into();
-                                shell.status_text = format!(
-                                    "Saved {}. Whisper transcription failed: {}",
-                                    recent_recording.file_name, error
-                                );
-                                shell.started_at_ms = None;
-                                shell.current_recording_name = None;
-                                shell.last_output_path = Some(recent_recording.file_path.clone());
-                                shell.last_transcript_path = None;
-                                shell.transition_count += 1;
-                            })?;
-                            return Ok(());
-                        }
-                    }
-                }
-
-                insert_recent_recording(&app, recent_recording.clone())?;
-                update_shell_snapshot(&app, |shell| {
-                    shell.phase = "idle".into();
-                    shell.status_text = format!(
-                        "Saved {}. Whisper is not ready yet: {}",
-                        recent_recording.file_name, whisper_detection.message
-                    );
-                    shell.started_at_ms = None;
-                    shell.current_recording_name = None;
-                    shell.last_output_path = Some(recent_recording.file_path.clone());
-                    shell.last_transcript_path = None;
-                    shell.transition_count += 1;
-                })?;
-                return Ok(());
-            }
-
+            // Save the recording untranscribed and return to idle immediately so the
+            // app stays usable — finalize no longer blocks on Whisper. When
+            // transcription is enabled we hand the file to the frontend's
+            // non-blocking transcription queue via an event; that queue path
+            // (recording_library::transcription) renames the mic capture on its
+            // first transcript, stores segments, and translates after transcription
+            // exactly as a manual transcribe does.
             insert_recent_recording(&app, recent_recording.clone())?;
             update_shell_snapshot(&app, |shell| {
                 shell.phase = "idle".into();
@@ -299,6 +84,16 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                 shell.last_transcript_path = None;
                 shell.transition_count += 1;
             })?;
+
+            if settings.features.transcription {
+                let _ = app.emit(
+                    "recording-transcribe-request",
+                    serde_json::json!({
+                        "filePath": recent_recording.file_path,
+                        "title": recent_recording.file_name
+                    }),
+                );
+            }
         }
         Err(error) => {
             log_event(

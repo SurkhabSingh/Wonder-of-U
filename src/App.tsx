@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { HomePage } from "./components/home/HomePage";
@@ -288,6 +289,29 @@ function App() {
     },
     [bootstrap.recentRecordings, transcriptionQueue],
   );
+
+  // A finished mic recording is now saved untranscribed and hands itself off for
+  // transcription through this event, so auto-transcribe-after-recording runs on
+  // the same non-blocking queue as a manual transcribe instead of blocking the app
+  // with the full-screen overlay. `force = false`; the queue dedupes by file path,
+  // so a duplicate event is a harmless no-op.
+  useEffect(() => {
+    const unlisten = listen<{ filePath: string; title?: string }>(
+      "recording-transcribe-request",
+      ({ payload }) => {
+        if (!payload?.filePath) {
+          return;
+        }
+        transcriptionQueue.enqueue(
+          [{ filePath: payload.filePath, title: payload.title }],
+          false,
+        );
+      },
+    );
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [transcriptionQueue.enqueue]);
 
   // Sentence mining needs a mapped expression field to write to and a reachable
   // Anki. `offline` is the only catalog status that definitively means "not

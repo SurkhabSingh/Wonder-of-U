@@ -82,27 +82,22 @@ export function useAppViewState({
 
   const isRecording = bootstrap.shell.phase === "recording";
   const isSaving = bootstrap.shell.phase === "saving";
-  const isTranscribing = bootstrap.shell.phase === "transcribing";
-  // `isTranscribing` is the recorder shell's auto-transcribe-after-recording
-  // phase, which still blocks. Manual/re-transcribe now runs through the
-  // non-blocking transcription queue, so it no longer raises this overlay.
+  // Transcription now always runs through the non-blocking transcription queue
+  // (including auto-transcribe-after-recording), so it never raises this overlay.
   const recorderBusy =
     isRecording ||
     isSaving ||
-    isTranscribing ||
     busyAction === "start" ||
     busyAction === "stop";
   const showBusyOverlay =
     isSaving ||
-    isTranscribing ||
     busyAction === "translateRecording" ||
     busyAction === "pushAnki" ||
     busyAction === "addFurigana" ||
     busyAction === "deleteRecording" ||
     busyAction === "convertMp3";
-  const busyOverlayLabel = isTranscribing
-    ? "Transcribing saved audio..."
-    : busyAction === "translateRecording"
+  const busyOverlayLabel =
+    busyAction === "translateRecording"
       ? "Translating transcript..."
       : busyAction === "pushAnki"
         ? "Pushing cards to Anki..."
@@ -113,8 +108,8 @@ export function useAppViewState({
             : busyAction === "convertMp3"
               ? "Converting recordings to MP3..."
               : isSaving
-                  ? "Finalizing the recording..."
-                  : "Working...";
+                ? "Finalizing the recording..."
+                : "Working...";
   const downloadIsActive =
     bootstrap.modelDownload.status === "starting" ||
     bootstrap.modelDownload.status === "downloading" ||

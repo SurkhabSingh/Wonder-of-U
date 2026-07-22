@@ -9,15 +9,18 @@ mod texts;
 mod transcription;
 
 pub(crate) use actions::{
-    auto_translate_after_transcription, delete_recording_inner, delete_recordings_inner,
-    play_recording_inner, playback_path, translate_recordings_inner,
+    delete_recording_inner, delete_recordings_inner, play_recording_inner, playback_path,
+    translate_recordings_inner,
 };
 pub(crate) use conversion::convert_recordings_to_mp3_inner;
 pub(crate) use import::{import_media_inner, import_youtube_inner};
 pub(crate) use texts::{parse_translation_language, read_recording_texts_inner};
-pub(crate) use transcription::{
-    rename_recording_outputs_from_transcript, store_segments_sidecar, transcribe_recordings_inner,
-};
+pub(crate) use transcription::transcribe_recordings_inner;
+// Production code renames via `transcribe_recordings_inner`; only the lib tests
+// reach the rename helper through the module facade, so gate the re-export to the
+// test build to keep the non-test build free of an unused-import warning.
+#[cfg(test)]
+pub(crate) use transcription::rename_recording_outputs_from_transcript;
 
 use crate::{
     app_runtime::emit_app_snapshot,
