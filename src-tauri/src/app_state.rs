@@ -111,6 +111,16 @@ pub(crate) fn normalize_settings<R: Runtime>(
                     v.to_string()
                 }
             },
+            // Trim the ends (interior spacing in a vocab list is meaningful) and cap the
+            // length so a pasted wall of text can't bloat state.json — whisper only reads
+            // the first ~n_text_ctx/2 tokens anyway.
+            initial_prompt: settings
+                .whisper
+                .initial_prompt
+                .trim()
+                .chars()
+                .take(2000)
+                .collect(),
         },
         anki: AnkiSettings {
             deck_name: settings.anki.deck_name.trim().to_string(),

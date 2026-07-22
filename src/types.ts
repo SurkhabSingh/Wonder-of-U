@@ -56,6 +56,9 @@ export type WhisperSettings = {
   runtimeVersion: string;
   modelChoice: string;
   language: string;
+  // Optional text passed to whisper (--prompt) to prime it with expected names and
+  // vocabulary; empty disables it.
+  initialPrompt: string;
   // How much of the machine transcription may use: "low" | "balanced" | "high".
   // The backend maps it to a whisper-cli thread count; "balanced" is the default.
   cpuUsage: string;

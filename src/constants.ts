@@ -264,6 +264,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       runtimeVersion: RECOMMENDED_RUNTIME_VERSION,
       modelChoice: "small",
       language: "auto",
+      initialPrompt: "",
       cpuUsage: "balanced",
     },
     anki: {

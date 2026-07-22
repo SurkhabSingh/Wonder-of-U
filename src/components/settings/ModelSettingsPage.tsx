@@ -140,6 +140,25 @@ export function ModelSettingsPage({
         the machine stays responsive while it runs.
       </p>
 
+      <label className="field">
+        <span>Initial prompt (optional)</span>
+        <input
+          type="text"
+          value={settingsDraft.whisper.initialPrompt}
+          onChange={(event) =>
+            onUpdateSettings({
+              whisper: { initialPrompt: event.currentTarget.value },
+            })
+          }
+          placeholder="Names or vocabulary to prime Whisper — e.g. character or place names"
+        />
+      </label>
+      <p className="microcopy">
+        Seeds Whisper with words to expect — proper nouns, character or place names,
+        domain terms — improving spelling and segmentation, especially for Japanese.
+        Leave blank to disable.
+      </p>
+
       <div
         className="model-summary"
         title={

@@ -39,6 +39,10 @@ pub struct WhisperTranscriptionRequest {
     pub vad_model_path: PathBuf,
     pub audio_path: PathBuf,
     pub language: String,
+    /// Optional decoder-priming text passed to whisper as `--prompt` (expected names,
+    /// domain vocabulary). Empty means no prompt. Especially helps CJK proper-noun
+    /// spelling; whisper truncates it to ~n_text_ctx/2 tokens.
+    pub initial_prompt: String,
     /// ffmpeg, used to decode the recording to the 16 kHz mono WAV whisper + VAD require.
     pub ffmpeg_path: PathBuf,
     /// whisper-cli worker-thread count (`-t`), derived from the user's CPU-usage preference
@@ -260,6 +264,7 @@ pub fn run_whisper_transcription(
         &request.vad_model_path,
         &wav_path,
         &request.language,
+        &request.initial_prompt,
         &transcript_output_base(),
         request.thread_count,
         cancel,
@@ -276,6 +281,7 @@ fn run_whisper_once(
     vad_model_path: &Path,
     audio_path: &Path,
     language: &str,
+    initial_prompt: &str,
     output_base: &Path,
     thread_count: usize,
     cancel: Arc<AtomicBool>,
@@ -353,6 +359,12 @@ fn run_whisper_once(
 
     if !language.trim().is_empty() {
         command.arg("--language").arg(language.trim());
+    }
+
+    // Prime the decoder with the user's expected vocabulary (names, domain terms).
+    // whisper caps it at ~n_text_ctx/2 tokens; an empty prompt is simply omitted.
+    if !initial_prompt.trim().is_empty() {
+        command.arg("--prompt").arg(initial_prompt.trim());
     }
 
     // Stream instead of `.output()`: whisper writes the transcript to files, so the only
@@ -580,6 +592,7 @@ mod tests {
             audio_path: PathBuf::from(std::env::var("WOU_AUDIO").expect("WOU_AUDIO")),
             ffmpeg_path: PathBuf::from(std::env::var("WOU_FFMPEG").expect("WOU_FFMPEG")),
             language: std::env::var("WOU_LANG").unwrap_or_default(),
+            initial_prompt: std::env::var("WOU_PROMPT").unwrap_or_default(),
             thread_count: transcription_thread_count("balanced"),
         };
         let result = run_whisper_transcription(&request, Arc::new(AtomicBool::new(false)), |percent| {

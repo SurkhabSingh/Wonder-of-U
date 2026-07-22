@@ -592,6 +592,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 vad_model_path: vad_model_path.clone(),
                 audio_path: PathBuf::from(&recording.file_path),
                 language: settings.whisper.language.clone(),
+                initial_prompt: settings.whisper.initial_prompt.clone(),
                 ffmpeg_path: ffmpeg_path.clone(),
                 thread_count,
             },

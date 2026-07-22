@@ -206,6 +206,10 @@ pub(crate) struct WhisperSettings {
     #[serde(default = "default_whisper_model_choice")]
     pub(crate) model_choice: String,
     pub(crate) language: String,
+    /// Optional decoder-priming text passed to whisper as `--prompt` (names, domain
+    /// terms). Empty disables it. `#[serde(default)]` keeps an old state.json loading.
+    #[serde(default)]
+    pub(crate) initial_prompt: String,
     /// How much of the machine transcription may use: `"low" | "balanced" | "high"`. Maps to
     /// a whisper-cli `-t` thread count via `transcription_thread_count`.
     #[serde(default = "default_cpu_usage")]
@@ -220,6 +224,7 @@ impl Default for WhisperSettings {
             runtime_version: default_whisper_runtime_version(),
             model_choice: default_whisper_model_id().into(),
             language: "auto".into(),
+            initial_prompt: String::new(),
             cpu_usage: default_cpu_usage(),
         }
     }
