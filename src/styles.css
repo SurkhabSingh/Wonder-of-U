@@ -2404,6 +2404,19 @@ input::placeholder {
   gap: var(--space-3);
 }
 
+/* In-viewer transcription progress bar — fills the row beside the "Transcribing… N%"
+   label while this recording re-transcribes, so the Library queue isn't needed. */
+.transcript-enable-timing-progress {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* While transcribing, let the bar fill the row — the short "N%" label shrinks to its
+   content instead of splitting the width with the bar. */
+.transcript-enable-timing.is-transcribing .transcript-enable-timing-text {
+  flex: 0 1 auto;
+}
+
 .transcript-enable-timing {
   flex: 0 0 auto;
   display: flex;

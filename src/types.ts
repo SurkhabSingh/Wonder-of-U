@@ -59,6 +59,9 @@ export type WhisperSettings = {
   // How much of the machine transcription may use: "low" | "balanced" | "high".
   // The backend maps it to a whisper-cli thread count; "balanced" is the default.
   cpuUsage: string;
+  // Audio content mode: "speech" (default) or "music". Music lowers the VAD
+  // threshold so sung vocals transcribe.
+  audioType: string;
 };
 
 export type TranslationProvider = "google-translate" | "deepl";

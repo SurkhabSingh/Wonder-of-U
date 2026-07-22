@@ -111,6 +111,12 @@ pub(crate) fn normalize_settings<R: Runtime>(
                     v.to_string()
                 }
             },
+            // Only "music" skips VAD (to transcribe songs); anything else is speech.
+            audio_type: if settings.whisper.audio_type.trim() == "music" {
+                "music".into()
+            } else {
+                "speech".into()
+            },
         },
         anki: AnkiSettings {
             deck_name: settings.anki.deck_name.trim().to_string(),

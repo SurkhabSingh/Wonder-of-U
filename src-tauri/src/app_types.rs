@@ -77,6 +77,10 @@ fn default_cpu_usage() -> String {
     "balanced".into()
 }
 
+fn default_audio_type() -> String {
+    "speech".into()
+}
+
 pub(crate) fn whisper_model_spec(model_id: &str) -> &'static WhisperModelSpec {
     WHISPER_MODEL_SPECS
         .iter()
@@ -210,6 +214,10 @@ pub(crate) struct WhisperSettings {
     /// a whisper-cli `-t` thread count via `transcription_thread_count`.
     #[serde(default = "default_cpu_usage")]
     pub(crate) cpu_usage: String,
+    /// Audio content mode: `"speech"` (default) or `"music"`. Music skips VAD so a full
+    /// song (sung vocals) transcribes; speech keeps the VAD-anchored behaviour.
+    #[serde(default = "default_audio_type")]
+    pub(crate) audio_type: String,
 }
 
 impl Default for WhisperSettings {
@@ -221,6 +229,7 @@ impl Default for WhisperSettings {
             model_choice: default_whisper_model_id().into(),
             language: "auto".into(),
             cpu_usage: default_cpu_usage(),
+            audio_type: default_audio_type(),
         }
     }
 }

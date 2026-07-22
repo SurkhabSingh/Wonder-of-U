@@ -205,6 +205,7 @@ export function TranscriptViewerPage({
   onBack,
   onReTranscribe,
   isReTranscribing,
+  reTranscribeProgress,
   onReTranslate,
   isReTranslating,
   onMineSegment,
@@ -219,6 +220,9 @@ export function TranscriptViewerPage({
   // affordance entirely.
   onReTranscribe: ((force: boolean) => void) | undefined;
   isReTranscribing: boolean;
+  // Percent (0–100) while this recording is the active re-transcription, or null when it's
+  // queued / not transcribing — drives the in-viewer progress bar.
+  reTranscribeProgress: number | null;
   // Force a re-translate of this recording (overwrites the existing translation).
   // Undefined disables the affordance.
   onReTranslate: ((force: boolean) => void) | undefined;
@@ -249,6 +253,18 @@ export function TranscriptViewerPage({
     filePath: recording.filePath,
     changeSignature,
   });
+
+  // A re-transcribe in the same language overwrites the same sidecar paths, so
+  // `changeSignature` is unchanged and the fetch effect won't re-fire on its own. Force a
+  // reload when this recording's re-transcription finishes, so the viewer shows the new
+  // transcript rather than the stale one.
+  const wasReTranscribingRef = useRef(false);
+  useEffect(() => {
+    if (wasReTranscribingRef.current && !isReTranscribing) {
+      reload();
+    }
+    wasReTranscribingRef.current = isReTranscribing;
+  }, [isReTranscribing, reload]);
 
   // Whole-file playback for this recording, driven by the compact top bar.
   // Gated on audioDeleted below so a transcript-only entry never tries to load.
@@ -551,6 +567,14 @@ export function TranscriptViewerPage({
     !recording.audioDeleted &&
     editedSegments.length > 0;
 
+  // A general re-transcribe (force) for a recording that already has a timed transcript —
+  // e.g. to redo it after switching Audio type to Music. The untimed case is handled by
+  // `canEnablePerSentence`, so the two never both show.
+  const canReTranscribe =
+    onReTranscribe !== undefined &&
+    !recording.audioDeleted &&
+    !canEnablePerSentence;
+
   return (
     <div className="transcript-viewer">
       <header className="transcript-viewer-header">
@@ -640,47 +664,84 @@ export function TranscriptViewerPage({
         />
       )}
 
-      {canEnablePerSentence || canReTranslate || canTranslate ? (
-        <div className="transcript-enable-timing">
-          <span className="transcript-enable-timing-text">
-            {canEnablePerSentence
-              ? "Enable per-sentence playback — re-transcribe with timestamps."
-              : canTranslate
-                ? "Translate this recording with the browser extension."
-                : "Re-run the translation for this recording."}
-          </span>
-          <div className="transcript-enable-timing-buttons">
-            {canEnablePerSentence ? (
-              <button
-                type="button"
-                className="transcript-enable-timing-action"
-                onClick={() => onReTranscribe?.(true)}
-                disabled={isReTranscribing}
+      {canEnablePerSentence ||
+      canReTranscribe ||
+      canReTranslate ||
+      canTranslate ||
+      isReTranscribing ? (
+        <div
+          className={`transcript-enable-timing${
+            isReTranscribing ? " is-transcribing" : ""
+          }`}
+        >
+          {isReTranscribing ? (
+            <>
+              <span className="transcript-enable-timing-text">
+                {reTranscribeProgress !== null
+                  ? `Transcribing… ${reTranscribeProgress}%`
+                  : "Queued to transcribe…"}
+              </span>
+              <div
+                className="transcript-enable-timing-progress"
+                role="progressbar"
+                aria-label="Transcription progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={reTranscribeProgress ?? undefined}
               >
-                {isReTranscribing ? "Re-transcribing…" : "Re-transcribe"}
-              </button>
-            ) : null}
-            {canTranslate ? (
-              <button
-                type="button"
-                className="transcript-enable-timing-action"
-                onClick={() => onReTranslate?.(false)}
-                disabled={isReTranslating}
-              >
-                {isReTranslating ? "Translating…" : "Translate"}
-              </button>
-            ) : null}
-            {canReTranslate ? (
-              <button
-                type="button"
-                className="transcript-enable-timing-action"
-                onClick={() => onReTranslate?.(true)}
-                disabled={isReTranslating}
-              >
-                {isReTranslating ? "Re-translating…" : "Re-translate"}
-              </button>
-            ) : null}
-          </div>
+                <div className="progress-track" aria-hidden="true">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${reTranscribeProgress ?? 0}%` }}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="transcript-enable-timing-text">
+                {canEnablePerSentence
+                  ? "Enable per-sentence playback — re-transcribe with timestamps."
+                  : canReTranscribe
+                    ? "Re-transcribe this recording — e.g. after switching Audio type to Music."
+                    : canTranslate
+                      ? "Translate this recording with the browser extension."
+                      : "Re-run the translation for this recording."}
+              </span>
+              <div className="transcript-enable-timing-buttons">
+                {canEnablePerSentence || canReTranscribe ? (
+                  <button
+                    type="button"
+                    className="transcript-enable-timing-action"
+                    onClick={() => onReTranscribe?.(true)}
+                    title="Re-run transcription with the current settings — e.g. after switching Audio type to Music"
+                  >
+                    Re-transcribe
+                  </button>
+                ) : null}
+                {canTranslate ? (
+                  <button
+                    type="button"
+                    className="transcript-enable-timing-action"
+                    onClick={() => onReTranslate?.(false)}
+                    disabled={isReTranslating}
+                  >
+                    {isReTranslating ? "Translating…" : "Translate"}
+                  </button>
+                ) : null}
+                {canReTranslate ? (
+                  <button
+                    type="button"
+                    className="transcript-enable-timing-action"
+                    onClick={() => onReTranslate?.(true)}
+                    disabled={isReTranslating}
+                  >
+                    {isReTranslating ? "Re-translating…" : "Re-translate"}
+                  </button>
+                ) : null}
+              </div>
+            </>
+          )}
         </div>
       ) : null}
 

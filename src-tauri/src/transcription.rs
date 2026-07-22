@@ -45,6 +45,11 @@ pub struct WhisperTranscriptionRequest {
     /// via `transcription_thread_count`. Bounds how much of the machine a long transcription
     /// consumes so it never maxes out the box.
     pub thread_count: usize,
+    /// When true, transcribe in "music" mode: skip Silero VAD entirely so a full song
+    /// transcribes. VAD rejects sung vocals over backing music and stalls partway through a
+    /// song at any threshold; the cost is whisper's own, looser timestamps. False keeps the
+    /// normal VAD-anchored speech behaviour, unchanged.
+    pub music_mode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -240,7 +245,10 @@ pub fn run_whisper_transcription(
 ) -> Result<WhisperTranscriptionResult, String> {
     verify_whisper_cli(&request.cli_path)?;
     verify_whisper_model(&request.model_path)?;
-    verify_whisper_vad_model(&request.vad_model_path)?;
+    // Music mode skips VAD, so it does not need the VAD model present.
+    if !request.music_mode {
+        verify_whisper_vad_model(&request.vad_model_path)?;
+    }
 
     // A Cancel that arrived before the decode started skips it entirely — there is no point
     // decoding audio for a transcription that will never run.
@@ -262,6 +270,7 @@ pub fn run_whisper_transcription(
         &request.language,
         &transcript_output_base(),
         request.thread_count,
+        request.music_mode,
         cancel,
         on_progress,
     )
@@ -278,6 +287,7 @@ fn run_whisper_once(
     language: &str,
     output_base: &Path,
     thread_count: usize,
+    music_mode: bool,
     cancel: Arc<AtomicBool>,
     on_progress: impl Fn(u8) + Send + 'static,
 ) -> Result<WhisperTranscriptionResult, String> {
@@ -341,15 +351,20 @@ fn run_whisper_once(
     // text context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
     command.arg("-mc").arg("0").arg("--suppress-nst");
 
-    // whisper.cpp's built-in Silero VAD: only detected speech regions are transcribed and
-    // their timestamps mapped back to the absolute timeline — drift-free on long audio, and
-    // non-speech yields no segments. This supersedes the old overlapping-chunk machinery.
-    command
-        .arg("--vad")
-        .arg("--vad-model")
-        .arg(vad_model_path)
-        .arg("--vad-max-speech-duration-s")
-        .arg(VAD_MAX_SPEECH_SECONDS);
+    // Speech mode uses whisper.cpp's built-in Silero VAD: only detected speech regions are
+    // transcribed and their timestamps mapped back to the absolute timeline — drift-free on
+    // long audio, non-speech excluded. Music mode skips VAD entirely: Silero rejects sung
+    // vocals over instrumental backing and stalls partway through a song at ANY threshold, so
+    // a song only fully transcribes without VAD — at the cost of whisper's own, looser
+    // timestamps. `-mc 0` + `--suppress-nst` above still curb the resulting hallucination.
+    if !music_mode {
+        command
+            .arg("--vad")
+            .arg("--vad-model")
+            .arg(vad_model_path)
+            .arg("--vad-max-speech-duration-s")
+            .arg(VAD_MAX_SPEECH_SECONDS);
+    }
 
     if !language.trim().is_empty() {
         command.arg("--language").arg(language.trim());
@@ -581,6 +596,7 @@ mod tests {
             ffmpeg_path: PathBuf::from(std::env::var("WOU_FFMPEG").expect("WOU_FFMPEG")),
             language: std::env::var("WOU_LANG").unwrap_or_default(),
             thread_count: transcription_thread_count("balanced"),
+            music_mode: std::env::var("WOU_MUSIC").is_ok(),
         };
         let result = run_whisper_transcription(&request, Arc::new(AtomicBool::new(false)), |percent| {
             if percent % 25 == 0 {

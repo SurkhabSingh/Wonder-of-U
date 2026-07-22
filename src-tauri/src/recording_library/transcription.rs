@@ -526,7 +526,9 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     let vad_model_path = Path::new(&settings.asset_directory)
         .join("models")
         .join(WHISPER_VAD_MODEL_FILE);
-    if !vad_model_path.exists() {
+    // Only speech mode uses the VAD model; music mode skips VAD entirely, so don't require
+    // the VAD model to be present when the user has chosen Music.
+    if settings.whisper.audio_type != "music" && !vad_model_path.exists() {
         return Ok(RecordingBatchResult {
             status: "unavailable".into(),
             message:
@@ -594,6 +596,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 language: settings.whisper.language.clone(),
                 ffmpeg_path: ffmpeg_path.clone(),
                 thread_count,
+                music_mode: settings.whisper.audio_type == "music",
             },
             cancel_listener.flag(),
             move |percent| {

@@ -45,6 +45,7 @@ export function RecordingCard({
   onOpenChange,
   onPlay,
   onTranscribe,
+  onReTranscribe,
   onPushToAnki,
   onAddFurigana,
   onTranslate,
@@ -70,6 +71,9 @@ export function RecordingCard({
   onOpenChange: (filePath: string | null) => void;
   onPlay: SingleRecordingAction;
   onTranscribe: RecordingAction;
+  // Force re-runs transcription on a recording that already has one (e.g. to redo it
+  // after switching Audio type to Music, or changing the model/language).
+  onReTranscribe: RecordingAction;
   onPushToAnki: PushAction;
   onAddFurigana: RecordingAction;
   onTranslate: TranslateAction;
@@ -324,7 +328,14 @@ export function RecordingCard({
                 >
                   Transcribe in {selectedLanguageLabel}
                 </DropdownMenuPrimitive.Item>
-              ) : null}
+              ) : (
+                <DropdownMenuPrimitive.Item
+                  className="action-menu-item"
+                  onSelect={() => void onReTranscribe([recording.filePath])}
+                >
+                  Re-transcribe in {selectedLanguageLabel}
+                </DropdownMenuPrimitive.Item>
+              )}
               {hasSelectedTranscript ? (
                 <>
                   <DropdownMenuPrimitive.Separator className="action-menu-separator" />

@@ -456,6 +456,7 @@ function App() {
               onClearSelection={clearRecordingSelection}
               onOpenRecordingMenuChange={setOpenRecordingMenuPath}
               onTranscribe={enqueueTranscriptions}
+              onReTranscribe={(files) => enqueueTranscriptions(files, true)}
               onPushToAnki={pushRecordingsToAnki}
               onAddFurigana={addFuriganaToAnki}
               onTranslate={translateRecordings}
@@ -487,6 +488,15 @@ function App() {
                     item.filePath === viewingRecording.filePath &&
                     (item.status === "queued" || item.status === "active"),
                 )}
+                reTranscribeProgress={
+                  transcriptionQueue.items.some(
+                    (item) =>
+                      item.filePath === viewingRecording.filePath &&
+                      item.status === "active",
+                  )
+                    ? transcriptionQueue.activeProgress
+                    : null
+                }
                 onReTranslate={(force) =>
                   void translateRecordings([viewingRecording.filePath], force)
                 }

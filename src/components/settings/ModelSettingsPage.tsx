@@ -133,11 +133,36 @@ export function ModelSettingsPage({
             }
           />
         </label>
+
+        <label className="field">
+          <span>Audio type</span>
+          <ThemedSelect
+            value={settingsDraft.whisper.audioType || "speech"}
+            options={[
+              { value: "speech", label: "Speech" },
+              { value: "music", label: "Music (songs)" },
+            ]}
+            placeholder="Audio type"
+            onChange={(nextValue) =>
+              onUpdateSettings({
+                whisper: {
+                  audioType: nextValue,
+                },
+              })
+            }
+          />
+        </label>
       </div>
 
       <p className="microcopy">
         Higher uses more CPU cores for faster transcription; lower uses fewer, so
         the machine stays responsive while it runs.
+      </p>
+
+      <p className="microcopy">
+        Set Audio type to Music for songs — it transcribes the whole song including
+        sung vocals (Speech mode's voice detection drops singing). Timestamps are a
+        little looser in Music mode; keep it on Speech for dialogue.
       </p>
 
       <div

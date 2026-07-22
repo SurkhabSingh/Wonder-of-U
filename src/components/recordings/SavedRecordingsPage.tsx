@@ -63,6 +63,7 @@ export function SavedRecordingsPage({
   onClearSelection,
   onOpenRecordingMenuChange,
   onTranscribe,
+  onReTranscribe,
   onPushToAnki,
   onAddFurigana,
   onTranslate,
@@ -121,6 +122,7 @@ export function SavedRecordingsPage({
   onClearSelection: () => void;
   onOpenRecordingMenuChange: (filePath: string | null) => void;
   onTranscribe: RecordingAction;
+  onReTranscribe: RecordingAction;
   onPushToAnki: PushAction;
   onAddFurigana: RecordingAction;
   onTranslate: TranslateAction;
@@ -267,6 +269,7 @@ export function SavedRecordingsPage({
                 onOpenChange={onOpenRecordingMenuChange}
                 onPlay={handlePlay}
                 onTranscribe={onTranscribe}
+                onReTranscribe={onReTranscribe}
                 onPushToAnki={onPushToAnki}
                 onAddFurigana={onAddFurigana}
                 onTranslate={onTranslate}
