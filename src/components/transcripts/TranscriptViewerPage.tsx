@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import { useRecordingTexts } from "../../hooks/useRecordingTexts";
 import {
@@ -323,6 +323,9 @@ export function TranscriptViewerPage({
     setEditedSegments(activeTranscript?.segments ?? []);
     setMinedKeys(new Set());
     setMiningKey(null);
+    // A new transcript reindexes every row, so drop the old focus/selection.
+    setSelectedSegment(null);
+    setActiveSegmentIndex(null);
   }, [activeTranscript]);
 
   const handleMergeSegment = (index: number) => {
@@ -340,6 +343,11 @@ export function TranscriptViewerPage({
       return;
     }
     const key = segmentMineKey(segment);
+    // Already mined this session — the row shows "✓ Mined" and hides its Mine
+    // button in the mouse UI, so the keyboard path must refuse a duplicate too.
+    if (minedKeys.has(key)) {
+      return;
+    }
     setMiningKey(key);
     const translation = pairedTranslationFor(
       index,
@@ -369,6 +377,112 @@ export function TranscriptViewerPage({
     : !ankiReachable
       ? "Anki not reachable"
       : null;
+
+  // Keyboard-driven mining. The once-registered keydown listener reads live state
+  // through this ref so it never re-subscribes on every selection change nor holds
+  // a stale closure. j/k (or ↓/↑) move a focused sentence, Space replays it, Enter
+  // mines it — all reusing the same handlers the row buttons call.
+  const keyboardStateRef = useRef({
+    enabled: false,
+    segments: editedSegments,
+    selectedSegment,
+    audioDeleted: recording.audioDeleted,
+    mineBlocked: true,
+    play: handlePlaySegment,
+    mine: handleMineSegment,
+  });
+  // Sync the ref after each render (not during it, which React discourages) so the
+  // once-registered keydown listener always reads the latest state.
+  useEffect(() => {
+    keyboardStateRef.current = {
+      // Only when the transcript's timed sentences are actually on screen.
+      enabled: viewMode !== "translation" && editedSegments.length > 0,
+      segments: editedSegments,
+      selectedSegment,
+      audioDeleted: recording.audioDeleted,
+      mineBlocked: mineDisabledReason !== null || isMining,
+      play: handlePlaySegment,
+      mine: handleMineSegment,
+    };
+  });
+
+  useEffect(() => {
+    const focusRow = (index: number) => {
+      setSelectedSegment(`transcript-${index}`);
+      setActiveSegmentIndex(index);
+      document
+        .querySelector(`[data-segment="transcript-${index}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    };
+    const handler = (event: KeyboardEvent) => {
+      const state = keyboardStateRef.current;
+      if (!state.enabled || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+      // Never hijack typing or a focused control (search box, buttons, the speed
+      // dropdown, the language tabs, links).
+      const focused = document.activeElement as HTMLElement | null;
+      const tag = focused?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        tag === "BUTTON" ||
+        tag === "A" ||
+        focused?.isContentEditable ||
+        // An open popup (e.g. the speed dropdown's listbox) owns arrow/enter keys.
+        focused?.closest("[role='listbox'], [role='menu'], [role='dialog']")
+      ) {
+        return;
+      }
+      const count = state.segments.length;
+      const raw =
+        state.selectedSegment && state.selectedSegment.startsWith("transcript-")
+          ? Number(state.selectedSegment.slice("transcript-".length))
+          : Number.NaN;
+      const current =
+        Number.isInteger(raw) && raw >= 0 && raw < count ? raw : null;
+
+      switch (event.key) {
+        case "j":
+        case "J":
+        case "ArrowDown":
+          event.preventDefault();
+          focusRow(current === null ? 0 : Math.min(current + 1, count - 1));
+          break;
+        case "k":
+        case "K":
+        case "ArrowUp":
+          event.preventDefault();
+          focusRow(current === null ? count - 1 : Math.max(current - 1, 0));
+          break;
+        case " ": {
+          if (current === null) {
+            return;
+          }
+          event.preventDefault();
+          const segment = state.segments[current];
+          if (segment && state.play) {
+            state.play(segment.startMs, segment.endMs);
+          }
+          break;
+        }
+        case "Enter":
+          if (current === null) {
+            return;
+          }
+          event.preventDefault();
+          if (!state.audioDeleted && !state.mineBlocked) {
+            state.mine(current);
+          }
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const languageTabs = useMemo<TranscriptLanguageTab[]>(
     () =>
@@ -429,6 +543,13 @@ export function TranscriptViewerPage({
   // shows "Translate" (force: false), a translated one shows "Re-translate".
   const canTranslate =
     onReTranslate !== undefined && recording.translationPath === null;
+
+  // The keyboard shortcuts act on timed, mineable sentences with local audio, so
+  // the hint only shows when they can actually do something.
+  const showKeyboardHint =
+    viewMode !== "translation" &&
+    !recording.audioDeleted &&
+    editedSegments.length > 0;
 
   return (
     <div className="transcript-viewer">
@@ -561,6 +682,22 @@ export function TranscriptViewerPage({
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {showKeyboardHint ? (
+        <p className="transcript-kbd-hint">
+          <kbd>J</kbd>
+          <span aria-hidden="true"> / </span>
+          <kbd>K</kbd> move
+          <span className="transcript-kbd-sep" aria-hidden="true">
+            ·
+          </span>
+          <kbd>Space</kbd> play
+          <span className="transcript-kbd-sep" aria-hidden="true">
+            ·
+          </span>
+          <kbd>Enter</kbd> mine
+        </p>
       ) : null}
 
       {status === "error" ? (
