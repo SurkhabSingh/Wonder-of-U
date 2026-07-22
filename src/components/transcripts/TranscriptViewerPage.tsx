@@ -593,6 +593,7 @@ export function TranscriptViewerPage({
               document={activeTranscript}
               query={query}
               emptyLabel="No transcript text yet."
+              noSpeechLabel="No speech was detected in this recording."
               missingLabel="The transcript file is missing from this machine."
               selectedSegment={selectedSegment}
               onSelectSegment={setSelectedSegment}

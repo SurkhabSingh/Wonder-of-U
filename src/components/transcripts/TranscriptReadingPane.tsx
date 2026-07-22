@@ -46,6 +46,7 @@ export function TranscriptReadingPane({
   document,
   query,
   emptyLabel,
+  noSpeechLabel = emptyLabel,
   missingLabel,
   selectedSegment,
   onSelectSegment,
@@ -70,7 +71,12 @@ export function TranscriptReadingPane({
   isCjk: boolean;
   document: RecordingTextDocument | null;
   query: string;
+  // Shown when there is no transcript document at all (never transcribed).
   emptyLabel: string;
+  // Shown when a transcript document exists but carries no text — i.e. transcription
+  // ran and the recording had no detectable speech (a silent capture). Defaults to
+  // `emptyLabel` for panes (like translation) where the distinction does not apply.
+  noSpeechLabel?: string;
   missingLabel: string;
   selectedSegment: string | null;
   onSelectSegment: (key: string | null) => void;
@@ -118,7 +124,7 @@ export function TranscriptReadingPane({
         ) : document.missing ? (
           <p className="transcript-pane-missing">{missingLabel}</p>
         ) : rows.length === 0 ? (
-          <p className="transcript-pane-empty">{emptyLabel}</p>
+          <p className="transcript-pane-empty">{noSpeechLabel}</p>
         ) : (
           rows.map((row, index) => {
             const key = `${paneKey}-${index}`;

@@ -90,10 +90,13 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     let is_mic_capture = recording.source.as_deref() == Some("recording");
     let preserve_audio_name = already_transcribed || !is_mic_capture;
 
+    // A transcript is only ever persisted from *inside* the recording's own folder — the
+    // transcript viewer sandboxes its reads there, so a path left in the temp dir would read
+    // back as "missing". Every branch below therefore ends at a beside-the-audio path or fails
+    // the transcription outright; the raw `transcript_path` (a temp file) is never stored.
     let final_transcript_path = if preserve_audio_name {
-        match store_additional_language_transcript(&audio_path, &transcript_path, &language) {
-            Ok(stored_transcript_path) => stored_transcript_path,
-            Err(error) => {
+        store_additional_language_transcript(&audio_path, &transcript_path, &language).map_err(
+            |error| {
                 log_event(
                     app,
                     "ERROR",
@@ -103,16 +106,15 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                         "message": error
                     }),
                 );
-                transcript_path
-            }
-        }
+                error
+            },
+        )?
     } else {
         // First transcript for this recording: derive friendly file names from the
         // transcript text and rename both the audio and transcript to match.
-        let mut renamed_transcript_path = transcript_path;
         match rename_recording_outputs_from_transcript(
             &audio_path,
-            &renamed_transcript_path,
+            &transcript_path,
             recording.created_at_ms,
         ) {
             Ok((renamed_audio_path, renamed_transcript)) => {
@@ -125,9 +127,12 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                 recording.bytes_written = fs::metadata(&renamed_audio_path)
                     .map(|metadata| metadata.len())
                     .unwrap_or(recording.bytes_written);
-                renamed_transcript_path = renamed_transcript;
+                renamed_transcript
             }
             Err(error) => {
+                // The friendly rename failed. Do NOT fall back to the temp path — place the
+                // transcript beside the (un-renamed) audio so it stays inside the sandbox and is
+                // readable; only a failure of that safe placement fails the transcription.
                 log_event(
                     app,
                     "ERROR",
@@ -137,9 +142,21 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                         "message": error
                     }),
                 );
+                store_additional_language_transcript(&audio_path, &transcript_path, &language)
+                    .map_err(|store_error| {
+                        log_event(
+                            app,
+                            "ERROR",
+                            "recording.store_additional_transcript_failed",
+                            serde_json::json!({
+                                "audioPath": recording.file_path,
+                                "message": store_error
+                            }),
+                        );
+                        store_error
+                    })?
             }
         }
-        renamed_transcript_path
     };
 
     recording.transcript_path = Some(final_transcript_path.display().to_string());

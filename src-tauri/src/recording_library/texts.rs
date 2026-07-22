@@ -52,15 +52,30 @@ pub(crate) fn collect_recording_texts(
     recording: &RecentRecording,
 ) -> RecordingTexts {
     let mut transcripts = Vec::new();
+    // The recording's own stem, used to recover a transcript whose stored path went
+    // stale — a temp path written by an older build, or an absolute path broken by a
+    // moved recordings folder — since the canonical `{stem}[.lang].transcript.txt`
+    // still sits beside the current audio.
+    let audio_stem = Path::new(&recording.file_path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_string);
 
     for transcript in &recording.transcripts {
-        transcripts.push(read_recording_text_document(
+        let mut document = read_recording_text_document(
             sandbox_root,
             &transcript.file_path,
             transcript.language.clone(),
             transcript.detected_language.clone(),
             transcript.segments_path.as_deref(),
-        ));
+        );
+        recover_missing_transcript(
+            &mut document,
+            sandbox_root,
+            audio_stem.as_deref(),
+            &transcript.language,
+        );
+        transcripts.push(document);
     }
 
     // Older recordings carry a single `transcript_path` with no `transcripts`
@@ -72,16 +87,19 @@ pub(crate) fn collect_recording_texts(
             .iter()
             .any(|transcript| same_file(&transcript.file_path, transcript_path));
         if !already_listed {
-            transcripts.push(read_recording_text_document(
+            let language = recording
+                .transcript_language
+                .clone()
+                .unwrap_or_else(|| "auto".to_string());
+            let mut document = read_recording_text_document(
                 sandbox_root,
                 transcript_path,
-                recording
-                    .transcript_language
-                    .clone()
-                    .unwrap_or_else(|| "auto".to_string()),
+                language.clone(),
                 recording.transcript_language.clone(),
                 None,
-            ));
+            );
+            recover_missing_transcript(&mut document, sandbox_root, audio_stem.as_deref(), &language);
+            transcripts.push(document);
         }
     }
 
@@ -126,6 +144,49 @@ fn read_recording_text_document(
         text: text.unwrap_or_default(),
         segments,
     }
+}
+
+/// If a transcript's stored path could not be read, recover it from the canonical
+/// transcript name beside the *current* audio. This turns a stale stored path — a temp
+/// path left by an older build, or an absolute path broken when the recordings folder
+/// moved — back into readable text instead of a false "missing". A genuinely absent
+/// transcript stays `missing: true`.
+fn recover_missing_transcript(
+    document: &mut RecordingTextDocument,
+    sandbox_root: &Path,
+    audio_stem: Option<&str>,
+    language: &str,
+) {
+    if !document.missing {
+        return;
+    }
+    let Some(stem) = audio_stem else {
+        return;
+    };
+    if let Some(text) = read_transcript_beside_audio(sandbox_root, stem, language) {
+        document.missing = false;
+        document.text = text;
+    }
+}
+
+/// Read the canonical `{stem}.{lang}.transcript.txt` (falling back to the language-less
+/// `{stem}.transcript.txt`) from the recording's own folder, through the same sandbox
+/// guard. These are exactly the names the record→transcribe and additional-language
+/// writers produce beside the audio.
+fn read_transcript_beside_audio(
+    sandbox_root: &Path,
+    audio_stem: &str,
+    language: &str,
+) -> Option<String> {
+    let lang = language.trim().to_ascii_lowercase();
+    let mut candidates: Vec<String> = Vec::new();
+    if !lang.is_empty() && lang != "auto" {
+        candidates.push(format!("{audio_stem}.{lang}.transcript.txt"));
+    }
+    candidates.push(format!("{audio_stem}.transcript.txt"));
+    candidates
+        .into_iter()
+        .find_map(|name| read_text_within_sandbox(sandbox_root, &sandbox_root.join(name)))
 }
 
 /// Read and deserialize the `{stem}.{lang}.segments.json` sidecar through the same
@@ -257,6 +318,65 @@ mod tests {
         assert!(!document.missing);
         assert_eq!(document.language, "en");
         assert_eq!(document.detected_language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn recovers_transcript_from_beside_audio_when_stored_path_is_stale() {
+        // The stored transcript path points somewhere unreadable (a stale temp path from an
+        // older build), but the canonical `{stem}.{lang}.transcript.txt` still sits beside the
+        // audio. The read must recover it instead of reporting a false "missing".
+        let dir = tempfile::tempdir().unwrap();
+        let audio_path = dir.path().join("clip.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+        let canonical = dir.path().join("clip.ja.transcript.txt");
+        fs::write(&canonical, "recovered text").unwrap();
+
+        // A stale stored path, outside the recording's folder — the exact shape of the bug.
+        let stale = tempfile::tempdir().unwrap();
+        let stale_path = stale.path().join("wonder-of-u-transcript-1-2.txt");
+        fs::write(&stale_path, "unreachable").unwrap();
+
+        let mut recording = recording_with(&audio_path.display().to_string());
+        recording.transcripts.push(RecordingTranscript {
+            language: "ja".into(),
+            file_path: stale_path.display().to_string(),
+            detected_language: Some("ja".into()),
+            segments_path: None,
+        });
+
+        let texts = collect_recording_texts(dir.path(), &recording);
+
+        assert_eq!(texts.transcripts.len(), 1);
+        let document = &texts.transcripts[0];
+        assert!(
+            !document.missing,
+            "a stale stored path should recover from the beside-audio transcript"
+        );
+        assert_eq!(document.text, "recovered text");
+    }
+
+    #[test]
+    fn stays_missing_when_no_beside_audio_transcript_exists() {
+        // A recording whose stored transcript is genuinely gone (and no canonical file beside
+        // the audio) stays missing — recovery must not fabricate text from an unrelated file.
+        let dir = tempfile::tempdir().unwrap();
+        let audio_path = dir.path().join("silent.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+
+        let mut recording = recording_with(&audio_path.display().to_string());
+        recording.transcripts.push(RecordingTranscript {
+            language: "ja".into(),
+            file_path: dir
+                .path()
+                .join("silent.ja.transcript.txt")
+                .display()
+                .to_string(),
+            detected_language: Some("ja".into()),
+            segments_path: None,
+        });
+
+        let texts = collect_recording_texts(dir.path(), &recording);
+        assert!(texts.transcripts[0].missing);
     }
 
     #[test]
