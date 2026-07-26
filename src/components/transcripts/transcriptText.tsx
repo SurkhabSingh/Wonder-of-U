@@ -13,6 +13,14 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Reduces a sentence to the form the backend compares against, mirroring the tail of
+// the Rust `normalize_mined_text`: collapse whitespace runs and trim. Transcript
+// segments are plain text, so the HTML/ruby half of that normalizer has no counterpart
+// here — `load_mined_sentences` hands back sentences already stripped.
+export function normalizeSegmentText(text: string): string {
+  return text.split(/\s+/).filter(Boolean).join(" ");
+}
+
 export function countMatches(text: string, query: string): number {
   const trimmed = query.trim();
   if (!trimmed) {

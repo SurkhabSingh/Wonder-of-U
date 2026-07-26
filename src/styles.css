@@ -2396,6 +2396,16 @@ input::placeholder {
   white-space: nowrap;
 }
 
+/* The same sentence exists somewhere in the deck already, from an earlier session.
+   Neutral rather than green: the row still offers "Mine again", so this reports a
+   fact instead of claiming the action is done. */
+.transcript-segment-mined.is-in-deck {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-subtle);
+  font-weight: var(--weight-medium);
+}
+
 /* Quiet inline nudge for older transcripts that predate timestamps. Sits under
    the transport bar and offers a forced re-transcribe to backfill segments. */
 .transcript-enable-timing-buttons {

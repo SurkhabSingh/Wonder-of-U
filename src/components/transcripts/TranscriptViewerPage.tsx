@@ -16,7 +16,11 @@ import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { TranscriptLanguageTabs } from "./TranscriptLanguageTabs";
 import type { TranscriptLanguageTab } from "./TranscriptLanguageTabs";
 import { TranscriptReadingPane } from "./TranscriptReadingPane";
-import { countMatches, splitTranscriptSegments } from "./transcriptText";
+import {
+  countMatches,
+  normalizeSegmentText,
+  splitTranscriptSegments,
+} from "./transcriptText";
 
 type TranscriptViewMode = "sideBySide" | "transcript" | "translation";
 
@@ -212,6 +216,7 @@ export function TranscriptViewerPage({
   isMining,
   expressionFieldMapped,
   ankiReachable,
+  minedSentences,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -242,6 +247,10 @@ export function TranscriptViewerPage({
   // they decide whether Mine is enabled and which tooltip explains a disabled one.
   expressionFieldMapped: boolean;
   ankiReachable: boolean;
+  // Normalized sentences already mined into the Anki deck, from any past session.
+  // Empty when Anki is closed or the note type is unmapped, which simply means no
+  // row is marked — never an error.
+  minedSentences: Set<string>;
 }) {
   // The segments sidecar path is folded in so backfilling timestamps on an
   // already-transcribed language (same count, same translation) still changes
@@ -329,11 +338,34 @@ export function TranscriptViewerPage({
   // Merge/split rewrite this copy only; nothing is persisted, and switching
   // language or reloading the transcript resets it from the source segments.
   const [editedSegments, setEditedSegments] = useState<RecordingSegment[]>([]);
-  // Rows the user has mined this session, tracked by content key so the marker
-  // survives re-renders but not a merge/split (which makes a new sentence).
+  // Rows already mined, tracked by content key so the marker survives re-renders
+  // but not a merge/split (which makes a new sentence). Seeded below from the
+  // cards actually in Anki, so it covers earlier sessions too, then extended as
+  // the user mines.
   const [minedKeys, setMinedKeys] = useState<Set<string>>(new Set());
   // The single row with a mine request in flight, so only it shows "Mining…".
   const [miningKey, setMiningKey] = useState<string | null>(null);
+
+  // Rows whose sentence is already a card in the Anki mining deck. Derived rather
+  // than stored, because `minedSentences` arrives from Anki asynchronously and the
+  // segments change under merge/split — recomputing keeps both in step without an
+  // effect that would clobber the in-session edits.
+  //
+  // These rows are flagged but stay mineable, which is why they are kept apart from
+  // the session `minedKeys` that do spend the action: matching is on sentence text
+  // across the whole deck, so a short recurring line would otherwise become
+  // permanently unmineable everywhere once mined from any one recording.
+  const minedKeysFromAnki = useMemo(
+    () =>
+      new Set(
+        editedSegments
+          .filter((segment) =>
+            minedSentences.has(normalizeSegmentText(segment.text)),
+          )
+          .map(segmentMineKey),
+      ),
+    [editedSegments, minedSentences],
+  );
 
   useEffect(() => {
     setEditedSegments(activeTranscript?.segments ?? []);
@@ -359,8 +391,10 @@ export function TranscriptViewerPage({
       return;
     }
     const key = segmentMineKey(segment);
-    // Already mined this session — the row shows "✓ Mined" and hides its Mine
-    // button in the mouse UI, so the keyboard path must refuse a duplicate too.
+    // Mined during this session — the row shows "✓ Mined" and hides its Mine button
+    // in the mouse UI, so the keyboard path must refuse the duplicate too. A row
+    // matched only against the deck is deliberately NOT refused: it still offers
+    // "Mine again", and Enter has to agree with the button.
     if (minedKeys.has(key)) {
       return;
     }
@@ -811,6 +845,7 @@ export function TranscriptViewerPage({
                 recording.audioDeleted ? undefined : handleMineSegment
               }
               minedKeys={minedKeys}
+              deckMinedKeys={minedKeysFromAnki}
               miningKey={miningKey}
               isMining={isMining}
               mineDisabledReason={mineDisabledReason}

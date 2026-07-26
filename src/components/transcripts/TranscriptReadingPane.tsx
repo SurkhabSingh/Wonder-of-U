@@ -60,6 +60,7 @@ export function TranscriptReadingPane({
   onMergeSegment,
   onSplitSegment,
   minedKeys,
+  deckMinedKeys,
   miningKey = null,
   isMining = false,
   mineDisabledReason = null,
@@ -99,9 +100,11 @@ export function TranscriptReadingPane({
   onMineSegment?: (index: number) => void;
   onMergeSegment?: (index: number) => void;
   onSplitSegment?: (index: number) => void;
-  // Content keys of rows already mined this session, and the row currently
-  // mining. Any in-flight mine disables the other rows' Mine buttons.
+  // Content keys of rows mined during this session (their Mine button is spent), of
+  // rows whose sentence already exists in the deck (flagged but still mineable), and
+  // the row currently mining. Any in-flight mine disables the other rows' Mine buttons.
   minedKeys?: Set<string>;
+  deckMinedKeys?: Set<string>;
   miningKey?: string | null;
   isMining?: boolean;
   // Non-null when Anki isn't usable; becomes the disabled Mine button's tooltip.
@@ -142,6 +145,8 @@ export function TranscriptReadingPane({
               : null;
             const mined =
               mineKey !== null && (minedKeys?.has(mineKey) ?? false);
+            const minedInDeck =
+              mineKey !== null && (deckMinedKeys?.has(mineKey) ?? false);
             const mineBusy = mineKey !== null && miningKey === mineKey;
             return (
               <TranscriptSegmentRow
@@ -168,6 +173,7 @@ export function TranscriptReadingPane({
                     : undefined
                 }
                 mined={mined}
+                minedInDeck={minedInDeck}
                 mineBusy={mineBusy}
                 // A mine in flight elsewhere blocks a second concurrent request.
                 mineDisabled={mineDisabledReason !== null || (isMining && !mineBusy)}

@@ -83,6 +83,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             load_anki_catalog,
+            load_mined_sentences,
             create_anki_note_type,
             play_recording,
             read_recording_texts,

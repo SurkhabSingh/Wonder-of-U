@@ -12,6 +12,7 @@ import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { useAnkiCatalog } from "./hooks/useAnkiCatalog";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useAppViewState } from "./hooks/useAppViewState";
+import { useMinedSentences } from "./hooks/useMinedSentences";
 import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
@@ -123,6 +124,7 @@ function App() {
     showSuccess,
     showWarning,
   });
+  const { minedSentences, refreshMinedSentences } = useMinedSentences();
 
   const runtimeUpdateVersion =
     runtimeUpdateResult?.status === "available"
@@ -319,6 +321,25 @@ function App() {
   const expressionFieldMapped = Boolean(settingsDraft.anki.fields.transcription);
   const ankiReachable = displayedAnkiCatalog.status !== "offline";
 
+  // Reading the whole mining deck is too heavy to poll, so it is refreshed only when
+  // the transcript viewer opens — the one place the marks are shown — and again after
+  // a successful mine. `ankiReachable` is a dependency because starting Anki while a
+  // transcript is already open must bring the marks in; without it the page would show
+  // enabled Mine buttons and no marks at all until the user navigated away and back.
+  // The viewed path is one for the same reason: today every recording switch goes
+  // through the library, but a "next recording" control inside the viewer would
+  // otherwise silently leave the marks stale.
+  useEffect(() => {
+    if (activePage === "transcript") {
+      void refreshMinedSentences();
+    }
+  }, [
+    activePage,
+    ankiReachable,
+    viewingRecording?.filePath,
+    refreshMinedSentences,
+  ]);
+
   return (
     <main className="app-shell">
       <TooltipPrimitive.Provider delayDuration={180}>
@@ -510,13 +531,20 @@ function App() {
                     translation,
                   );
                   const item = result?.items[0];
-                  return Boolean(
+                  const mined = Boolean(
                     item && item.status === "success" && item.noteId !== null,
                   );
+                  if (mined) {
+                    // Keep the persistent set in step with the card that was just
+                    // written, so the mark survives leaving and reopening the viewer.
+                    void refreshMinedSentences();
+                  }
+                  return mined;
                 }}
                 isMining={busyAction === "mineSegment"}
                 expressionFieldMapped={expressionFieldMapped}
                 ankiReachable={ankiReachable}
+                minedSentences={minedSentences}
               />
             ) : (
               <div className="transcript-viewer">

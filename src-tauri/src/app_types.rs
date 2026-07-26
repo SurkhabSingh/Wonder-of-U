@@ -614,6 +614,18 @@ pub(crate) struct AnkiCatalog {
     pub(crate) fields: Vec<String>,
 }
 
+/// Sentences already present in the Anki mining destination, so the transcript viewer
+/// can mark them without the user having to remember. `status` is "ready", "offline",
+/// or "unmapped" — the last two carry an empty list and are a normal state, not a
+/// failure: a transcript still opens fine when Anki is closed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MinedSentences {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) sentences: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingActionItem {

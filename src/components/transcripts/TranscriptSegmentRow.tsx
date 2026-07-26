@@ -18,6 +18,7 @@ export function TranscriptSegmentRow({
   editable = false,
   onMine,
   mined = false,
+  minedInDeck = false,
   mineBusy = false,
   mineDisabled = false,
   mineDisabledReason = null,
@@ -47,7 +48,13 @@ export function TranscriptSegmentRow({
   // Undefined when mining is unavailable (local audio deleted). When present but
   // `mineDisabled`, the button is inert and explains itself via the tooltip.
   onMine?: () => void;
+  // Mined during THIS session: a card was just created from this exact row, so the
+  // action is spent and the button goes away.
   mined?: boolean;
+  // The same sentence already exists somewhere in the deck, from any past session.
+  // Worth flagging, but NOT worth blocking: short lines ("はい。", "Yeah.") recur
+  // across recordings, and the user may well want this one with its own audio.
+  minedInDeck?: boolean;
   mineBusy?: boolean;
   mineDisabled?: boolean;
   mineDisabledReason?: string | null;
@@ -158,28 +165,51 @@ export function TranscriptSegmentRow({
               </button>
             ) : null}
             {onMine ? (
-              mined ? (
-                <span
-                  className="transcript-segment-mined"
-                  title="Mined to Anki"
-                >
-                  <span aria-hidden="true">✓</span> Mined
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="transcript-segment-mine"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onMine();
-                  }}
-                  disabled={mineDisabled || mineBusy}
-                  title={mineDisabledReason ?? "Mine this sentence to Anki"}
-                  aria-label="Mine this sentence to Anki"
-                >
-                  {mineBusy ? "Mining…" : "Mine"}
-                </button>
-              )
+              <>
+                {mined || minedInDeck ? (
+                  // A green "Mined" beside a live "Mine again" button would
+                  // contradict itself, so the deck match gets its own quieter chip
+                  // and wording: it reports a fact, it does not claim the action is
+                  // finished.
+                  <span
+                    className={`transcript-segment-mined${
+                      mined ? "" : " is-in-deck"
+                    }`}
+                    title={
+                      mined
+                        ? "Mined to Anki"
+                        : "This sentence is already in your Anki deck"
+                    }
+                  >
+                    <span aria-hidden="true">✓</span>{" "}
+                    {mined ? "Mined" : "In deck"}
+                  </span>
+                ) : null}
+                {mined ? null : (
+                  <button
+                    type="button"
+                    className="transcript-segment-mine"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onMine();
+                    }}
+                    disabled={mineDisabled || mineBusy}
+                    title={
+                      mineDisabledReason ??
+                      (minedInDeck
+                        ? "Already in your deck — mine this line again with its own audio"
+                        : "Mine this sentence to Anki")
+                    }
+                    aria-label={
+                      minedInDeck
+                        ? "Mine this sentence to Anki again"
+                        : "Mine this sentence to Anki"
+                    }
+                  >
+                    {mineBusy ? "Mining…" : minedInDeck ? "Mine again" : "Mine"}
+                  </button>
+                )}
+              </>
             ) : null}
           </>
         ) : (

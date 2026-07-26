@@ -3,13 +3,13 @@ use tauri::AppHandle;
 use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
-        mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
+        load_mined_sentences_inner, mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
         push_recordings_to_anki_inner,
     },
     app_runtime::build_app_bootstrap,
     app_types::{
-        AnkiCatalog, AppBootstrap, AppSettings, RecordingBatchResult, RecordingTexts,
-        WhisperAssetUpdateResult,
+        AnkiCatalog, AppBootstrap, AppSettings, MinedSentences, RecordingBatchResult,
+        RecordingTexts, WhisperAssetUpdateResult,
     },
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
@@ -165,6 +165,14 @@ pub(crate) async fn load_anki_catalog(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn load_mined_sentences(app: AppHandle) -> Result<MinedSentences, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || load_mined_sentences_inner(&app_for_blocking))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

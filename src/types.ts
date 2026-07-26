@@ -232,6 +232,15 @@ export type AnkiCatalog = {
   fields: string[];
 };
 
+// Sentences already mined into the configured Anki deck + note type. `status` is
+// "ready" | "offline" | "unmapped"; the latter two carry an empty list and are normal
+// states, not failures — a transcript still opens fine with Anki closed.
+export type MinedSentences = {
+  status: string;
+  message: string;
+  sentences: string[];
+};
+
 export type RecordingActionItem = {
   filePath: string;
   status: string;
