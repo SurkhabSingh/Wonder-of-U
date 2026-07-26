@@ -868,6 +868,28 @@ input::placeholder {
   font-size: var(--text-2xs);
 }
 
+/* Marks a setting whose effect we have measured but cannot promise generalises — the
+   user should expect to judge it on their own material. Quiet: it is a caveat, not a
+   warning. */
+.field-experimental-tag {
+  /* The sizing below is copied from .tooltip-badge, which shares this slot — it needs
+     the flex centring too, or the text sits flush to the top of the pill and the two
+     badges read as misaligned side by side. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border));
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .field:focus-within > span {
   color: var(--text-strong);
 }

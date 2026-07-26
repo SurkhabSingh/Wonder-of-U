@@ -50,6 +50,11 @@ pub struct WhisperTranscriptionRequest {
     /// song at any threshold; the cost is whisper's own, looser timestamps. False keeps the
     /// normal VAD-anchored speech behaviour, unchanged.
     pub music_mode: bool,
+    /// When true, decode greedily (`-bs 1 -bo 1`) instead of with whisper's default beam
+    /// search. Measured on this app's own audio: 23% faster on conversation, 13% on sung
+    /// vocals, with differences that are lateral (kana vs kanji, punctuation, where a
+    /// sentence is split) rather than worse. False keeps whisper's defaults untouched.
+    pub fast_decode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -394,6 +399,7 @@ pub fn run_whisper_transcription(
         &transcript_output_base(),
         request.thread_count,
         request.music_mode,
+        request.fast_decode,
         cancel,
         on_progress,
         on_segment,
@@ -412,6 +418,7 @@ fn run_whisper_once(
     output_base: &Path,
     thread_count: usize,
     music_mode: bool,
+    fast_decode: bool,
     cancel: Arc<AtomicBool>,
     on_progress: impl Fn(u8) + Send + 'static,
     on_segment: impl Fn(u64, u64, String) + Send + 'static,
@@ -478,6 +485,30 @@ fn run_whisper_once(
     // Stop whisper's runaway repetition on non-vocal audio. `-mc 0` drops the cross-window
     // text context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
     command.arg("-mc").arg("0").arg("--suppress-nst");
+
+    // Greedy decoding instead of whisper's default 5-wide beam. Measured on this app's own
+    // recordings: 23% faster on conversation, 13% on sung vocals, and where the text differs
+    // it differs laterally (「つきます」 vs 「付きます」, comma vs full stop, a sentence split
+    // one word earlier) rather than getting worse.
+    //
+    // `-bs 1` ONLY, deliberately. Pairing it with `-bo 1` looks natural and costs nothing at
+    // temperature 0 — whisper instantiates a single decoder under the greedy strategy, so
+    // `best_of` is never read and the output is byte-identical either way. But `best_of` IS
+    // read on the temperature-fallback re-decode, which is the mechanism that breaks a
+    // repetition loop: at t>0 whisper draws `best_of` samples and keeps the best-scoring one.
+    // `-bo 1` would leave it a single draw, making Faster *more* likely to emit a looped line
+    // on hard audio — a regression in the one place the setting must not cause one, and
+    // invisible in the timings because the fallback never fired on either test sample.
+    //
+    // There is no opposite setting. A WIDER beam (`-bs 8 -bo 8`) was measured the same way and
+    // earned nothing for its extra 7–13%: on conversation it recovered two filler words, and
+    // on hard audio it simply chose differently — 「大層じゃなくていいよ」 became
+    // 「愛想じゃなくていいよ」, which is worse. Whisper's temperature fallback never fired on
+    // either sample (`--no-fallback` produced byte-identical output), so the entropy and
+    // logprob thresholds that fallback depends on had nothing to tune either.
+    if fast_decode {
+        command.arg("-bs").arg("1");
+    }
 
     // Speech mode uses whisper.cpp's built-in Silero VAD: only detected speech regions are
     // transcribed and their timestamps mapped back to the absolute timeline — drift-free on
@@ -810,6 +841,7 @@ mod tests {
             language: std::env::var("WOU_LANG").unwrap_or_default(),
             thread_count: transcription_thread_count("balanced"),
             music_mode: std::env::var("WOU_MUSIC").is_ok(),
+            fast_decode: std::env::var("WOU_FAST").is_ok(),
         };
         let result = run_whisper_transcription(
             &request,

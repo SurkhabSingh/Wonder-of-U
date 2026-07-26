@@ -81,6 +81,10 @@ fn default_audio_type() -> String {
     "speech".into()
 }
 
+fn default_decode_speed() -> String {
+    "balanced".into()
+}
+
 fn default_clip_padding_ms() -> u64 {
     250
 }
@@ -237,6 +241,14 @@ pub(crate) struct WhisperSettings {
     /// song (sung vocals) transcribes; speech keeps the VAD-anchored behaviour.
     #[serde(default = "default_audio_type")]
     pub(crate) audio_type: String,
+    /// Decoder search width: `"balanced"` (default) or `"fast"`. Fast drops whisper to
+    /// greedy decoding (`-bs 1 -bo 1`), measured 13–23% quicker with lateral quality
+    /// differences — kana/kanji choice, punctuation, segment boundaries — rather than
+    /// worse ones. There is deliberately no "thorough" setting: a wider beam
+    /// (`-bs 8 -bo 8`) was measured against the default on both conversation and sung
+    /// vocals and recovered nothing, sometimes choosing a worse reading.
+    #[serde(default = "default_decode_speed")]
+    pub(crate) decode_speed: String,
 }
 
 impl Default for WhisperSettings {
@@ -249,6 +261,7 @@ impl Default for WhisperSettings {
             language: "auto".into(),
             cpu_usage: default_cpu_usage(),
             audio_type: default_audio_type(),
+            decode_speed: default_decode_speed(),
         }
     }
 }

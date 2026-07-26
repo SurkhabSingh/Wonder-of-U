@@ -117,6 +117,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
             } else {
                 "speech".into()
             },
+            decode_speed: normalize_decode_speed(&settings.whisper.decode_speed),
         },
         anki: AnkiSettings {
             deck_name: settings.anki.deck_name.trim().to_string(),
@@ -156,6 +157,19 @@ pub(crate) fn normalize_settings<R: Runtime>(
         launch_at_login: settings.launch_at_login,
         start_minimized: settings.start_minimized,
     })
+}
+
+/// Keep the decoder-speed setting to the two values the engine branches on. Only
+/// `"fast"` drops whisper to greedy decoding; anything else, including a hand-edited
+/// value, means the untouched default beam. Case-insensitive because this is the kind of
+/// field a user edits in state.json by hand, and `"Fast"` silently reverting to Balanced
+/// with no explanation is the worst of both outcomes.
+fn normalize_decode_speed(decode_speed: &str) -> String {
+    if decode_speed.trim().eq_ignore_ascii_case("fast") {
+        "fast".to_string()
+    } else {
+        "balanced".to_string()
+    }
 }
 
 /// Keep the persisted provider to the ids the extension actually routes on,
@@ -330,7 +344,7 @@ pub(crate) fn unique_wav_path(directory: &Path, file_stem: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_translation_target_language;
+    use super::{normalize_decode_speed, normalize_translation_target_language};
 
     #[test]
     fn translation_target_language_is_normalized_to_a_url_safe_code() {
@@ -353,5 +367,23 @@ mod tests {
         // anything not on a Rust-side list would mean a new UI language silently
         // translating to English.
         assert_eq!(normalize_translation_target_language("zh-Hans"), "zh-hans");
+    }
+
+    #[test]
+    fn only_fast_selects_greedy_decoding() {
+        assert_eq!(normalize_decode_speed("fast"), "fast");
+        assert_eq!(normalize_decode_speed("  Fast  "), "fast");
+        assert_eq!(normalize_decode_speed("FAST"), "fast");
+    }
+
+    #[test]
+    fn any_other_decode_speed_keeps_the_default_beam() {
+        // Balanced must be the safe landing spot: it adds no whisper flags at all, so an
+        // unrecognized value can never change how an existing recording transcribes.
+        assert_eq!(normalize_decode_speed("balanced"), "balanced");
+        assert_eq!(normalize_decode_speed(""), "balanced");
+        assert_eq!(normalize_decode_speed("   "), "balanced");
+        assert_eq!(normalize_decode_speed("thorough"), "balanced");
+        assert_eq!(normalize_decode_speed("faster"), "balanced");
     }
 }

@@ -19,6 +19,7 @@ export function ThemedSelect({
   disabled = false,
   title,
   triggerClassName,
+  describedBy,
 }: {
   value: string;
   options: SelectOption[];
@@ -26,6 +27,10 @@ export function ThemedSelect({
   placeholder?: string;
   disabled?: boolean;
   title?: string;
+  // Id of an element describing this control. The trigger's `aria-label` replaces the
+  // whole wrapping <label>, so anything else in that label — a badge, a caveat — is
+  // dropped for screen readers unless it is pointed at explicitly.
+  describedBy?: string;
   // Extra class on the trigger, so a caller can compact it (e.g. the player bar)
   // without forking the component or its styled dropdown.
   triggerClassName?: string;
@@ -40,6 +45,7 @@ export function ThemedSelect({
         className={`themed-select-trigger${triggerClassName ? ` ${triggerClassName}` : ""}`}
         title={title}
         aria-label={placeholder}
+        aria-describedby={describedBy}
       >
         <SelectPrimitive.Value placeholder={placeholder} />
         <SelectPrimitive.Icon className="themed-select-icon" aria-hidden="true">

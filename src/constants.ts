@@ -266,6 +266,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       language: "auto",
       cpuUsage: "balanced",
       audioType: "speech",
+      decodeSpeed: "balanced",
     },
     anki: {
       deckName: "",

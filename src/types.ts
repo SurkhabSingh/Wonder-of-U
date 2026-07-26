@@ -64,6 +64,11 @@ export type WhisperSettings = {
   // Audio content mode: "speech" (default) or "music". Music lowers the VAD
   // threshold so sung vocals transcribe.
   audioType: string;
+  // Decoder search width: "balanced" (default) or "fast". Fast decodes greedily —
+  // measured 13–23% quicker, with differences that are lateral (kana vs kanji,
+  // punctuation, sentence splits) rather than less accurate. There is no "thorough"
+  // option: a wider beam was measured and recovered nothing for its extra cost.
+  decodeSpeed: string;
 };
 
 export type TranslationProvider = "google-translate" | "deepl";

@@ -599,6 +599,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 ffmpeg_path: ffmpeg_path.clone(),
                 thread_count,
                 music_mode: settings.whisper.audio_type == "music",
+                fast_decode: settings.whisper.decode_speed == "fast",
             },
             cancel_listener.flag(),
             move |percent| {

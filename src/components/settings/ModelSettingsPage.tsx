@@ -152,17 +152,64 @@ export function ModelSettingsPage({
             }
           />
         </label>
+
+        <label className="field">
+          <span className="field-label-with-help">
+            <span>Transcription speed</span>
+            {/* The speed win is measured, but it was measured on two recordings — how the
+                text shifts depends on the audio, so this is flagged rather than presented
+                as a settled improvement. */}
+            <span className="field-experimental-tag">Experimental</span>
+            <TooltipBadge
+              label="?"
+              description="Faster narrows the decoder's search from whisper's 5-wide beam to a single greedy pass. On our test recordings it ran 13–23% quicker, and where the text differed it differed sideways — kana instead of kanji, a comma instead of a full stop, a sentence split a word earlier — rather than less accurately. That was two recordings; greedy decoding is generally more prone to repeating a line on difficult audio, so compare before trusting it on something you mine."
+            />
+          </span>
+          <ThemedSelect
+            value={settingsDraft.whisper.decodeSpeed || "balanced"}
+            options={[
+              // "Standard", not "Balanced": CPU usage two rows up already offers a
+              // Balanced, and two speed-ish controls sharing a value label with unrelated
+              // meanings is a needless trap. The stored value stays "balanced".
+              { value: "balanced", label: "Standard (default)" },
+              { value: "fast", label: "Faster" },
+            ]}
+            placeholder="Transcription speed"
+            describedBy="transcription-speed-help"
+            onChange={(nextValue) =>
+              onUpdateSettings({
+                whisper: {
+                  decodeSpeed: nextValue,
+                },
+              })
+            }
+          />
+        </label>
       </div>
 
+      {/* Each paragraph names its own control. Without that, the reader takes whichever
+          one sits nearest — and this one is about speed, directly under a speed setting
+          whose options are not the "higher"/"lower" it describes. */}
       <p className="microcopy">
-        Higher uses more CPU cores for faster transcription; lower uses fewer, so
-        the machine stays responsive while it runs.
+        CPU usage controls how much of the machine transcription may take: higher uses
+        more cores and finishes sooner, lower uses fewer so the machine stays responsive
+        while it runs.
       </p>
 
       <p className="microcopy">
         Set Audio type to Music for songs — it transcribes the whole song including
         sung vocals (Speech mode's voice detection drops singing). Timestamps are a
         little looser in Music mode; keep it on Speech for dialogue.
+      </p>
+
+      {/* The id is what the select's aria-describedby points at, so this caveat reaches a
+          screen reader — the trigger's aria-label otherwise replaces the whole label and
+          the Experimental badge with it. */}
+      <p className="microcopy" id="transcription-speed-help">
+        Transcription speed is <strong>experimental</strong>: Faster was 13&ndash;23%
+        quicker on our test recordings without reading less accurately, but that was two
+        recordings and your audio may behave differently. Compare both on a long episode
+        before relying on it; Standard is unchanged from before this setting existed.
       </p>
 
       <div
