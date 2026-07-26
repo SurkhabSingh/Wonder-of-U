@@ -197,6 +197,11 @@ pub(crate) struct AnkiFieldMapping {
     /// Target field for the sentence's timestamp (H:MM:SS). Empty = unmapped.
     #[serde(default)]
     pub(crate) position: String,
+    /// Target field for a still frame taken from the recording's source video at the
+    /// mined sentence's moment. Empty = unmapped, which is also what every recording
+    /// without a source video gets. Receives an `<img src="...">` tag.
+    #[serde(default)]
+    pub(crate) image: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -403,6 +408,13 @@ pub(crate) struct RecentRecording {
     /// on disk is renamed/sanitized. `None` for mic recordings.
     #[serde(default)]
     pub(crate) title: Option<String>,
+    /// Absolute path of the video this recording's audio came from, for mining a still
+    /// frame at a sentence's moment. Deliberately a REFERENCE, not a copy: keeping the
+    /// video in the library would cost roughly ten times the storage per recording.
+    /// `None` for mic captures, YouTube imports (audio-only downloads) and audio files —
+    /// and the file may have moved since, so every read must tolerate it being gone.
+    #[serde(default)]
+    pub(crate) source_video_path: Option<String>,
 }
 
 impl RecentRecording {

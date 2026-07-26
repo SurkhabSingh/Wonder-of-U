@@ -16,6 +16,7 @@ use super::{
     furigana::{
         insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
     },
+    screenshot::capture_screenshot,
 };
 use crate::{
     app_runtime::{build_app_bootstrap, update_shell_snapshot},
@@ -30,7 +31,7 @@ use crate::{
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn hide_command_window(command: &mut Command) {
+pub(super) fn hide_command_window(command: &mut Command) {
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW);
@@ -82,6 +83,63 @@ fn slice_ffmpeg_args(
 /// Slices the requested sentence out of `audio_path` into a fresh MP3 beside it.
 /// FFmpeg is mandatory here: unlike the optional WAV->MP3 compression, a mine has
 /// nothing to attach without the clip, so a missing binary is a hard error.
+/// Grabs a still from the recording's source video at the middle of the sentence, or
+/// explains why it could not.
+///
+/// Returns `Ok(None)` — not an error — for every ordinary reason a recording simply has
+/// no picture: no image field mapped, a mic capture or YouTube import (audio-only), or an
+/// audio file. `Err` is reserved for "there should have been a frame and there wasn't",
+/// which the caller reports alongside a card it still creates.
+///
+/// The midpoint rather than the start: a sentence's first frame is often the tail of the
+/// previous shot, or a cut, while the middle reliably shows whoever is speaking.
+fn capture_segment_screenshot(
+    settings: &AppSettings,
+    recording: &RecentRecording,
+    audio_path: &Path,
+    start_ms: u64,
+    end_ms: u64,
+) -> Result<Option<PathBuf>, String> {
+    if settings.anki.fields.image.is_empty() {
+        return Ok(None);
+    }
+    let Some(source_video_path) = recording.source_video_path.as_ref() else {
+        return Ok(None);
+    };
+    let video_path = PathBuf::from(source_video_path);
+    if !video_path.exists() {
+        return Err(format!(
+            "the source video is no longer at {source_video_path}"
+        ));
+    }
+
+    let detection = detect_local_ffmpeg(settings);
+    let executable_path = detection
+        .executable_path
+        .clone()
+        .ok_or_else(|| "FFmpeg is required to take a screenshot".to_string())?;
+
+    let parent = audio_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = audio_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("recording");
+    let shot_path = unique_path_with_suffix(parent, &format!("{stem}_shot{start_ms}"), ".jpg");
+
+    let midpoint_ms = start_ms + (end_ms.saturating_sub(start_ms)) / 2;
+    capture_screenshot(
+        Path::new(&executable_path),
+        &video_path,
+        midpoint_ms,
+        &shot_path,
+    )
+    .map_err(|error| {
+        let _ = fs::remove_file(&shot_path);
+        error
+    })?;
+    Ok(Some(shot_path))
+}
+
 fn slice_segment_clip(
     settings: &AppSettings,
     audio_path: &Path,
@@ -224,9 +282,26 @@ fn mine_single_segment<R: Runtime>(
         Err(error) => return failed(error),
     };
 
+    // 3 (cont.). A still from the source video, when there is one. Deliberately not a
+    // `?`: a card with audio and no picture is worth far more than no card, so a failure
+    // here is carried as a note on an otherwise successful mine.
+    let (screenshot_path, screenshot_problem) = match capture_segment_screenshot(
+        &settings,
+        &recording,
+        &audio_path,
+        start_ms,
+        end_ms,
+    ) {
+        Ok(path) => (path, None),
+        Err(problem) => (None, Some(problem)),
+    };
+
     // 4. Anki must be reachable before we store media or add the note.
     if let Err(error) = anki_connect_request("version", serde_json::json!({})) {
         let _ = fs::remove_file(&clip_path);
+        if let Some(path) = &screenshot_path {
+            let _ = fs::remove_file(path);
+        }
         return (
             RecordingActionItem {
                 file_path: file_path.to_string(),
@@ -250,8 +325,35 @@ fn mine_single_segment<R: Runtime>(
     // regardless of whether storing (or the later addNote) succeeds.
     let _ = fs::remove_file(&clip_path);
     if let Err(error) = store_result {
+        if let Some(path) = &screenshot_path {
+            let _ = fs::remove_file(path);
+        }
         return failed(format!("Anki could not store the audio clip. {error}"));
     }
+
+    // The still goes into Anki's media folder the same way. A store failure here demotes
+    // the card to audio-only rather than losing it.
+    let (screenshot_media_file_name, screenshot_problem) = match &screenshot_path {
+        Some(path) => {
+            let media_file_name = anki_media_file_name(path);
+            let stored = anki_connect_request(
+                "storeMediaFile",
+                serde_json::json!({
+                    "filename": media_file_name,
+                    "path": path.display().to_string()
+                }),
+            );
+            let _ = fs::remove_file(path);
+            match stored {
+                Ok(_) => (Some(media_file_name), screenshot_problem),
+                Err(error) => (
+                    None,
+                    Some(format!("Anki could not store the screenshot. {error}")),
+                ),
+            }
+        }
+        None => (None, screenshot_problem),
+    };
 
     // 4 (cont.). Build the note fields from the mapping.
     let mut fields = serde_json::Map::new();
@@ -264,6 +366,17 @@ fn mine_single_segment<R: Runtime>(
         &anki.fields.audio,
         format!("[sound:{clip_media_file_name}]"),
     );
+    if let Some(media_file_name) = &screenshot_media_file_name {
+        // The file name comes from a path this app built, but it is interpolated into an
+        // HTML attribute, so it is escaped like every other field value.
+        fields.insert(
+            anki.fields.image.clone(),
+            serde_json::Value::String(format!(
+                "<img src=\"{}\">",
+                html_escape(media_file_name)
+            )),
+        );
+    }
     if !anki.fields.source_path.is_empty() {
         fields.insert(
             anki.fields.source_path.clone(),
@@ -384,7 +497,15 @@ fn mine_single_segment<R: Runtime>(
         RecordingActionItem {
             file_path: file_path.to_string(),
             status: "success".into(),
-            message: format!("Mined sentence into Anki note {note_id}."),
+            // The card exists either way, but a screenshot the user expected and did not
+            // get has to be said out loud — silently dropping it would report a partial
+            // result as a whole one.
+            message: match screenshot_problem {
+                Some(problem) => format!(
+                    "Mined sentence into Anki note {note_id}, without a screenshot: {problem}."
+                ),
+                None => format!("Mined sentence into Anki note {note_id}."),
+            },
             note_id: Some(note_id),
         },
         "completed",

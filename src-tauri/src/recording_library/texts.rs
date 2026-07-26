@@ -290,6 +290,7 @@ mod tests {
             source: None,
             source_url: None,
             title: None,
+            source_video_path: None,
         }
     }
 

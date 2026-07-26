@@ -42,6 +42,10 @@ export type AnkiFieldMapping = {
   sourceUrl: string;
   title: string;
   position: string;
+  // Receives an <img> of a still taken from the recording's source video at the mined
+  // sentence's moment. Empty = unmapped, which is also every recording that has no
+  // source video (mic captures, YouTube imports, plain audio files).
+  image: string;
 };
 
 export type AnkiSettings = {
@@ -116,6 +120,11 @@ export type RecentRecording = {
   sourceUrl: string | null;
   // The original file name of an imported file (the on-disk name can differ).
   title: string | null;
+  // Absolute path of the video this recording's audio came from, when it was imported
+  // from one. A reference to the user's own file, not a copy — so it can be stale, and
+  // every use must tolerate the file having moved. Null for mic captures, YouTube
+  // imports (audio-only) and audio files.
+  sourceVideoPath: string | null;
   transcriptPath: string | null;
   transcriptLanguage: string | null;
   transcripts: RecordingTranscript[];

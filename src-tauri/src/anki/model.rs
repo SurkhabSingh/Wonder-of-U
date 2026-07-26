@@ -17,9 +17,10 @@ const CARD_TEMPLATE_NAME: &str = "Listening";
 /// pushed" keeps working. Display is template-driven, so the sentence being field 1
 /// does not put it on the front. `Audio` holds the `[sound:...]` the app fills;
 /// `Reading` is an optional manual kana aid, left unmapped by default.
-const FIELD_NAMES: [&str; 7] = [
+const FIELD_NAMES: [&str; 8] = [
     "Sentence",
     "Audio",
+    "Image",
     "Translation",
     "Reading",
     "SourceURL",
@@ -41,6 +42,7 @@ const FRONT_TEMPLATE: &str = r#"<div class="wu-card wu-front">
 /// `{{#Field}}…{{/Field}}`-guarded so a blank field leaves no empty row. It does not use
 /// `{{FrontSide}}` — the back shows its own `{{Audio}}` replay without repeating the hint.
 const BACK_TEMPLATE: &str = r#"<div class="wu-card wu-back">
+  {{#Image}}<div class="wu-image">{{Image}}</div>{{/Image}}
   {{#Audio}}<div class="wu-audio">{{Audio}}</div>{{/Audio}}
   {{#Sentence}}<div class="wu-sentence">{{Sentence}}</div>{{/Sentence}}
   {{#Reading}}<div class="wu-reading">{{Reading}}</div>{{/Reading}}
@@ -81,6 +83,10 @@ const CARD_CSS: &str = r#".card {
 }
 .wu-card { max-width: 34em; margin: 0 auto; }
 .wu-audio { margin: 8px 0 4px; }
+/* The mined still. Bounded so a card stays readable on a phone without the image
+   pushing the sentence off the screen. */
+.wu-image { margin: 0 0 10px; }
+.wu-image img { max-width: 100%; max-height: 45vh; border-radius: 6px; }
 .wu-audio a { transform: scale(1.6); display: inline-block; }
 .wu-front .wu-hint {
   margin-top: 22px;

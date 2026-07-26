@@ -50,6 +50,7 @@ export function AnkiMappingSettingsPage({
             sourceUrl: "SourceURL",
             title: "Title",
             position: "Time",
+            image: "Image",
           },
         },
       });
@@ -114,8 +115,8 @@ export function AnkiMappingSettingsPage({
         <p className="microcopy">
           No matching note type? Create the app&rsquo;s &ldquo;Wonder of U
           Listening&rdquo; note type in one click &mdash; a listening card that plays the
-          audio on the front and reveals the transcript, translation, and source on the
-          back &mdash; and the fields below map automatically.
+          audio on the front and reveals the screenshot, transcript, translation, and
+          source on the back &mdash; and the fields below map automatically.
         </p>
         <button
           type="button"
@@ -208,6 +209,7 @@ export function AnkiMappingSettingsPage({
                     sourceUrl: "",
                     title: "",
                     position: "",
+                    image: "",
                   },
                 },
               });
@@ -279,6 +281,14 @@ export function AnkiMappingSettingsPage({
           label="Timestamp field"
           description="Optional timestamp of the sentence within the recording (H:MM:SS)."
           currentValue={settingsDraft.anki.fields.position}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
+          field="image"
+          label="Screenshot field"
+          description="Optional still from the recording's source video at the mined sentence's moment. Only recordings imported from a video file have one — mic recordings, YouTube imports and audio files are mined without a picture, and so is a recording whose video you have since moved or deleted."
+          currentValue={settingsDraft.anki.fields.image}
           fieldOptions={displayedAnkiCatalog.fields}
           onChange={onUpdateAnkiField}
         />

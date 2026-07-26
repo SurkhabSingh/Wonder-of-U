@@ -96,6 +96,9 @@ fn recording_from_audio_path(audio_path: &Path, target_language: &str) -> Option
         source: None,
         source_url: None,
         title: None,
+        // Adopted from disk: only the audio is in the recordings folder, so there is no
+        // source video to point at.
+        source_video_path: None,
     })
 }
 

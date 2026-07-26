@@ -41,6 +41,25 @@ const CONVERT_EXTENSIONS: [&str; 10] = [
     "m4a", "opus", "mp4", "webm", "aac", "mkv", "mov", "m4v", "wma", "aiff",
 ];
 
+/// The subset of the above that carries a picture. Import still strips the video — the
+/// library stays audio — but the path to the original is remembered so mining can pull a
+/// still frame from it later. Extension-based on purpose: probing every import for a
+/// video stream would cost an ffprobe run to answer a question the container name
+/// already answers well enough, and a wrong guess costs nothing (the frame grab simply
+/// finds no picture and the mine proceeds without one).
+const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "webm", "mkv", "mov", "m4v"];
+
+fn is_video_container(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            VIDEO_EXTENSIONS
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+        .unwrap_or(false)
+}
+
 const FFMPEG_REQUIRED_MESSAGE: &str =
     "FFmpeg is required to import this format; install it in Setup.";
 
@@ -381,6 +400,14 @@ fn import_single_file<R: Runtime>(
         source: Some("import".into()),
         source_url: None,
         title: Some(original_file_name),
+        // Remember where the picture lives, without copying it. `source` is the user's
+        // own file and stays where they keep it, so this can go stale — every reader
+        // checks the file still exists rather than trusting the path.
+        source_video_path: if is_video_container(&source) {
+            Some(source.display().to_string())
+        } else {
+            None
+        },
     };
 
     insert_recent_recording(app, recording.clone())?;
@@ -1107,6 +1134,9 @@ fn register_youtube_recording<R: Runtime>(
         // Falls back to the bare STEM, never the file name: a probe-failed import
         // would otherwise be the only entry in the Library wearing a `.mp3`.
         title: title.or(Some(file_stem)),
+        // yt-dlp is invoked with `-x --audio-format mp3`, so nothing but audio is ever
+        // downloaded and there is no local video to take a frame from.
+        source_video_path: None,
     };
 
     insert_recent_recording(app, recording.clone())?;

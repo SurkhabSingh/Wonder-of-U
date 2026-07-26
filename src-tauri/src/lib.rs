@@ -363,6 +363,7 @@ mod tests {
             source: None,
             source_url: None,
             title: None,
+            source_video_path: None,
         };
         let mut state = PersistedData {
             settings: serde_json::from_value(serde_json::json!({
@@ -434,6 +435,7 @@ mod tests {
             source: None,
             source_url: None,
             title: None,
+            source_video_path: None,
         };
 
         assert!(recording_pushed_to_anki_target(&recording, &settings, "ja"));
@@ -477,6 +479,7 @@ mod tests {
             source: None,
             source_url: None,
             title: None,
+            source_video_path: None,
         };
 
         assert!(!recording_transcript_supports_furigana(

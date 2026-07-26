@@ -281,6 +281,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         sourceUrl: "",
         title: "",
         position: "",
+        image: "",
       },
       clipPaddingMs: 250,
     },

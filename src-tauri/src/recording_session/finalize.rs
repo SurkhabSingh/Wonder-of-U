@@ -44,6 +44,8 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                 source: Some("recording".into()),
                 source_url: None,
                 title: None,
+                // A microphone capture has no picture to grab a frame from.
+                source_video_path: None,
             };
 
             log_event(
