@@ -285,6 +285,17 @@ export type TranscriptionQueueItem = {
   message?: string;
 };
 
+// One sentence streamed from whisper while a transcription is still running. The
+// bounds are already on the recording's absolute timeline (whisper maps its VAD speech
+// regions back before printing), so a live row never has to be revised once the run
+// finishes — it is the same segment the sidecar ends up holding.
+export type TranscriptionLiveSegment = {
+  filePath: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+};
+
 export type BusyAction =
   | "start"
   | "stop"

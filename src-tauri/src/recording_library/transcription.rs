@@ -587,6 +587,8 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         })?;
 
         let app_progress = app.clone();
+        let app_segment = app.clone();
+        let streaming_file_path = original_file_path.clone();
         let result = run_whisper_transcription(
             &WhisperTranscriptionRequest {
                 cli_path: cli_path.clone(),
@@ -601,6 +603,29 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             cancel_listener.flag(),
             move |percent| {
                 let _ = app_progress.emit("transcription-progress", percent);
+            },
+            // Each sentence as whisper decodes it, so the viewer fills in live instead of
+            // staying blank behind a progress bar. The file path rides along because the
+            // queue runs recordings back to back and only the viewed one should render.
+            //
+            // Hallucinations are filtered here for the same reason `clean_segments` drops
+            // them from the saved transcript: a stock "thanks for watching" would otherwise
+            // flash on screen and then vanish when the run finished. The run-collapse half
+            // of that filter needs the whole list, so a runaway repetition can still appear
+            // live and be collapsed at the end.
+            move |start_ms, end_ms, text| {
+                if is_whisper_hallucination(&text) {
+                    return;
+                }
+                let _ = app_segment.emit(
+                    "transcription-segment",
+                    serde_json::json!({
+                        "filePath": streaming_file_path,
+                        "startMs": start_ms,
+                        "endMs": end_ms,
+                        "text": text,
+                    }),
+                );
             },
         )
         .and_then(|result| {

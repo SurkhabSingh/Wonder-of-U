@@ -11,6 +11,7 @@ import type {
   RecentRecording,
   RecordingSegment,
   RecordingTextDocument,
+  TranscriptionLiveSegment,
 } from "../../types";
 import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { TranscriptLanguageTabs } from "./TranscriptLanguageTabs";
@@ -204,6 +205,75 @@ function TranscriptSkeleton() {
   );
 }
 
+// The transcript as it is being decoded. Deliberately read-only — no mining, no
+// merge/split, no per-sentence playback: none of it is anchored to a saved transcript
+// yet, and offering an action that would be undone seconds later is worse than not
+// offering it. The pane sticks to the newest line so the text scrolls itself.
+function LiveTranscriptPane({
+  segments,
+}: {
+  segments: TranscriptionLiveSegment[];
+}) {
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  // Stick to the newest line ONLY while the reader is already at the bottom. Scrolling
+  // unconditionally would yank them back down every second or two, making it impossible
+  // to read back over an earlier sentence while the run continues.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) {
+      return;
+    }
+    const distanceFromBottom =
+      body.scrollHeight - body.scrollTop - body.clientHeight;
+    // Generous threshold: a row lands between the measurement and this effect, so an
+    // exact-bottom test would already read as "scrolled up".
+    if (distanceFromBottom < 120) {
+      endRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [segments.length]);
+
+  return (
+    <div className="transcript-pane">
+      <header className="transcript-pane-header">
+        <div>
+          <p className="panel-kicker">Transcribing</p>
+          <h3>Live transcript</h3>
+        </div>
+        {/* The count is the live region, not the list: announcing every appended row
+            (timestamp included) would read hundreds of sentences aloud with no way to
+            stop it. */}
+        <span className="transcript-pane-note" aria-live="polite">
+          {segments.length === 1
+            ? "1 sentence so far"
+            : `${segments.length} sentences so far`}
+        </span>
+      </header>
+      <div className="transcript-pane-body" ref={bodyRef}>
+        {segments.length === 0 ? (
+          <p className="transcript-live-waiting">
+            Waiting for the first sentence…
+          </p>
+        ) : null}
+        <ol className="transcript-live-list" aria-live="off">
+          {segments.map((segment, index) => (
+            <li
+              key={`${segment.startMs}-${segment.endMs}-${index}`}
+              className="transcript-live-row"
+            >
+              <span className="transcript-live-time">
+                {formatDuration(segment.startMs)}
+              </span>
+              <p className="transcript-live-text">{segment.text}</p>
+            </li>
+          ))}
+        </ol>
+        <div ref={endRef} />
+      </div>
+    </div>
+  );
+}
+
 export function TranscriptViewerPage({
   recording,
   onBack,
@@ -217,6 +287,9 @@ export function TranscriptViewerPage({
   expressionFieldMapped,
   ankiReachable,
   minedSentences,
+  liveSegments,
+  onCancelTranscription,
+  lastTranscriptionOutcome,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -251,6 +324,17 @@ export function TranscriptViewerPage({
   // Empty when Anki is closed or the note type is unmapped, which simply means no
   // row is marked — never an error.
   minedSentences: Set<string>;
+  // Sentences streamed from the whisper pass currently transcribing THIS recording.
+  // Empty when nothing is running, or when the running transcription belongs to
+  // another file in the queue.
+  liveSegments: TranscriptionLiveSegment[];
+  // Stop the running transcription. Undefined when this recording is not the one
+  // being transcribed, which is also when the progress block is not rendered.
+  onCancelTranscription: (() => void) | undefined;
+  // Set when the most recent transcription of this recording ended badly, so the viewer
+  // can say which of "you cancelled it", "it failed" and "there is no transcript" the
+  // empty screen actually means. Null when the last run succeeded or none has run.
+  lastTranscriptionOutcome: { status: string; message?: string } | null;
 }) {
   // The segments sidecar path is folded in so backfilling timestamps on an
   // already-transcribed language (same count, same translation) still changes
@@ -698,6 +782,24 @@ export function TranscriptViewerPage({
         />
       )}
 
+      {/* Why the transcript below is empty, when the last run did not produce one. A
+          cancel and a crash otherwise look identical to "never transcribed". */}
+      {!isReTranscribing && lastTranscriptionOutcome ? (
+        <p
+          className={`transcript-run-outcome${
+            lastTranscriptionOutcome.status === "failed" ? " is-error" : ""
+          }`}
+          role={
+            lastTranscriptionOutcome.status === "failed" ? "alert" : undefined
+          }
+        >
+          {lastTranscriptionOutcome.status === "cancelled"
+            ? "Transcription cancelled — no transcript was written."
+            : (lastTranscriptionOutcome.message ??
+              "Transcription failed — no transcript was written.")}
+        </p>
+      ) : null}
+
       {canEnablePerSentence ||
       canReTranscribe ||
       canReTranslate ||
@@ -730,6 +832,22 @@ export function TranscriptViewerPage({
                   />
                 </div>
               </div>
+              {/* The same cancel the Library queue offers, so a long run started
+                  here does not have to be abandoned by navigating away. It kills
+                  the whisper process; the item resolves "cancelled" and the queue
+                  moves on. */}
+              {/* `ghost`, not the accent action style the Re-transcribe/Translate
+                  buttons use in this same row: stopping something is not the
+                  affirmative action, and it matches the Library queue's Cancel. */}
+              {onCancelTranscription ? (
+                <button
+                  type="button"
+                  className="ghost transcript-enable-timing-cancel"
+                  onClick={onCancelTranscription}
+                >
+                  Cancel
+                </button>
+              ) : null}
             </>
           ) : (
             <>
@@ -804,6 +922,18 @@ export function TranscriptViewerPage({
               Try again
             </button>
           </div>
+        </div>
+      ) : isReTranscribing ? (
+        // Sentences arriving from the running whisper pass. They replace the reading
+        // panes for the duration: the transcript underneath is about to be overwritten
+        // anyway, and watching it rebuild is the whole point. The reload-on-completion
+        // effect above swaps the saved transcript back in the moment the run ends.
+        //
+        // Shown for the WHOLE run, not just once sentences exist — gating on a non-empty
+        // list made the screen flip old transcript → live → skeleton → new transcript.
+        // Its own waiting state covers the decode before the first sentence lands.
+        <div className="transcript-viewer-body is-single">
+          <LiveTranscriptPane segments={liveSegments} />
         </div>
       ) : status === "loading" || data === null ? (
         <div className="transcript-viewer-body is-single">

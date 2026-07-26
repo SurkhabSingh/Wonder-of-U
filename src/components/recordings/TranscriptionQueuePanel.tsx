@@ -39,6 +39,7 @@ export function TranscriptionQueuePanel({
   onCancel,
   onRemove,
   onClearFinished,
+  onViewLive,
 }: {
   items: TranscriptionQueueItem[];
   activeProgress: number | null;
@@ -48,6 +49,9 @@ export function TranscriptionQueuePanel({
   onCancel: () => void;
   onRemove: (id: string) => void;
   onClearFinished: () => void;
+  // Open the transcript viewer for the recording being transcribed, to watch the
+  // sentences arrive as whisper writes them.
+  onViewLive: (filePath: string) => void;
 }) {
   // No rows, no panel — matches the YouTube queue, which is absent until work is
   // queued.
@@ -110,6 +114,20 @@ export function TranscriptionQueuePanel({
                       }}
                     />
                   </div>
+                  {/* Always offered on the active row, never gated on "is this the
+                      first run": this panel only renders on the Library page, so
+                      seeing it means the viewer is NOT open and the button cannot
+                      be redundant. Gating it on the enqueue's `force` flag instead
+                      made it vanish after a cancel-then-re-transcribe, which is
+                      exactly when a way back in is wanted. */}
+                  <button
+                    type="button"
+                    className="ghost transcription-queue-live"
+                    onClick={() => onViewLive(item.filePath)}
+                    title="Watch the transcript as it is written"
+                  >
+                    Live transcript
+                  </button>
                   <button
                     type="button"
                     className="ghost transcription-queue-cancel"

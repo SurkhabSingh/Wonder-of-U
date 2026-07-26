@@ -2239,6 +2239,88 @@ input::placeholder {
   letter-spacing: 0.02em;
 }
 
+/* Stop the running transcription, beside the in-viewer progress bar. Quiet on purpose:
+   it shares a row with the affirmative Re-transcribe/Translate actions. */
+.transcript-enable-timing-cancel {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
+  line-height: 1.8;
+}
+
+/* Why the transcript is empty: the last run was cancelled, or it failed. */
+.transcript-run-outcome {
+  margin: 0 0 var(--space-3);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+
+.transcript-run-outcome.is-error {
+  color: var(--error);
+}
+
+/* Shown between "Transcribing… 0%" and the first decoded sentence, so the live pane
+   has a state of its own rather than briefly showing the transcript it is replacing. */
+.transcript-live-waiting {
+  margin: 0 0 var(--space-3);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+
+/* The transcript as whisper decodes it. Rows are read-only and unadorned: no mine,
+   merge/split or play controls, because none of them can act on a transcript that has
+   not been saved yet. Deliberately quieter than a finished row so the difference
+   between "still arriving" and "saved" is visible at a glance. */
+.transcript-live-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-live-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.transcript-live-time {
+  flex: 0 0 auto;
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.transcript-live-text {
+  margin: 0;
+  min-width: 0;
+  max-width: var(--measure-reading);
+  color: var(--text-muted);
+  font-family: var(--font-reading);
+  /* Each row lands as its own paragraph mid-decode, so a soft fade-in keeps the
+     list from flickering as it grows. */
+  animation: transcript-live-in 160ms ease-out;
+}
+
+@keyframes transcript-live-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transcript-live-text {
+    animation: none;
+  }
+}
+
 .transcript-segment-body {
   margin: 0;
   min-width: 0;
@@ -3097,12 +3179,19 @@ input::placeholder {
   flex: 1 1 auto;
 }
 
-.transcription-queue-cancel {
+.transcription-queue-cancel,
+/* Way into the viewer to watch a first-time transcription being written. Sits with
+   Cancel on the active row and matches it, so the pair reads as one control group. */
+.transcription-queue-live {
   flex: 0 0 auto;
   min-height: 0;
   padding: 0 var(--space-2);
   font-size: var(--text-2xs);
   line-height: 1.8;
+}
+
+.transcription-queue-live {
+  white-space: nowrap;
 }
 
 .transcription-queue-remove {

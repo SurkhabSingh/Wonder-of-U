@@ -5,6 +5,7 @@ import { errorMessage } from "../lib/errors";
 import type {
   AppBootstrap,
   RecordingBatchResult,
+  TranscriptionLiveSegment,
   TranscriptionQueueItem,
 } from "../types";
 
@@ -42,6 +43,28 @@ export function useTranscriptionQueue({
   // Percent for the single active file, or null when nothing is active.
   // Single-flight, so this always belongs to the one `active` item.
   const [activeProgress, setActiveProgress] = useState<number | null>(null);
+  // Sentences streamed so far for the active file, tagged with whose they are.
+  // Single-flight means one list is enough; the path is what makes a consumer able
+  // to tell "no sentences yet" from "these belong to a different recording".
+  const [activeSegments, setActiveSegments] = useState<{
+    filePath: string | null;
+    segments: TranscriptionLiveSegment[];
+  }>({ filePath: null, segments: [] });
+  // Dropping the path as well as the sentences is the point: a run that has ENDED must
+  // leave nothing a later render could match on. Keeping them would replay the finished
+  // transcript as "live" the next time the same recording was queued, since a queued
+  // item already reads as transcribing before it is promoted to active.
+  // The file whose sentences may currently be appended, read by the event listener
+  // without re-subscribing. Null whenever nothing is running.
+  const activeFilePathRef = useRef<string | null>(null);
+  const clearActiveSegments = useCallback(() => {
+    activeFilePathRef.current = null;
+    setActiveSegments((prev) =>
+      prev.filePath === null && prev.segments.length === 0
+        ? prev
+        : { filePath: null, segments: [] },
+    );
+  }, []);
 
   // Keep the injected callbacks in refs so the processor never captures a stale
   // closure and the effects don't re-fire because a parent re-rendered.
@@ -87,6 +110,36 @@ export function useTranscriptionQueue({
         setActiveProgress(Math.max(0, Math.min(100, payload)));
       }
     });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Sentences as whisper decodes them, so a transcript fills in live rather than
+  // appearing all at once at the end. The payload carries its own file path because
+  // the queue runs recordings back to back and a consumer must only render the one
+  // it is actually showing. Cleared when a file becomes active, below.
+  useEffect(() => {
+    const unlisten = listen<TranscriptionLiveSegment>(
+      "transcription-segment",
+      ({ payload }) => {
+        if (!mountedRef.current || typeof payload?.filePath !== "string") {
+          return;
+        }
+        // Only the file the queue is actually running may append. A straggler from a
+        // run that just ended must not resurrect a finished list or overwrite the next
+        // recording's. The ref is what makes this reliable rather than dependent on
+        // event/state ordering.
+        if (payload.filePath !== activeFilePathRef.current) {
+          return;
+        }
+        setActiveSegments((prev) =>
+          prev.filePath === payload.filePath
+            ? { ...prev, segments: [...prev.segments, payload] }
+            : { filePath: payload.filePath, segments: [payload] },
+        );
+      },
+    );
     return () => {
       void unlisten.then((fn) => fn());
     };
@@ -188,6 +241,10 @@ export function useTranscriptionQueue({
           ),
         );
         setActiveProgress(0);
+        // Start this file's live list empty, so the previous recording's sentences
+        // never linger under the next one's progress bar.
+        activeFilePathRef.current = next.filePath;
+        setActiveSegments({ filePath: next.filePath, segments: [] });
 
         // Completion = this awaited invoke resolving. A rejection (whisper-cli
         // missing, spawn failure) is caught and marks the item failed; a user
@@ -242,9 +299,11 @@ export function useTranscriptionQueue({
           }),
         );
         setActiveProgress(null);
+        clearActiveSegments();
       }
 
       setActiveProgress(null);
+      clearActiveSegments();
       runningRef.current = false;
     })();
   }, []);
@@ -273,6 +332,7 @@ export function useTranscriptionQueue({
     cancelActive,
     clearFinished,
     activeProgress,
+    activeSegments,
     activeCount,
     queuedCount,
     finishedCount,

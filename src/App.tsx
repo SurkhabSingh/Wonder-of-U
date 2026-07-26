@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
@@ -93,12 +93,49 @@ function App() {
     setActivePage("recordings");
   }
 
-  const viewingRecording =
-    viewingRecordingPath !== null
-      ? bootstrap.recentRecordings.find(
-          (recording) => recording.filePath === viewingRecordingPath,
-        ) ?? null
-      : null;
+  // A recording's audio is RENAMED when its first transcript lands (the new stem is
+  // derived from the transcript), so the path the viewer was opened with stops
+  // resolving at exactly the moment a first-time transcription finishes. `createdAtMs`
+  // survives the rename, so it is remembered while the lookup works and used to follow
+  // the recording to its new path when it stops — otherwise watching a first
+  // transcription live would end in "Recording unavailable".
+  const viewedCreatedAtRef = useRef<number | null>(null);
+  const viewingRecording = (() => {
+    if (viewingRecordingPath === null) {
+      viewedCreatedAtRef.current = null;
+      return null;
+    }
+    const byPath = bootstrap.recentRecordings.find(
+      (recording) => recording.filePath === viewingRecordingPath,
+    );
+    if (byPath) {
+      viewedCreatedAtRef.current = byPath.createdAtMs;
+      return byPath;
+    }
+    const createdAtMs = viewedCreatedAtRef.current;
+    if (createdAtMs === null) {
+      return null;
+    }
+    // `createdAtMs` is wall-clock milliseconds and is not enforced unique — a batch
+    // import can stamp two files identically. Adopt only an unambiguous match: showing
+    // the wrong recording's transcript would be worse than reporting it unavailable.
+    const matches = bootstrap.recentRecordings.filter(
+      (recording) => recording.createdAtMs === createdAtMs,
+    );
+    return matches.length === 1 ? matches[0] : null;
+  })();
+
+  // Adopt the new path once the rename is observed, so every later lookup (and the
+  // live-segment / cancel matching, which compare paths) goes back to a direct hit.
+  useEffect(() => {
+    if (
+      viewingRecording &&
+      viewingRecording.filePath !== viewingRecordingPath &&
+      viewingRecordingPath !== null
+    ) {
+      setViewingRecordingPath(viewingRecording.filePath);
+    }
+  }, [viewingRecording, viewingRecordingPath]);
 
   useEffect(() => {
     setRuntimeUpdateResult(null);
@@ -518,6 +555,22 @@ function App() {
                     ? transcriptionQueue.activeProgress
                     : null
                 }
+                // How the last run for THIS recording ended. Without it, cancelling from
+                // inside the viewer just drops the live pane and lands on an empty
+                // transcript — indistinguishable from whisper having crashed, or from a
+                // recording that was never transcribed at all.
+                lastTranscriptionOutcome={(() => {
+                  const item = [...transcriptionQueue.items]
+                    .reverse()
+                    .find(
+                      (candidate) =>
+                        candidate.filePath === viewingRecording.filePath,
+                    );
+                  return item &&
+                    (item.status === "cancelled" || item.status === "failed")
+                    ? { status: item.status, message: item.message }
+                    : null;
+                })()}
                 onReTranslate={(force) =>
                   void translateRecordings([viewingRecording.filePath], force)
                 }
@@ -545,6 +598,24 @@ function App() {
                 expressionFieldMapped={expressionFieldMapped}
                 ankiReachable={ankiReachable}
                 minedSentences={minedSentences}
+                liveSegments={
+                  transcriptionQueue.activeSegments.filePath ===
+                  viewingRecording.filePath
+                    ? transcriptionQueue.activeSegments.segments
+                    : []
+                }
+                // Cancel is offered only while THIS recording is the active run —
+                // cancelActive kills whatever whisper is working on, so exposing it
+                // for a queued-but-not-started file would stop the wrong one.
+                onCancelTranscription={
+                  transcriptionQueue.items.some(
+                    (item) =>
+                      item.filePath === viewingRecording.filePath &&
+                      item.status === "active",
+                  )
+                    ? transcriptionQueue.cancelActive
+                    : undefined
+                }
               />
             ) : (
               <div className="transcript-viewer">

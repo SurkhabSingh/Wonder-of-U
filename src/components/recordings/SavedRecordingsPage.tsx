@@ -240,6 +240,9 @@ export function SavedRecordingsPage({
           onCancel={onCancelTranscription}
           onRemove={onRemoveTranscription}
           onClearFinished={onClearFinishedTranscription}
+          // The same action the card's View uses — the viewer renders the live
+          // sentences while the run is going and the saved transcript after.
+          onViewLive={(filePath) => void onView(filePath)}
         />
 
         {recentRecordings.length === 0 ? (

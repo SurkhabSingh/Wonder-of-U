@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -102,11 +102,83 @@ impl Drop for TempCleanup {
     }
 }
 
+/// Reads a child pipe line by line, and NEVER stops early on a decode error.
+///
+/// `BufRead::lines()` yields `Err(InvalidData)` for a line that is not valid UTF-8, and
+/// the obvious `.map_while(Result::ok)` ends the whole iterator there. On the stdout
+/// drain that is not a cosmetic loss: the drain owns the EOF signal, so an early exit
+/// tells the wait loop that whisper closed its pipes while it is in fact still writing.
+/// Nothing drains the pipe, whisper blocks on a full one, and `wait()` blocks forever —
+/// after the loop that polls for Cancel has already been left, so the run cannot even be
+/// cancelled. Splitting on newlines and decoding lossily keeps one bad byte from
+/// wedging the queue.
+fn drain_lines(pipe: impl Read) -> impl Iterator<Item = String> {
+    BufReader::new(pipe).split(b'\n').map_while(Result::ok).map(|raw| {
+        String::from_utf8_lossy(&raw)
+            .trim_end_matches('\r')
+            .to_string()
+    })
+}
+
+/// True for whisper-cli's routine chatter — the load banner, VAD/timing tables, and the
+/// progress callback. Dropping it is what keeps a real `error:` line visible.
+///
+/// This matters because the app no longer passes `--no-prints` (that flag also suppressed
+/// the segment lines the live transcript is built from). Without filtering, the first
+/// lines of stderr are the banner on *every* run, so `cap_details` would report the
+/// banner instead of the failure, and the bounded sink would fill with noise long before
+/// a late error arrived.
+fn is_whisper_noise_line(line: &str) -> bool {
+    const PREFIXES: [&str; 10] = [
+        "load_backend:",
+        "whisper_init_",
+        "whisper_model_load:",
+        "whisper_backend_init",
+        "whisper_vad",
+        "whisper_print_timings:",
+        "whisper_print_progress_callback:",
+        "system_info:",
+        "output_txt:",
+        "output_json:",
+    ];
+    let trimmed = line.trim_start();
+    trimmed.is_empty() || PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix))
+}
+
+/// Appends a line to a bounded diagnostic buffer, skipping routine chatter.
+fn push_diagnostic_line(sink: &Arc<Mutex<String>>, line: &str) {
+    if is_whisper_noise_line(line) {
+        return;
+    }
+    if let Ok(mut sink) = sink.lock() {
+        if sink.len() < 8192 {
+            sink.push_str(line);
+            sink.push('\n');
+        }
+    }
+}
+
 /// Caps a stderr/stdout dump so a whisper usage/help splurge never surfaces as a giant
-/// user-facing error: first 3 lines, then hard-limited to ~400 chars.
+/// user-facing error: the most explanatory 3 lines, then hard-limited to ~400 chars.
+///
+/// An explicit `error:` line is promoted to the front. whisper-cli reports some failures
+/// (an unreadable audio file, say) on a line well after other output *and still exits 0*,
+/// so taking the first lines positionally can report everything except the reason.
 fn cap_details(details: String) -> String {
     const MAX_CHARS: usize = 400;
-    let by_lines = details.lines().take(3).collect::<Vec<_>>().join("\n");
+    fn is_error(line: &str) -> bool {
+        let lowered = line.to_ascii_lowercase();
+        lowered.starts_with("error") || lowered.contains("error:") || lowered.contains("failed")
+    }
+    let lines = details.lines().collect::<Vec<_>>();
+    let mut ordered = lines
+        .iter()
+        .copied()
+        .filter(|line| is_error(line))
+        .collect::<Vec<_>>();
+    ordered.extend(lines.iter().copied().filter(|line| !is_error(line)));
+    ordered.truncate(3);
+    let by_lines = ordered.join("\n");
     if by_lines.chars().count() > MAX_CHARS {
         let capped: String = by_lines.chars().take(MAX_CHARS).collect();
         format!("{capped}…")
@@ -178,6 +250,54 @@ pub fn verify_whisper_vad_model(vad_model_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse a whisper-cli segment line — `[00:00:06.830 --> 00:00:13.490]  text` — into
+/// absolute millisecond bounds and its text. Non-segment lines return `None`.
+///
+/// These are the same segments the `--output-json` sidecar ends up holding, printed as
+/// each one is decoded. Verified line-for-line against the sidecar on a VAD run (29/29,
+/// offsets and text identical), so a live row is never revised once the run finishes.
+/// Music mode skips VAD and was not part of that check — the stream is display-only, and
+/// the saved transcript is read from the sidecar either way, so a drift there would cost
+/// accuracy of the live preview only.
+fn parse_whisper_segment_line(line: &str) -> Option<(u64, u64, String)> {
+    let inner = line.trim().strip_prefix('[')?;
+    let (span, text) = inner.split_once(']')?;
+    let (start, end) = span.split_once("-->")?;
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some((
+        parse_whisper_timestamp(start.trim())?,
+        parse_whisper_timestamp(end.trim())?,
+        text.to_string(),
+    ))
+}
+
+/// `HH:MM:SS.mmm` → milliseconds.
+fn parse_whisper_timestamp(value: &str) -> Option<u64> {
+    let (clock, millis) = value.split_once('.')?;
+    let mut parts = clock.split(':');
+    let hours = parts.next()?.parse::<u64>().ok()?;
+    let minutes = parts.next()?.parse::<u64>().ok()?;
+    let seconds = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() || minutes > 59 || seconds > 59 {
+        return None;
+    }
+    let millis = millis.parse::<u64>().ok()?;
+    // Checked throughout: this parses a subprocess's stdout on the drain thread, where a
+    // debug-build overflow panic would kill the drain — and the drain owns the EOF signal
+    // the wait loop depends on, so the panic would present as a frozen, uncancellable run
+    // rather than an error. A nonsense hour count is simply not a timestamp.
+    hours
+        .checked_mul(60)?
+        .checked_add(minutes)?
+        .checked_mul(60)?
+        .checked_add(seconds)?
+        .checked_mul(1000)?
+        .checked_add(millis)
+}
+
 /// Parse a whisper-cli progress line — `whisper_print_progress_callback: progress = N%`
 /// (variable spacing) — into a clamped 0–100 percent. Non-progress lines return `None`.
 fn parse_whisper_progress_line(line: &str) -> Option<u8> {
@@ -235,13 +355,16 @@ fn decode_to_wav_16k(ffmpeg_path: &Path, input: &Path) -> Result<PathBuf, String
 /// on arbitrarily long audio, non-speech excluded, no manual chunking. Output is the same
 /// `{txt, json}` a plain whisper run produces.
 ///
-/// `on_progress` is invoked with a 0–100 percent (from a drain thread, so the closure must be
-/// `Send + 'static`; callers pass a cloned `AppHandle` and emit an event). It is a
-/// no-op-friendly hook; transcription never fails over it.
+/// `on_progress` is invoked with a 0–100 percent, and `on_segment` with each sentence as
+/// whisper decodes it (`start_ms`, `end_ms`, text). Both run on a drain thread, so the
+/// closures must be `Send + 'static`; callers pass a cloned `AppHandle` and emit an event.
+/// Both are no-op-friendly hooks; transcription never fails over either, and the saved
+/// transcript is read from the output files regardless of what they did.
 pub fn run_whisper_transcription(
     request: &WhisperTranscriptionRequest,
     cancel: Arc<AtomicBool>,
     on_progress: impl Fn(u8) + Send + 'static,
+    on_segment: impl Fn(u64, u64, String) + Send + 'static,
 ) -> Result<WhisperTranscriptionResult, String> {
     verify_whisper_cli(&request.cli_path)?;
     verify_whisper_model(&request.model_path)?;
@@ -273,6 +396,7 @@ pub fn run_whisper_transcription(
         request.music_mode,
         cancel,
         on_progress,
+        on_segment,
     )
 }
 
@@ -290,6 +414,7 @@ fn run_whisper_once(
     music_mode: bool,
     cancel: Arc<AtomicBool>,
     on_progress: impl Fn(u8) + Send + 'static,
+    on_segment: impl Fn(u64, u64, String) + Send + 'static,
 ) -> Result<WhisperTranscriptionResult, String> {
     let transcript_path = PathBuf::from(format!("{}.txt", output_base.display()));
     let json_path = PathBuf::from(format!("{}.json", output_base.display()));
@@ -335,10 +460,13 @@ fn run_whisper_once(
         .arg("--output-json")
         .arg("--output-file")
         .arg(output_base)
-        .arg("--no-prints")
-        // Emits `progress = N%` to stderr; it still prints under `--no-prints`, so we stream
-        // it for the UI progress bar. The transcript is read from the output files, so this
-        // stderr noise never touches the result.
+        // NOT `--no-prints`: that would also suppress the `[start --> end]  text` segment
+        // lines on stdout, which are what makes the transcript appear live instead of only
+        // when the run ends. The cost is whisper's banner and timing tables on stderr, which
+        // only ever reach the user through `cap_details` on an error.
+        //
+        // Emits `progress = N%` to stderr; streamed for the UI progress bar. The saved
+        // transcript is still read from the output files, so neither stream touches it.
         .arg("--print-progress");
 
     // Worker-thread count from the user's CPU-usage preference (see
@@ -388,16 +516,11 @@ fn run_whisper_once(
     let stderr_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let stderr_sink = Arc::clone(&stderr_buffer);
     let stderr_thread = thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        for line in drain_lines(stderr) {
             if let Some(percent) = parse_whisper_progress_line(&line) {
                 on_progress(percent);
             }
-            if let Ok(mut sink) = stderr_sink.lock() {
-                if sink.len() < 8192 {
-                    sink.push_str(&line);
-                    sink.push('\n');
-                }
-            }
+            push_diagnostic_line(&stderr_sink, &line);
         }
     });
 
@@ -407,15 +530,19 @@ fn run_whisper_once(
     let (done_sender, done_receiver) = mpsc::channel::<()>();
     let stdout_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let stdout_sink = Arc::clone(&stdout_buffer);
+    let segment_cancel = Arc::clone(&cancel);
     let stdout_thread = thread::spawn(move || {
         let _done_sender = done_sender;
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(mut sink) = stdout_sink.lock() {
-                if sink.len() < 8192 {
-                    sink.push_str(&line);
-                    sink.push('\n');
+        for line in drain_lines(stdout) {
+            if let Some((start_ms, end_ms, text)) = parse_whisper_segment_line(&line) {
+                // Stop painting rows the moment Cancel lands. The pipe still holds
+                // whatever whisper wrote before it died, and replaying that into the
+                // viewer would keep a stopped transcription visibly growing.
+                if !segment_cancel.load(Ordering::Relaxed) {
+                    on_segment(start_ms, end_ms, text);
                 }
             }
+            push_diagnostic_line(&stdout_sink, &line);
         }
     });
 
@@ -553,6 +680,92 @@ mod tests {
     }
 
     #[test]
+    fn parse_whisper_segment_line_reads_bounds_and_text() {
+        assert_eq!(
+            parse_whisper_segment_line(
+                "[00:00:06.830 --> 00:00:13.490]  僕はドイツ人なんですけど、日本人の友達作りたいです。"
+            ),
+            Some((
+                6830,
+                13490,
+                "僕はドイツ人なんですけど、日本人の友達作りたいです。".to_string()
+            ))
+        );
+        // Hours carry, and text keeps its own internal spacing.
+        assert_eq!(
+            parse_whisper_segment_line("[01:02:03.004 --> 01:02:04.000]   the  cat sat  "),
+            Some((3723004, 3724000, "the  cat sat".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_whisper_segment_line_ignores_everything_else() {
+        // Whisper's banner and timing tables share stdout/stderr with the segments.
+        assert_eq!(parse_whisper_segment_line("whisper_init_from_file: loading"), None);
+        assert_eq!(parse_whisper_segment_line(""), None);
+        // A blank segment carries no sentence to show.
+        assert_eq!(parse_whisper_segment_line("[00:00:00.000 --> 00:00:01.000]   "), None);
+        // Malformed spans must not be guessed at.
+        assert_eq!(parse_whisper_segment_line("[00:00:00.000 00:00:01.000] hi"), None);
+        assert_eq!(parse_whisper_segment_line("[bad --> worse] hi"), None);
+        assert_eq!(parse_whisper_segment_line("[00:00:99.000 --> 00:00:01.000] hi"), None);
+        // An absurd hour count must not overflow — this parses a subprocess's stdout on
+        // the drain thread, where a debug-build panic would wedge the run.
+        assert_eq!(
+            parse_whisper_segment_line("[1000000000000000:00:00.000 --> 00:00:01.000] hi"),
+            None
+        );
+    }
+
+    #[test]
+    fn drain_lines_survives_invalid_utf8_instead_of_stopping() {
+        // A single bad byte used to end the whole iterator. On the stdout drain that
+        // silently truncates the stream and wedges the run, so decoding is lossy and the
+        // later lines must still arrive.
+        let raw: &[u8] = b"[00:00:00.000 --> 00:00:01.000]  first\n\xff\xfe bad\n[00:00:01.000 --> 00:00:02.000]  third\n";
+        let lines = drain_lines(raw).collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3, "every line should survive, got {lines:?}");
+        assert_eq!(lines[0], "[00:00:00.000 --> 00:00:01.000]  first");
+        assert_eq!(lines[2], "[00:00:01.000 --> 00:00:02.000]  third");
+    }
+
+    #[test]
+    fn drain_lines_strips_carriage_returns() {
+        let raw: &[u8] = b"one\r\ntwo\r\n";
+        assert_eq!(drain_lines(raw).collect::<Vec<_>>(), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn cap_details_surfaces_the_error_line_over_the_banner() {
+        // whisper-cli prints its load banner first and reports some failures many lines
+        // later (while still exiting 0), so position alone would report everything except
+        // the reason.
+        let dump = [
+            "whisper_model_load: loading model",
+            "some other chatter",
+            "more chatter",
+            "error: failed to read audio file 'x.wav'",
+        ]
+        .join("\n");
+        let capped = cap_details(dump);
+        assert!(
+            capped.starts_with("error: failed to read audio file"),
+            "the failure reason should lead, got {capped:?}"
+        );
+    }
+
+    #[test]
+    fn whisper_noise_lines_are_kept_out_of_the_diagnostics() {
+        assert!(is_whisper_noise_line("whisper_print_timings:    total time = 3759.40 ms"));
+        assert!(is_whisper_noise_line("load_backend: loaded CPU backend from x.dll"));
+        assert!(is_whisper_noise_line("whisper_print_progress_callback: progress =  96%"));
+        assert!(is_whisper_noise_line("   "));
+        // A real failure is never noise.
+        assert!(!is_whisper_noise_line("error: failed to read audio file 'x.wav'"));
+        assert!(!is_whisper_noise_line("whisper-cli: unrecognized argument"));
+    }
+
+    #[test]
     fn cap_details_limits_a_giant_dump() {
         let dump = "x".repeat(5000);
         let capped = cap_details(dump);
@@ -598,11 +811,17 @@ mod tests {
             thread_count: transcription_thread_count("balanced"),
             music_mode: std::env::var("WOU_MUSIC").is_ok(),
         };
-        let result = run_whisper_transcription(&request, Arc::new(AtomicBool::new(false)), |percent| {
-            if percent % 25 == 0 {
-                eprintln!("progress {percent}%");
-            }
-        })
+        let result = run_whisper_transcription(
+            &request,
+            Arc::new(AtomicBool::new(false)),
+            |percent| {
+                if percent % 25 == 0 {
+                    eprintln!("progress {percent}%");
+                }
+            },
+            // Streamed sentences: these should match the sidecar the assertions below read.
+            |start_ms, end_ms, text| eprintln!("LIVE [{start_ms}-{end_ms}] {text}"),
+        )
         .expect("transcription should succeed");
         let json = fs::read_to_string(&result.json_path).expect("json written");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
