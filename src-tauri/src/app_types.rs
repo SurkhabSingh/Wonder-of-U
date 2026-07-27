@@ -197,6 +197,11 @@ pub(crate) struct AnkiFieldMapping {
     /// Target field for the sentence's timestamp (H:MM:SS). Empty = unmapped.
     #[serde(default)]
     pub(crate) position: String,
+    /// Target field for a still frame from the video at the mined line's moment.
+    /// Empty = unmapped, which is also what every source without a video gets.
+    /// Receives an `<img src="...">` tag.
+    #[serde(default)]
+    pub(crate) image: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -576,6 +581,28 @@ impl Default for YtdlpDetection {
             managed: false,
             message: "Install app-managed yt-dlp to import audio from YouTube and other sites."
                 .into(),
+        }
+    }
+}
+
+/// Whether an mpv the app can drive is available. Same shape as the other managed
+/// binaries, but detection prefers a user's own install — see `detect_local_mpv`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MpvDetection {
+    pub(crate) status: String,
+    pub(crate) executable_path: Option<String>,
+    pub(crate) managed: bool,
+    pub(crate) message: String,
+}
+
+impl Default for MpvDetection {
+    fn default() -> Self {
+        Self {
+            status: "notFound".into(),
+            executable_path: None,
+            managed: false,
+            message: "Install mpv to watch a video and mine lines as you go.".into(),
         }
     }
 }

@@ -50,6 +50,7 @@ export function AnkiMappingSettingsPage({
             sourceUrl: "SourceURL",
             title: "Title",
             position: "Time",
+            image: "Image",
           },
         },
       });
@@ -208,6 +209,7 @@ export function AnkiMappingSettingsPage({
                     sourceUrl: "",
                     title: "",
                     position: "",
+                    image: "",
                   },
                 },
               });
@@ -271,6 +273,14 @@ export function AnkiMappingSettingsPage({
           label="Recording title field"
           description="Optional display title of the recording (an imported file's original name, or the file stem for mic recordings)."
           currentValue={settingsDraft.anki.fields.title}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
+          field="image"
+          label="Screenshot field"
+          description="Optional still from the video at the mined line's moment. Only lines mined while watching a video get one — a mic recording or an audio file is mined without a picture, and so is a video you have since moved."
+          currentValue={settingsDraft.anki.fields.image}
           fieldOptions={displayedAnkiCatalog.fields}
           onChange={onUpdateAnkiField}
         />

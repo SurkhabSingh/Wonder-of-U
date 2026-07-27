@@ -29,6 +29,9 @@ hound = "3.5.1"
 wasapi = "0.23.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# mpv's Windows builds ship as .7z (the format mpv.io itself points at), which `zip`
+# cannot read. Pure Rust, so it adds no system dependency.
+sevenz-rust = { version = "0.6", default-features = false }
 tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]

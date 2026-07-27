@@ -8,11 +8,13 @@ import { SavedRecordingsPage } from "./components/recordings/SavedRecordingsPage
 import { SettingsPages } from "./components/settings/SettingsPages";
 import { SetupChecklist } from "./components/settings/SetupChecklist";
 import { TranscriptViewerPage } from "./components/transcripts/TranscriptViewerPage";
+import { WatchPage } from "./components/watch/WatchPage";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { useAnkiCatalog } from "./hooks/useAnkiCatalog";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useAppViewState } from "./hooks/useAppViewState";
 import { useMinedSentences } from "./hooks/useMinedSentences";
+import { useWatchSession } from "./hooks/useWatchSession";
 import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
@@ -162,6 +164,7 @@ function App() {
     showWarning,
   });
   const { minedSentences, refreshMinedSentences } = useMinedSentences();
+  const watch = useWatchSession();
 
   const runtimeUpdateVersion =
     runtimeUpdateResult?.status === "available"
@@ -530,6 +533,21 @@ function App() {
               onCancelTranscription={transcriptionQueue.cancelActive}
               onRemoveTranscription={transcriptionQueue.remove}
               onClearFinishedTranscription={transcriptionQueue.clearFinished}
+            />
+          ) : null}
+
+          {activePage === "watch" ? (
+            <WatchPage
+              snapshot={watch.snapshot}
+              isStarting={watch.isStarting}
+              error={watch.error}
+              onStart={(videoPath, subtitlePath) =>
+                void watch.start(videoPath, subtitlePath)
+              }
+              onStop={() => void watch.stop()}
+              onMine={() => void watch.mine()}
+              isMining={watch.isMining}
+              mineResult={watch.mineResult}
             />
           ) : null}
 

@@ -1,5 +1,19 @@
-use tauri::AppHandle;
+use std::path::Path;
 
+use tauri::{AppHandle, Manager};
+
+use crate::{
+    app_types::SharedPersistedState,
+    runtime_assets::detect_local_mpv,
+    anki::mine_watched_line_inner,
+    watch::{
+        seek_watch_session as seek_watch_session_inner,
+        start_watch_session as start_watch_session_inner,
+        stop_watch_session as stop_watch_session_inner,
+        subtitles::{load_subtitle_source, SubtitleSource},
+        watch_snapshot as watch_snapshot_inner, WatchSnapshot,
+    },
+};
 use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
@@ -171,6 +185,160 @@ pub(crate) async fn load_anki_catalog(
 pub(crate) async fn load_mined_sentences(app: AppHandle) -> Result<MinedSentences, String> {
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || load_mined_sentences_inner(&app_for_blocking))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Starts mpv on a video, optionally with a subtitle file, replacing any session already
+/// running. mpv is resolved fresh each time so a user who installs it mid-session does
+/// not have to restart the app.
+#[tauri::command]
+pub(crate) async fn start_watch_session(
+    app: AppHandle,
+    video_path: String,
+    subtitle_path: Option<String>,
+) -> Result<WatchSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = {
+            let persisted_state = app.state::<SharedPersistedState>();
+            let persisted = persisted_state
+                .0
+                .lock()
+                .map_err(|_| "Could not read the app settings.".to_string())?;
+            persisted.settings.clone()
+        };
+        let detection = detect_local_mpv(&settings);
+        let executable_path = detection.executable_path.clone().ok_or_else(|| {
+            "mpv is required to watch a video; install it in Setup.".to_string()
+        })?;
+        start_watch_session_inner(
+            Path::new(&executable_path),
+            Path::new(&video_path),
+            subtitle_path.as_deref().map(Path::new),
+        )?;
+        watch_snapshot_inner()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Everything the watch page and the mine action need, in one read. A closed player
+/// comes back as a disconnected snapshot rather than an error.
+#[tauri::command]
+pub(crate) async fn watch_snapshot() -> Result<WatchSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(watch_snapshot_inner)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Mines the line mpv currently has on screen.
+///
+/// Reads the player fresh rather than trusting anything the UI passed: the user presses
+/// the hotkey because of what they are hearing right now, and a stale line would make a
+/// card for the wrong sentence.
+#[tauri::command]
+pub(crate) async fn mine_watched_line(app: AppHandle) -> Result<RecordingBatchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let snapshot = watch_snapshot_inner()?;
+        if !snapshot.connected {
+            return Err("No video is playing.".into());
+        }
+        let Some(video_path) = snapshot.path else {
+            return Err("mpv did not report which file it is playing.".into());
+        };
+        let Some(text) = snapshot
+            .subtitle_text
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+        else {
+            return Err("There is no subtitle on screen to mine.".into());
+        };
+        // Both bounds come from mpv. Without them there is nothing to cut, and guessing a
+        // window around the current position would produce a clip that does not match the
+        // line on the card.
+        let (Some(start_ms), Some(end_ms)) = (snapshot.subtitle_start_ms, snapshot.subtitle_end_ms)
+        else {
+            return Err("mpv did not report this line's timing.".into());
+        };
+        mine_watched_line_inner(&app, video_path, text, start_ms, end_ms, None, None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// The whole cue list for the video being watched, plus which subtitle tracks it has.
+///
+/// A sidecar the user picked wins; otherwise the requested embedded track. The frontend
+/// parses the returned text, because the parser is shared with the rest of the UI.
+#[tauri::command]
+pub(crate) async fn load_watch_subtitles(
+    app: AppHandle,
+    video_path: String,
+    subtitle_path: Option<String>,
+    track_index: Option<u32>,
+) -> Result<SubtitleSource, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = {
+            let persisted_state = app.state::<SharedPersistedState>();
+            let persisted = persisted_state
+                .0
+                .lock()
+                .map_err(|_| "Could not read the app settings.".to_string())?;
+            persisted.settings.clone()
+        };
+        load_subtitle_source(
+            &settings,
+            Path::new(&video_path),
+            subtitle_path.as_deref().map(Path::new),
+            track_index,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Mines a specific line from the subtitle list, with optional per-mine padding.
+///
+/// Deliberately separate from `mine_watched_line`, which takes no arguments and re-reads
+/// mpv so the hotkey always captures what you are hearing. This one mines the row you
+/// picked — including one you scrolled back to, or one you merged — so it must be told
+/// the bounds rather than discovering them.
+#[tauri::command]
+pub(crate) async fn mine_watch_line_at(
+    app: AppHandle,
+    video_path: String,
+    text: String,
+    start_ms: u64,
+    end_ms: u64,
+    pad_before_ms: Option<u64>,
+    pad_after_ms: Option<u64>,
+) -> Result<RecordingBatchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        mine_watched_line_inner(
+            &app,
+            video_path,
+            text,
+            start_ms,
+            end_ms,
+            pad_before_ms,
+            pad_after_ms,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Jumps the player to a position — what clicking a line in the subtitle list does.
+#[tauri::command]
+pub(crate) async fn seek_watch_session(position_ms: u64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || seek_watch_session_inner(position_ms))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn stop_watch_session() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(stop_watch_session_inner)
         .await
         .map_err(|error| error.to_string())?
 }

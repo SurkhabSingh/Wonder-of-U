@@ -15,6 +15,7 @@ mod runtime_assets;
 mod settings;
 mod transcription;
 mod translation_bridge;
+mod watch;
 
 use app_config::AUTOSTART_ARGUMENT;
 use app_runtime::{emit_app_snapshot, log_event, setup_error};
@@ -84,6 +85,13 @@ pub fn run() {
             stop_recording,
             load_anki_catalog,
             load_mined_sentences,
+            start_watch_session,
+            watch_snapshot,
+            stop_watch_session,
+            mine_watched_line,
+            mine_watch_line_at,
+            load_watch_subtitles,
+            seek_watch_session,
             create_anki_note_type,
             play_recording,
             read_recording_texts,

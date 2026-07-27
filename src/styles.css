@@ -2261,6 +2261,42 @@ input::placeholder {
   letter-spacing: 0.02em;
 }
 
+/* Watch & Mine. The video is in mpv, so this page is a read-out of what the player is
+   doing plus the line currently on screen — the thing a mine will act on. */
+.watch-transport {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.watch-clock {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* Deliberately large and quiet-framed: this is the sentence the user is deciding
+   whether to keep, so it should read like the transcript rows do. */
+.watch-line {
+  min-height: 96px;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.watch-line-text {
+  margin: 0 0 var(--space-2);
+  max-width: var(--measure-reading);
+  color: var(--text);
+  font-family: var(--font-reading);
+  font-size: 1.35em;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
 /* Stop the running transcription, beside the in-viewer progress bar. Quiet on purpose:
    it shares a row with the affirmative Re-transcribe/Translate actions. */
 .transcript-enable-timing-cancel {

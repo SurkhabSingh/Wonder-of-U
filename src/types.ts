@@ -42,6 +42,9 @@ export type AnkiFieldMapping = {
   sourceUrl: string;
   title: string;
   position: string;
+  // Receives an <img> of a still grabbed from the video at the mined line's moment.
+  // Empty = unmapped, which is also every source that has no video.
+  image: string;
 };
 
 export type AnkiSettings = {
@@ -301,6 +304,26 @@ export type TranscriptionLiveSegment = {
   text: string;
 };
 
+// What mpv is showing right now, read over its JSON IPC channel. Every field is
+// optional because mpv answers null for a property with no current value — nothing
+// loaded, or no subtitle on screen — and that is a normal state, not a failure.
+//
+// `subtitleText` / `subtitleStartMs` / `subtitleEndMs` are the line on screen and its
+// exact bounds, straight from mpv. They are what mining reads: no parsing, no sync, no
+// guessing which cue the user meant.
+export type WatchSnapshot = {
+  connected: boolean;
+  path: string | null;
+  title: string | null;
+  positionMs: number | null;
+  durationMs: number | null;
+  paused: boolean;
+  subtitleText: string | null;
+  subtitleStartMs: number | null;
+  subtitleEndMs: number | null;
+  subtitleDelayMs: number;
+};
+
 export type BusyAction =
   | "start"
   | "stop"
@@ -330,6 +353,7 @@ export type AutosaveState = "idle" | "saving" | "error";
 export type AppPage =
   | "home"
   | "recordings"
+  | "watch"
   | "transcript"
   | "setup"
   | "settings";

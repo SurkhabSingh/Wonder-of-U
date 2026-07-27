@@ -16,9 +16,11 @@ use super::{
     furigana::{
         insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
     },
+    screenshot::capture_screenshot,
 };
 use crate::{
     app_runtime::{build_app_bootstrap, update_shell_snapshot},
+    app_state::transcript_looks_japanese,
     app_types::{
         AppSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
@@ -30,10 +32,31 @@ use crate::{
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn hide_command_window(command: &mut Command) {
+pub(crate) fn hide_command_window(command: &mut Command) {
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+/// Extra audio kept on each side of a mined line's clip.
+///
+/// Asymmetric on purpose: a line's start is usually the tighter edge (speech begins
+/// almost immediately) while its end often clips a trailing syllable, so one symmetric
+/// value cannot serve both. `clip_padding_ms` in settings is the default for both sides;
+/// the subtitle list can override per mine.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ClipPadding {
+    pub(super) before_ms: u64,
+    pub(super) after_ms: u64,
+}
+
+impl ClipPadding {
+    fn symmetric(padding_ms: u64) -> Self {
+        Self {
+            before_ms: padding_ms,
+            after_ms: padding_ms,
+        }
     }
 }
 
@@ -50,12 +73,12 @@ fn format_ffmpeg_timestamp(ms: u64) -> String {
 fn slice_ffmpeg_args(
     start_ms: u64,
     end_ms: u64,
-    padding_ms: u64,
+    padding: ClipPadding,
     input: &str,
     output: &str,
 ) -> Vec<String> {
-    let start = start_ms.saturating_sub(padding_ms);
-    let end = end_ms.saturating_add(padding_ms);
+    let start = start_ms.saturating_sub(padding.before_ms);
+    let end = end_ms.saturating_add(padding.after_ms);
     vec![
         "-y".into(),
         "-nostdin".into(),
@@ -87,6 +110,7 @@ fn slice_segment_clip(
     audio_path: &Path,
     start_ms: u64,
     end_ms: u64,
+    padding: ClipPadding,
 ) -> Result<PathBuf, String> {
     let detection = detect_local_ffmpeg(settings);
     let executable_path = detection
@@ -109,7 +133,7 @@ fn slice_segment_clip(
     command.args(slice_ffmpeg_args(
         start_ms,
         end_ms,
-        settings.anki.clip_padding_ms,
+        padding,
         &audio_path.display().to_string(),
         &clip_path.display().to_string(),
     ));
@@ -140,25 +164,85 @@ fn slice_segment_clip(
     Ok(clip_path)
 }
 
-/// Merges furigana into the transcription field when the sentence reads as
-/// Japanese, mirroring the push flow's overwrite-with-preserved-sound-tags
-/// behavior. Non-fatal: a lookup miss leaves the plain transcription in place.
-fn maybe_merge_furigana(
-    recording: &RecentRecording,
-    settings: &crate::app_types::AnkiSettings,
-    text: &str,
-    clip_media_file_name: &str,
-    fields: &mut serde_json::Map<String, serde_json::Value>,
-) {
-    if !recording_transcript_supports_furigana(recording, text) {
-        return;
+/// Everything a mine needs about where the sentence came from, with no notion of
+/// whether that was a library recording or a video being watched.
+///
+/// This split is deliberate. Mining is identical either way — cut the audio, grab a
+/// still, build the fields, add the note — and the only difference is where those facts
+/// come from. Keeping one implementation behind this struct is what stops the watch
+/// session and the transcript viewer drifting into two subtly different miners.
+pub(super) struct MineSource {
+    /// The file the audio is cut from. A library recording's audio, or the video itself
+    /// when watching — ffmpeg reads the first audio stream either way, so a container
+    /// with video in it needs no special handling.
+    pub(super) media_path: PathBuf,
+    /// The file a still frame is grabbed from, when there is one to grab.
+    pub(super) video_path: Option<PathBuf>,
+    /// Optional card metadata. Each is written only when its field is mapped AND the
+    /// value exists, so a source with less provenance simply produces a smaller card.
+    pub(super) source_path: Option<String>,
+    pub(super) created_at_ms: Option<u64>,
+    pub(super) source_url: Option<String>,
+    pub(super) display_title: String,
+    /// Whether furigana should be attempted. Resolved by the caller because the answer
+    /// comes from the recording's declared language, which a watch session does not have.
+    pub(super) supports_furigana: bool,
+}
+
+/// Grabs a still from the source's video at the middle of the line, or explains why not.
+///
+/// `Ok(None)` — not an error — covers every ordinary reason there is no picture: no image
+/// field mapped, or a source with no video at all (a mic recording, a YouTube import, an
+/// audio file). `Err` is reserved for "there should have been a frame and there wasn't",
+/// which the caller reports alongside a card it still creates.
+///
+/// The midpoint rather than the start: a line's first frame is often the tail of the
+/// previous shot or a hard cut, while the middle reliably shows whoever is speaking.
+fn capture_line_screenshot(
+    settings: &AppSettings,
+    source: &MineSource,
+    start_ms: u64,
+    end_ms: u64,
+) -> Result<Option<PathBuf>, String> {
+    if settings.anki.fields.image.is_empty() {
+        return Ok(None);
+    }
+    let Some(video_path) = source.video_path.as_ref() else {
+        return Ok(None);
+    };
+    if !video_path.exists() {
+        return Err(format!("the video is no longer at {}", video_path.display()));
     }
 
-    let Ok(furigana_html) = request_furigana_html(text) else {
-        return;
-    };
+    let detection = detect_local_ffmpeg(settings);
+    let executable_path = detection
+        .executable_path
+        .clone()
+        .ok_or_else(|| "FFmpeg is required to take a screenshot".to_string())?;
 
-    insert_furigana_field(settings, &furigana_html, clip_media_file_name, fields);
+    let parent = source
+        .media_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let stem = source
+        .media_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("recording");
+    let shot_path = unique_path_with_suffix(parent, &format!("{stem}_shot{start_ms}"), ".jpg");
+
+    let midpoint_ms = start_ms + (end_ms.saturating_sub(start_ms)) / 2;
+    capture_screenshot(
+        Path::new(&executable_path),
+        video_path,
+        midpoint_ms,
+        &shot_path,
+    )
+    .map_err(|error| {
+        let _ = fs::remove_file(&shot_path);
+        error
+    })?;
+    Ok(Some(shot_path))
 }
 
 /// Runs the whole mine for one sentence and returns the single action item plus
@@ -170,6 +254,56 @@ fn mine_single_segment<R: Runtime>(
     start_ms: u64,
     end_ms: u64,
     translation: Option<&str>,
+) -> (RecordingActionItem, &'static str) {
+    let failed = |message: String| {
+        (
+            RecordingActionItem {
+                file_path: file_path.to_string(),
+                status: "failed".into(),
+                message,
+                note_id: None,
+            },
+            "partial",
+        )
+    };
+
+    // Resolve the recording and its audio on disk, then hand the rest to the shared
+    // miner. This function is now ONLY the library-recording half.
+    let recording = match find_recent_recording(app, file_path) {
+        Ok(recording) => recording,
+        Err(error) => return failed(error),
+    };
+    let audio_path = match playback_path(&recording) {
+        Ok(path) => path,
+        Err(error) => return failed(error),
+    };
+
+    let source = MineSource {
+        media_path: audio_path,
+        // A library recording's video, if any, is not tracked — the watch session is
+        // where a picture comes from.
+        video_path: None,
+        source_path: Some(recording.file_path.clone()),
+        created_at_ms: Some(recording.created_at_ms),
+        source_url: recording.source_url.clone(),
+        display_title: recording_display_title(&recording),
+        supports_furigana: recording_transcript_supports_furigana(&recording, text.trim()),
+    };
+
+    mine_media_to_anki(app, file_path, &source, text, start_ms, end_ms, translation, None)
+}
+
+/// Mines one sentence from any media source. Shared by the transcript viewer and the
+/// watch session; see `MineSource`.
+pub(super) fn mine_media_to_anki<R: Runtime>(
+    app: &AppHandle<R>,
+    file_path: &str,
+    source: &MineSource,
+    text: &str,
+    start_ms: u64,
+    end_ms: u64,
+    translation: Option<&str>,
+    padding_override: Option<ClipPadding>,
 ) -> (RecordingActionItem, &'static str) {
     let failed = |message: String| {
         (
@@ -208,21 +342,24 @@ fn mine_single_segment<R: Runtime>(
         return failed("There is no sentence text to mine.".into());
     }
 
-    // 2. Resolve the recording and its audio on disk.
-    let recording = match find_recent_recording(app, file_path) {
-        Ok(recording) => recording,
-        Err(error) => return failed(error),
-    };
-    let audio_path = match playback_path(&recording) {
+    // 3. Slice the sentence clip (ffmpeg is mandatory). The per-mine override wins; the
+    // global setting is the default for both sides.
+    let padding = padding_override
+        .unwrap_or_else(|| ClipPadding::symmetric(settings.anki.clip_padding_ms));
+    let clip_path = match slice_segment_clip(&settings, &source.media_path, start_ms, end_ms, padding)
+    {
         Ok(path) => path,
         Err(error) => return failed(error),
     };
 
-    // 3. Slice the sentence clip (ffmpeg is mandatory).
-    let clip_path = match slice_segment_clip(&settings, &audio_path, start_ms, end_ms) {
-        Ok(path) => path,
-        Err(error) => return failed(error),
-    };
+    // 3 (cont.). A still from the video, when there is one. Deliberately not fatal: a
+    // card with audio and no picture is worth far more than no card, so a failure here
+    // rides along as a note on an otherwise successful mine.
+    let (screenshot_path, mut screenshot_problem) =
+        match capture_line_screenshot(&settings, source, start_ms, end_ms) {
+            Ok(path) => (path, None),
+            Err(problem) => (None, Some(problem)),
+        };
 
     // 4. Anki must be reachable before we store media or add the note.
     if let Err(error) = anki_connect_request("version", serde_json::json!({})) {
@@ -250,8 +387,36 @@ fn mine_single_segment<R: Runtime>(
     // regardless of whether storing (or the later addNote) succeeds.
     let _ = fs::remove_file(&clip_path);
     if let Err(error) = store_result {
+        if let Some(path) = &screenshot_path {
+            let _ = fs::remove_file(path);
+        }
         return failed(format!("Anki could not store the audio clip. {error}"));
     }
+
+    // The still goes into Anki's media folder the same way. A store failure here demotes
+    // the card to audio-only rather than losing it.
+    let screenshot_media_file_name = match &screenshot_path {
+        Some(path) => {
+            let media_file_name = anki_media_file_name(path);
+            let stored = anki_connect_request(
+                "storeMediaFile",
+                serde_json::json!({
+                    "filename": media_file_name,
+                    "path": path.display().to_string()
+                }),
+            );
+            let _ = fs::remove_file(path);
+            match stored {
+                Ok(_) => Some(media_file_name),
+                Err(error) => {
+                    screenshot_problem =
+                        Some(format!("Anki could not store the screenshot. {error}"));
+                    None
+                }
+            }
+        }
+        None => None,
+    };
 
     // 4 (cont.). Build the note fields from the mapping.
     let mut fields = serde_json::Map::new();
@@ -264,24 +429,39 @@ fn mine_single_segment<R: Runtime>(
         &anki.fields.audio,
         format!("[sound:{clip_media_file_name}]"),
     );
-    if !anki.fields.source_path.is_empty() {
+    if let Some(media_file_name) = &screenshot_media_file_name {
+        // The name comes from a path this app built, but it is interpolated into an HTML
+        // attribute, so it is escaped like every other field value.
         fields.insert(
-            anki.fields.source_path.clone(),
-            serde_json::Value::String(html_escape(&recording.file_path)),
+            anki.fields.image.clone(),
+            serde_json::Value::String(format!(
+                "<img src=\"{}\">",
+                html_escape(media_file_name)
+            )),
         );
     }
+    if !anki.fields.source_path.is_empty() {
+        if let Some(source_path) = source.source_path.as_deref() {
+            fields.insert(
+                anki.fields.source_path.clone(),
+                serde_json::Value::String(html_escape(source_path)),
+            );
+        }
+    }
     if !anki.fields.created_at.is_empty() {
-        fields.insert(
-            anki.fields.created_at.clone(),
-            serde_json::Value::String(recording.created_at_ms.to_string()),
-        );
+        if let Some(created_at_ms) = source.created_at_ms {
+            fields.insert(
+                anki.fields.created_at.clone(),
+                serde_json::Value::String(created_at_ms.to_string()),
+            );
+        }
     }
 
     // 4 (cont.). Source link / title / timestamp — each written only when the field
     // is mapped AND the data exists (a local recording with no URL omits the link).
-    let display_title = recording_display_title(&recording);
+    let display_title = source.display_title.clone();
     if !anki.fields.source_url.is_empty() {
-        if let Some(url) = recording
+        if let Some(url) = source
             .source_url
             .as_deref()
             .map(str::trim)
@@ -335,7 +515,11 @@ fn mine_single_segment<R: Runtime>(
     }
 
     // 6. Furigana (non-fatal).
-    maybe_merge_furigana(&recording, &anki, trimmed_text, &clip_media_file_name, &mut fields);
+    if source.supports_furigana {
+        if let Ok(furigana_html) = request_furigana_html(trimmed_text) {
+            insert_furigana_field(&anki, &furigana_html, &clip_media_file_name, &mut fields);
+        }
+    }
 
     // 7. Create the note with the same dedup guard the push flow uses.
     let note_result = anki_connect_request(
@@ -384,11 +568,79 @@ fn mine_single_segment<R: Runtime>(
         RecordingActionItem {
             file_path: file_path.to_string(),
             status: "success".into(),
-            message: format!("Mined sentence into Anki note {note_id}."),
+            // The card exists either way, but a screenshot the user expected and did not
+            // get has to be said out loud — silently dropping it would report a partial
+            // result as a whole one.
+            message: match screenshot_problem {
+                Some(problem) => format!(
+                    "Mined sentence into Anki note {note_id}, without a screenshot: {problem}."
+                ),
+                None => format!("Mined sentence into Anki note {note_id}."),
+            },
             note_id: Some(note_id),
         },
         "completed",
     )
+}
+
+/// Mines the line currently on screen in a watch session.
+///
+/// Everything comes from mpv: the video path, the line, and its exact bounds. There is no
+/// import, no transcription, and no library entry — which is the point. The card carries
+/// the video's file name as its title and the line's timestamp; there is no source URL
+/// because a local file has none.
+pub(crate) fn mine_watched_line_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    video_path: String,
+    text: String,
+    start_ms: u64,
+    end_ms: u64,
+    pad_before_ms: Option<u64>,
+    pad_after_ms: Option<u64>,
+) -> Result<RecordingBatchResult, String> {
+    // Either side may be overridden on its own; an unset side falls back to the global
+    // setting, resolved inside the miner.
+    let padding = match (pad_before_ms, pad_after_ms) {
+        (None, None) => None,
+        (before, after) => Some(ClipPadding {
+            before_ms: before.unwrap_or(0),
+            after_ms: after.unwrap_or(0),
+        }),
+    };
+    let video = PathBuf::from(&video_path);
+    let display_title = video
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("")
+        .to_string();
+    let source = MineSource {
+        // ffmpeg cuts the audio straight out of the video container.
+        media_path: video.clone(),
+        video_path: Some(video),
+        source_path: Some(video_path.clone()),
+        created_at_ms: None,
+        source_url: None,
+        display_title,
+        // A watch session has no declared language, so this falls back to reading the
+        // line itself — the same test the library path uses for an untagged transcript.
+        supports_furigana: transcript_looks_japanese(&text),
+    };
+
+    let (item, batch_status) =
+        mine_media_to_anki(app, &video_path, &source, &text, start_ms, end_ms, None, padding);
+    let message = item.message.clone();
+
+    update_shell_snapshot(app, |shell| {
+        shell.status_text = message.clone();
+        shell.transition_count += 1;
+    })?;
+
+    Ok(RecordingBatchResult {
+        status: batch_status.into(),
+        message,
+        items: vec![item],
+        bootstrap: build_app_bootstrap(app)?,
+    })
 }
 
 pub(crate) fn mine_segment_to_anki_inner<R: Runtime>(
@@ -471,7 +723,8 @@ fn recording_display_title(recording: &RecentRecording) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_ffmpeg_timestamp, format_position, slice_ffmpeg_args, youtube_timestamped_link,
+        format_ffmpeg_timestamp, format_position, slice_ffmpeg_args, ClipPadding,
+        youtube_timestamped_link,
     };
 
     #[test]
@@ -484,7 +737,7 @@ mod tests {
 
     #[test]
     fn slice_args_pad_the_window_and_order_seek_before_input() {
-        let args = slice_ffmpeg_args(1000, 2000, 250, "in.wav", "out.mp3");
+        let args = slice_ffmpeg_args(1000, 2000, ClipPadding::symmetric(250), "in.wav", "out.mp3");
 
         let ss = args.iter().position(|arg| arg == "-ss").expect("-ss present");
         let to = args.iter().position(|arg| arg == "-to").expect("-to present");
@@ -505,10 +758,42 @@ mod tests {
 
     #[test]
     fn slice_args_clamp_padding_at_the_start_of_the_file() {
-        let args = slice_ffmpeg_args(100, 500, 250, "in.wav", "out.mp3");
+        let args = slice_ffmpeg_args(100, 500, ClipPadding::symmetric(250), "in.wav", "out.mp3");
         let ss = args.iter().position(|arg| arg == "-ss").expect("-ss present");
         // 100ms - 250ms padding saturates to the start of the file.
         assert_eq!(args[ss + 1], "0.000");
+    }
+
+    #[test]
+    fn slice_args_pad_each_side_independently() {
+        // A line's start is usually the tighter edge while its end clips a trailing
+        // syllable, so the two sides must be settable apart from each other.
+        let args = slice_ffmpeg_args(
+            5_000,
+            6_000,
+            ClipPadding { before_ms: 100, after_ms: 900 },
+            "in.mkv",
+            "out.mp3",
+        );
+        let ss = args.iter().position(|arg| arg == "-ss").expect("-ss present");
+        let to = args.iter().position(|arg| arg == "-to").expect("-to present");
+        assert_eq!(args[ss + 1], "4.900");
+        assert_eq!(args[to + 1], "6.900");
+    }
+
+    #[test]
+    fn slice_args_accept_no_padding_at_all() {
+        let args = slice_ffmpeg_args(
+            5_000,
+            6_000,
+            ClipPadding { before_ms: 0, after_ms: 0 },
+            "in.mkv",
+            "out.mp3",
+        );
+        let ss = args.iter().position(|arg| arg == "-ss").expect("-ss present");
+        let to = args.iter().position(|arg| arg == "-to").expect("-to present");
+        assert_eq!(args[ss + 1], "5.000");
+        assert_eq!(args[to + 1], "6.000");
     }
 
     #[test]

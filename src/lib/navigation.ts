@@ -24,6 +24,11 @@ export function createWorkflowPages(recordingCount: number): PageNavigationItem[
       description: "",
       count: String(recordingCount),
     },
+    {
+      id: "watch",
+      label: "Watch",
+      description: "Play a video and mine as you go",
+    },
   ];
 }
 

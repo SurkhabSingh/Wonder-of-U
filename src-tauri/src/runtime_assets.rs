@@ -1,4 +1,5 @@
 mod ffmpeg;
+mod mpv;
 mod path_probe;
 mod updates;
 mod whisper;
@@ -8,6 +9,7 @@ pub(crate) use ffmpeg::{
     collect_managed_ffmpeg_candidates, detect_local_ffmpeg, managed_ffmpeg_install_directory,
     verify_ffmpeg_binary,
 };
+pub(crate) use mpv::detect_local_mpv;
 pub(crate) use updates::{
     check_whisper_model_update_inner, check_whisper_runtime_update_inner, check_ytdlp_update_inner,
 };
