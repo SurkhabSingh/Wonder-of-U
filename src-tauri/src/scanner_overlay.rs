@@ -35,7 +35,7 @@ use tauri::{
 use crate::app_types::SharedPersistedState;
 #[cfg(target_os = "windows")]
 use crate::watch::window::{
-    mpv_is_foreground, video_window_rect, ScanModifier, VideoWindowRect,
+    escape_is_held, mpv_is_foreground, video_window_rect, ScanModifier, VideoWindowRect,
 };
 use crate::watch::watch_session_pid;
 
@@ -77,6 +77,9 @@ pub(crate) struct ScannerState {
     /// True while the scan modifier is held, which is also when the overlay stops being
     /// click-through.
     pub(crate) scanning: bool,
+    /// True while Escape is down. Polled rather than listened for: a window that never takes
+    /// focus never receives a key event, so this is the overlay's only keyboard input.
+    pub(crate) escape_pressed: bool,
     pub(crate) width: i32,
     pub(crate) height: i32,
     /// Physical pixels per logical pixel × 100, so the overlay can size text against the
@@ -230,7 +233,7 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
             continue;
         };
         let scanning = ScanModifier::from_setting(&configured_modifier(&app)).is_held();
-        track_once(&app, rect, scanning);
+        track_once(&app, rect, scanning, escape_is_held());
     });
 }
 
@@ -252,10 +255,16 @@ fn hide_overlay<R: Runtime>(app: &AppHandle<R>) {
 }
 
 #[cfg(target_os = "windows")]
-fn track_once<R: Runtime>(app: &AppHandle<R>, rect: VideoWindowRect, scanning: bool) {
+fn track_once<R: Runtime>(
+    app: &AppHandle<R>,
+    rect: VideoWindowRect,
+    scanning: bool,
+    escape_pressed: bool,
+) {
     let state = ScannerState {
         tracking: true,
         scanning,
+        escape_pressed,
         width: rect.width,
         height: rect.height,
         dpi: rect.dpi,
@@ -296,6 +305,12 @@ fn track_once<R: Runtime>(app: &AppHandle<R>, rect: VideoWindowRect, scanning: b
         };
         last.as_ref().map(|previous| previous.scanning) != Some(scanning)
     };
+    let escape_changed = {
+        let Ok(last) = LAST_STATE.lock() else {
+            return;
+        };
+        last.as_ref().map(|previous| previous.escape_pressed) != Some(escape_pressed)
+    };
     let interactive_changed = INTERACTIVE.swap(interactive, Ordering::Relaxed) != interactive;
 
     if interactive_changed {
@@ -304,7 +319,7 @@ fn track_once<R: Runtime>(app: &AppHandle<R>, rect: VideoWindowRect, scanning: b
         let _ = window.set_ignore_cursor_events(!interactive);
     }
 
-    let changed = geometry_changed || scanning_changed || interactive_changed;
+    let changed = geometry_changed || scanning_changed || interactive_changed || escape_changed;
     if let Ok(mut last) = LAST_STATE.lock() {
         *last = Some(state);
     }
@@ -331,6 +346,7 @@ mod tests {
         let json = serde_json::to_string(&ScannerState {
             tracking: true,
             scanning: false,
+            escape_pressed: false,
             width: 1920,
             height: 1080,
             dpi: 144,

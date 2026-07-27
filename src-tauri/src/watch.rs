@@ -539,7 +539,7 @@ mod tests {
             }
             let reply = self.replies.remove(0);
             buffer.push_str(&reply);
-            buffer.push_str("\n");
+            buffer.push('\n');
             Ok(buffer.len())
         }
     }

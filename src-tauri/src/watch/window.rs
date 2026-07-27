@@ -21,7 +21,7 @@ use windows_sys::Win32::{
     // `ClientToScreen` lives with the GDI bindings rather than the windowing ones.
     Graphics::Gdi::ClientToScreen,
     UI::HiDpi::GetDpiForWindow,
-    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT},
+    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_SHIFT},
     UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow,
         GetWindowThreadProcessId, IsWindowVisible, USER_DEFAULT_SCREEN_DPI,
@@ -195,6 +195,15 @@ pub(crate) fn mpv_is_foreground(pid: u32) -> bool {
     let mut owner = 0u32;
     unsafe { GetWindowThreadProcessId(foreground, &mut owner) };
     owner == pid
+}
+
+/// Whether Escape is down.
+///
+/// Polled for the same reason the modifier is: the overlay carries `WS_EX_NOACTIVATE`, so
+/// it never takes focus and never receives a key event. Without this there is no keyboard
+/// way to dismiss a popup drawn over the video.
+pub(crate) fn escape_is_held() -> bool {
+    (unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } as u16 & 0x8000) != 0
 }
 
 /// Which scanner modifier is held right now.
