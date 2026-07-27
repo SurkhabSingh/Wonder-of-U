@@ -129,6 +129,60 @@ export function useWatchSession() {
     }
   }, []);
 
+  // Mines a specific line rather than whatever is on screen. Separate from `mine` on
+  // purpose: that one re-reads mpv so the hotkey captures what you are hearing, while
+  // this one is told its bounds so it can mine a row you scrolled back to, or one you
+  // merged out of two cues.
+  const mineLine = useCallback(
+    async (
+      videoPath: string,
+      text: string,
+      startMs: number,
+      endMs: number,
+      padBeforeMs: number | null,
+      padAfterMs: number | null,
+    ) => {
+      setIsMining(true);
+      try {
+        const result = await invoke<RecordingBatchResult>("mine_watch_line_at", {
+          videoPath,
+          text,
+          startMs,
+          endMs,
+          padBeforeMs,
+          padAfterMs,
+        });
+        const item = result.items[0];
+        const ok = item?.status === "success";
+        if (mountedRef.current) {
+          setMineResult({ ok, message: item?.message ?? result.message });
+        }
+        return ok;
+      } catch (caught) {
+        if (mountedRef.current) {
+          setMineResult({
+            ok: false,
+            message: errorMessage(caught, "That line could not be mined."),
+          });
+        }
+        return false;
+      } finally {
+        if (mountedRef.current) {
+          setIsMining(false);
+        }
+      }
+    },
+    [],
+  );
+
+  const seek = useCallback(async (positionMs: number) => {
+    try {
+      await invoke("seek_watch_session", { positionMs });
+    } catch {
+      // The player is gone; the next poll reports it.
+    }
+  }, []);
+
   const stop = useCallback(async () => {
     try {
       await invoke("stop_watch_session");
@@ -141,5 +195,17 @@ export function useWatchSession() {
     }
   }, []);
 
-  return { snapshot, isStarting, error, start, stop, refresh, mine, isMining, mineResult };
+  return {
+    snapshot,
+    isStarting,
+    error,
+    start,
+    stop,
+    refresh,
+    mine,
+    mineLine,
+    seek,
+    isMining,
+    mineResult,
+  };
 }

@@ -15,6 +15,9 @@ import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useAppViewState } from "./hooks/useAppViewState";
 import { useMinedSentences } from "./hooks/useMinedSentences";
 import { useWatchSession } from "./hooks/useWatchSession";
+import { useWatchSubtitles } from "./hooks/useWatchSubtitles";
+import { segmentMineKey } from "./lib/segments";
+import { normalizeSegmentText } from "./components/transcripts/transcriptText";
 import { useRecordingActions } from "./hooks/useRecordingActions";
 import { useRecordingLibrary } from "./hooks/useRecordingLibrary";
 import { useRecorderActions } from "./hooks/useRecorderActions";
@@ -165,6 +168,13 @@ function App() {
   });
   const { minedSentences, refreshMinedSentences } = useMinedSentences();
   const watch = useWatchSession();
+  const watchSubtitles = useWatchSubtitles();
+  // Rows mined in this watch session, and the per-mine padding overrides. "" means
+  // "use the Settings value", resolved in Rust so a later settings change still applies.
+  const [watchMinedKeys, setWatchMinedKeys] = useState<Set<string>>(() => new Set());
+  const [watchMiningKey, setWatchMiningKey] = useState<string | null>(null);
+  const [padBeforeMs, setPadBeforeMs] = useState("");
+  const [padAfterMs, setPadAfterMs] = useState("");
 
   const runtimeUpdateVersion =
     runtimeUpdateResult?.status === "available"
@@ -541,13 +551,90 @@ function App() {
               snapshot={watch.snapshot}
               isStarting={watch.isStarting}
               error={watch.error}
-              onStart={(videoPath, subtitlePath) =>
-                void watch.start(videoPath, subtitlePath)
-              }
-              onStop={() => void watch.stop()}
+              onStart={(videoPath, subtitlePath) => {
+                setWatchMinedKeys(new Set());
+                void watch.start(videoPath, subtitlePath);
+                void watchSubtitles.load(videoPath, subtitlePath, null);
+              }}
+              onStop={() => {
+                void watch.stop();
+                watchSubtitles.clear();
+                setWatchMinedKeys(new Set());
+              }}
               onMine={() => void watch.mine()}
               isMining={watch.isMining}
               mineResult={watch.mineResult}
+              cues={watchSubtitles.cues}
+              subtitlesError={watchSubtitles.error}
+              minedKeys={watchMinedKeys}
+              // The deck-wide marks reuse the same normalized set the transcript viewer
+              // uses, so a line already in Anki is flagged here too.
+              deckMinedKeys={
+                new Set(
+                  watchSubtitles.cues
+                    .filter((cue) =>
+                      minedSentences.has(normalizeSegmentText(cue.text)),
+                    )
+                    .map(segmentMineKey),
+                )
+              }
+              miningKey={watchMiningKey}
+              mineDisabledReason={
+                !expressionFieldMapped
+                  ? "Map an Anki note first"
+                  : !ankiReachable
+                    ? "Anki not reachable"
+                    : null
+              }
+              onSeek={(positionMs) => void watch.seek(positionMs)}
+              onMineLine={(index) => {
+                const cue = watchSubtitles.cues[index];
+                const videoPath = watch.snapshot.path;
+                if (!cue || !videoPath) {
+                  return;
+                }
+                const key = segmentMineKey(cue);
+                setWatchMiningKey(key);
+                void watch
+                  .mineLine(
+                    videoPath,
+                    cue.text,
+                    cue.startMs,
+                    cue.endMs,
+                    padBeforeMs === "" ? null : Number(padBeforeMs),
+                    padAfterMs === "" ? null : Number(padAfterMs),
+                  )
+                  .then((ok) => {
+                    if (ok) {
+                      setWatchMinedKeys((previous) =>
+                        new Set(previous).add(key),
+                      );
+                      void refreshMinedSentences();
+                    }
+                  })
+                  .finally(() =>
+                    setWatchMiningKey((current) =>
+                      current === key ? null : current,
+                    ),
+                  );
+              }}
+              onMerge={(index) =>
+                watchSubtitles.merge(
+                  index,
+                  // CJK runs without inter-word spaces; a space would leave an
+                  // unnatural gap in the merged sentence and on the card.
+                  /[぀-ヿ㐀-鿿]/.test(
+                    watchSubtitles.cues[index]?.text ?? "",
+                  )
+                    ? ""
+                    : " ",
+                )
+              }
+              onSplit={(index) => watchSubtitles.split(index)}
+              padBeforeMs={padBeforeMs}
+              padAfterMs={padAfterMs}
+              onPadBeforeChange={setPadBeforeMs}
+              onPadAfterChange={setPadAfterMs}
             />
           ) : null}
 

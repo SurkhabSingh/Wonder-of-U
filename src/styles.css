@@ -2287,6 +2287,28 @@ input::placeholder {
   background: var(--surface-raised);
 }
 
+/* Per-mine padding, sitting with the Mine action rather than in Settings: it is a
+   per-line judgement (this one clips a syllable) not a preference. */
+.watch-padding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.watch-padding .themed-select-trigger {
+  min-height: 28px;
+  padding: 2px var(--space-3);
+  font-size: var(--text-2xs);
+}
+
+.watch-actions {
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
 .watch-line-text {
   margin: 0 0 var(--space-2);
   max-width: var(--measure-reading);

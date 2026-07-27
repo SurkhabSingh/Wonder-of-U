@@ -1,13 +1,26 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { formatDuration } from "../../lib/format";
-import { fileNameFromPath } from "../../lib/format";
-import type { WatchSnapshot } from "../../types";
+import { formatDuration, fileNameFromPath } from "../../lib/format";
+import { ThemedSelect } from "../ui/ThemedSelect";
+import { SubtitleListPane } from "./SubtitleListPane";
+import type { RecordingSegment, WatchSnapshot } from "../../types";
 
 // Containers mpv plays that the app's own webview cannot — which is the whole reason the
 // video is handed to mpv instead of being rendered here.
 const VIDEO_EXTENSIONS = ["mkv", "mp4", "webm", "mov", "m4v", "avi", "ts", "flv"];
 const SUBTITLE_EXTENSIONS = ["srt", "ass", "ssa", "vtt", "sub"];
+
+// "" means "use the padding from Settings". Kept as a distinct choice rather than
+// pre-filling the global value, so changing the setting later still applies here.
+const PADDING_OPTIONS = [
+  { value: "", label: "Default" },
+  { value: "0", label: "None" },
+  { value: "100", label: "100 ms" },
+  { value: "250", label: "250 ms" },
+  { value: "500", label: "500 ms" },
+  { value: "750", label: "750 ms" },
+  { value: "1000", label: "1000 ms" },
+];
 
 export function WatchPage({
   snapshot,
@@ -18,6 +31,20 @@ export function WatchPage({
   onMine,
   isMining,
   mineResult,
+  cues,
+  subtitlesError,
+  minedKeys,
+  deckMinedKeys,
+  miningKey,
+  mineDisabledReason,
+  onSeek,
+  onMineLine,
+  onMerge,
+  onSplit,
+  padBeforeMs,
+  padAfterMs,
+  onPadBeforeChange,
+  onPadAfterChange,
 }: {
   snapshot: WatchSnapshot;
   isStarting: boolean;
@@ -29,9 +56,24 @@ export function WatchPage({
   // What the last mine said — success or the reason it failed. Shown rather than
   // swallowed, so a card that did not get made is never mistaken for one that did.
   mineResult: { ok: boolean; message: string } | null;
+  cues: RecordingSegment[];
+  subtitlesError: string | null;
+  minedKeys: Set<string>;
+  deckMinedKeys: Set<string>;
+  miningKey: string | null;
+  mineDisabledReason: string | null;
+  onSeek: (positionMs: number) => void;
+  onMineLine: (index: number) => void;
+  onMerge: (index: number) => void;
+  onSplit: (index: number) => void;
+  padBeforeMs: string;
+  padAfterMs: string;
+  onPadBeforeChange: (value: string) => void;
+  onPadAfterChange: (value: string) => void;
 }) {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const pickVideo = async () => {
     const picked = await open({
@@ -53,133 +95,176 @@ export function WatchPage({
     }
   };
 
+  if (!snapshot.connected) {
+    return (
+      <>
+        <header className="panel-header">
+          <div>
+            <p className="panel-kicker">Watch &amp; Mine</p>
+            <h2>Open a video</h2>
+          </div>
+        </header>
+
+        <div className="info-note">
+          <p className="microcopy">
+            The video plays in <strong>mpv</strong>, not in this window &mdash; mpv handles
+            MKV, H.265 and everything else this app&rsquo;s built-in player cannot. Wonder
+            of U reads the position and the subtitles from it, so you can mine the line you
+            are hearing.
+          </p>
+        </div>
+
+        <div className="settings-grid">
+          <label className="field">
+            <span>Video</span>
+            <button type="button" className="secondary" onClick={() => void pickVideo()}>
+              {videoPath ? fileNameFromPath(videoPath) : "Choose a video…"}
+            </button>
+          </label>
+
+          <label className="field">
+            <span>Subtitles (optional)</span>
+            <button type="button" className="secondary" onClick={() => void pickSubtitle()}>
+              {subtitlePath ? fileNameFromPath(subtitlePath) : "Choose a subtitle file…"}
+            </button>
+          </label>
+        </div>
+
+        <p className="microcopy">
+          Leave subtitles empty if the file already has them built in &mdash; the track is
+          read straight out of the container.
+        </p>
+
+        <div className="panel-actions">
+          <button
+            type="button"
+            onClick={() => videoPath && onStart(videoPath, subtitlePath)}
+            disabled={!videoPath || isStarting}
+          >
+            {isStarting ? "Opening…" : "Open in mpv"}
+          </button>
+        </div>
+
+        {error ? (
+          <div className="update-card error">
+            <strong>{error}</strong>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
   return (
     <>
       <header className="panel-header">
         <div>
           <p className="panel-kicker">Watch &amp; Mine</p>
-          <h2>{snapshot.connected ? snapshot.title ?? "Playing" : "Open a video"}</h2>
+          <h2>{snapshot.title ?? "Playing"}</h2>
         </div>
-        {snapshot.connected ? (
-          <div className="panel-actions">
-            <button type="button" className="secondary" onClick={onStop}>
-              Stop
-            </button>
-          </div>
-        ) : null}
+        <div className="panel-actions">
+          <button type="button" className="secondary" onClick={onStop}>
+            Stop
+          </button>
+        </div>
       </header>
 
-      {snapshot.connected ? (
-        <>
-          <div className="watch-transport">
-            <span className="watch-clock">
-              {formatDuration(snapshot.positionMs ?? 0)}
-              {snapshot.durationMs ? ` / ${formatDuration(snapshot.durationMs)}` : ""}
-            </span>
-            <span
-              className={`status-chip status-chip-${snapshot.paused ? "warning" : "success"}`}
-            >
-              {snapshot.paused ? "Paused" : "Playing"}
-            </span>
-          </div>
+      <div className="watch-transport">
+        <span className="watch-clock">
+          {formatDuration(snapshot.positionMs ?? 0)}
+          {snapshot.durationMs ? ` / ${formatDuration(snapshot.durationMs)}` : ""}
+        </span>
+        <span
+          className={`status-chip status-chip-${snapshot.paused ? "warning" : "success"}`}
+        >
+          {snapshot.paused ? "Paused" : "Playing"}
+        </span>
+      </div>
 
-          {/* The line mpv currently has on screen, with the bounds it reports. This is
-              exactly what a mine will use, so showing it is also how the user confirms
-              the app and the player agree before trusting the hotkey. */}
-          <div className="watch-line">
-            {snapshot.subtitleText ? (
-              <>
-                <p className="watch-line-text">{snapshot.subtitleText}</p>
-                <p className="microcopy">
-                  {formatDuration(snapshot.subtitleStartMs ?? 0)} &ndash;{" "}
-                  {formatDuration(snapshot.subtitleEndMs ?? 0)}
-                  {snapshot.subtitleDelayMs !== 0
-                    ? ` · offset ${snapshot.subtitleDelayMs > 0 ? "+" : ""}${snapshot.subtitleDelayMs}ms`
-                    : ""}
-                </p>
-              </>
-            ) : (
-              <p className="microcopy">
-                No subtitle on screen right now. If none ever appears, the video may have
-                no subtitles loaded &mdash; pick a subtitle file and open it again.
-              </p>
-            )}
-          </div>
-
-          <div className="panel-actions watch-actions">
-            <button
-              type="button"
-              onClick={onMine}
-              disabled={isMining || !snapshot.subtitleText}
-              title={
-                snapshot.subtitleText
-                  ? "Make an Anki card from this line"
-                  : "There is no line on screen to mine"
-              }
-            >
-              {isMining ? "Mining…" : "Mine this line"}
-            </button>
-          </div>
-
-          {mineResult ? (
-            <div className={`update-card ${mineResult.ok ? "current" : "error"}`}>
-              <strong>{mineResult.message}</strong>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <div className="info-note">
+      {/* The line mpv currently has on screen. This is what the Mine button acts on, so
+          showing it is also how you confirm the app and the player agree. */}
+      <div className="watch-line">
+        {snapshot.subtitleText ? (
+          <>
+            <p className="watch-line-text">{snapshot.subtitleText}</p>
             <p className="microcopy">
-              The video plays in <strong>mpv</strong>, not in this window &mdash; mpv
-              handles MKV, H.265 and everything else this app&rsquo;s built-in player
-              cannot. Wonder of U reads the position and the on-screen subtitle line from
-              it, so you can mine the line you are hearing.
+              {formatDuration(snapshot.subtitleStartMs ?? 0)} &ndash;{" "}
+              {formatDuration(snapshot.subtitleEndMs ?? 0)}
+              {snapshot.subtitleDelayMs !== 0
+                ? ` · offset ${snapshot.subtitleDelayMs > 0 ? "+" : ""}${snapshot.subtitleDelayMs}ms`
+                : ""}
             </p>
-          </div>
+          </>
+        ) : (
+          <p className="microcopy">No subtitle on screen right now.</p>
+        )}
+      </div>
 
-          <div className="settings-grid">
-            <label className="field">
-              <span>Video</span>
-              <button type="button" className="secondary" onClick={() => void pickVideo()}>
-                {videoPath ? fileNameFromPath(videoPath) : "Choose a video…"}
-              </button>
-            </label>
+      <div className="panel-actions watch-actions">
+        <button
+          type="button"
+          onClick={onMine}
+          disabled={isMining || !snapshot.subtitleText}
+          title={
+            snapshot.subtitleText
+              ? "Make an Anki card from the line playing now"
+              : "There is no line on screen to mine"
+          }
+        >
+          {isMining ? "Mining…" : "Mine the current line"}
+        </button>
 
-            <label className="field">
-              <span>Subtitles (optional)</span>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => void pickSubtitle()}
-              >
-                {subtitlePath ? fileNameFromPath(subtitlePath) : "Choose a subtitle file…"}
-              </button>
-            </label>
-          </div>
+        {/* Padding is asymmetric because the two edges fail differently: a line's start is
+            usually tight, while its end clips a trailing syllable. "Default" defers to the
+            Settings value rather than copying it, so changing that later still applies. */}
+        <label className="watch-padding">
+          <span>Pad before</span>
+          <ThemedSelect
+            value={padBeforeMs}
+            options={PADDING_OPTIONS}
+            placeholder="Default"
+            onChange={onPadBeforeChange}
+          />
+        </label>
+        <label className="watch-padding">
+          <span>Pad after</span>
+          <ThemedSelect
+            value={padAfterMs}
+            options={PADDING_OPTIONS}
+            placeholder="Default"
+            onChange={onPadAfterChange}
+          />
+        </label>
+      </div>
 
-          <p className="microcopy">
-            Leave subtitles empty if the file already has them built in &mdash; mpv reads
-            embedded tracks on its own.
-          </p>
+      {mineResult ? (
+        <div className={`update-card ${mineResult.ok ? "current" : "error"}`}>
+          <strong>{mineResult.message}</strong>
+        </div>
+      ) : null}
 
-          <div className="panel-actions">
-            <button
-              type="button"
-              onClick={() => videoPath && onStart(videoPath, subtitlePath)}
-              disabled={!videoPath || isStarting}
-            >
-              {isStarting ? "Opening…" : "Open in mpv"}
-            </button>
-          </div>
+      {subtitlesError ? (
+        <div className="update-card error">
+          <strong>{subtitlesError}</strong>
+        </div>
+      ) : null}
 
-          {error ? (
-            <div className="update-card error">
-              <strong>{error}</strong>
-            </div>
-          ) : null}
-        </>
-      )}
+      <div className="transcript-viewer-body is-single">
+        <SubtitleListPane
+          cues={cues}
+          positionMs={snapshot.positionMs}
+          minedKeys={minedKeys}
+          deckMinedKeys={deckMinedKeys}
+          miningKey={miningKey}
+          isMining={isMining}
+          mineDisabledReason={mineDisabledReason}
+          selectedKey={selectedKey}
+          onSelect={setSelectedKey}
+          onSeek={onSeek}
+          onMine={onMineLine}
+          onMerge={onMerge}
+          onSplit={onSplit}
+        />
+      </div>
     </>
   );
 }
