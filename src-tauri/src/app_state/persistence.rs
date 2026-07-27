@@ -10,7 +10,8 @@ use crate::{
     app_runtime::{append_structured_log, now_ms},
     app_types::{
         default_indicator_position, default_theme_preference, AnkiSettings, AppPathsState,
-        AppSettings, FeatureSettings, PersistedData, TranslationSettings, WhisperSettings,
+        AppSettings, FeatureSettings, PersistedData, ScannerSettings, TranslationSettings,
+        WhisperSettings,
     },
 };
 
@@ -64,6 +65,7 @@ fn default_settings<R: Runtime>(
         anki: AnkiSettings::default(),
         features: FeatureSettings::default(),
         translation: TranslationSettings::default(),
+        scanner: ScannerSettings::default(),
         theme: default_theme_preference(),
         indicator_position: default_indicator_position(),
         launch_at_login: false,

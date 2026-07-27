@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "scanner",
+  "description": "Capability for the word-scanner overlay drawn over the mpv video window",
+  "windows": ["scanner"],
+  "permissions": [
+    "core:event:default"
+  ]
+}

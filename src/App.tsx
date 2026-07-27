@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
@@ -556,7 +557,17 @@ function App() {
                 void watch.start(videoPath, subtitlePath);
                 void watchSubtitles.load(videoPath, subtitlePath, null);
               }}
+              scanner={settingsDraft.scanner}
+              onToggleOverlay={(enabled) => {
+                updateSettings({ scanner: { overlayEnabled: enabled } });
+                // The backend owns mpv's own subtitle visibility, so the toggle has to
+                // reach it directly rather than waiting on the settings autosave.
+                void invoke("set_scanner_overlay", { enabled });
+              }}
               onStop={() => {
+                // Take the overlay down with the video. A scanner window left tracking a
+                // dead player is the one way it could end up stranded on screen.
+                void invoke("set_scanner_overlay", { enabled: false });
                 void watch.stop();
                 watchSubtitles.clear();
                 setWatchMinedKeys(new Set());
@@ -564,6 +575,7 @@ function App() {
               onMine={() => void watch.mine()}
               isMining={watch.isMining}
               mineResult={watch.mineResult}
+              mineHotkey={bootstrap.shell.hotkeys.mine || null}
               cues={watchSubtitles.cues}
               subtitlesError={watchSubtitles.error}
               minedKeys={watchMinedKeys}

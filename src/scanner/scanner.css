@@ -1,0 +1,56 @@
+/* The scanner overlay's own layout.
+ *
+ * Everything here paints over live video, so the rules are deliberately few and opaque
+ * where they need to be readable. Colours come from the shared tokens; the popup brings
+ * its own stylesheet.
+ */
+
+.scanner-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* The window is exactly mpv's client area and is click-through except while the
+     modifier is held, so nothing here should ever show a text cursor by default. */
+  cursor: default;
+}
+
+/* Placed where mpv puts its own subtitles, so toggling the overlay does not move the
+   line the user is reading. 8% up from the bottom matches the browser extension's
+   overlay, which was positioned against real playback rather than guessed. */
+.scanner-line {
+  position: absolute;
+  bottom: 8%;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 90%;
+  padding: 0.15em 0.5em;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 72%);
+  color: #ffffff;
+  font-family: var(--font-reading);
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 90%);
+  white-space: pre-wrap;
+  /* Selecting subtitle text with a drag is never the intent over a video. */
+  user-select: none;
+}
+
+/* While the modifier is held the overlay is taking the mouse, so it says so — otherwise
+   the click-through toggle is invisible and the user cannot tell why mpv stopped
+   responding to clicks. */
+.scanner-line.is-scanning {
+  outline: 1px solid var(--accent);
+  cursor: help;
+}
+
+/* The scanned word, drawn with the Custom Highlight API so the subtitle text is never
+   wrapped in elements — it is re-rendered on the player's clock. */
+::highlight(wonder-of-u-scan) {
+  color: inherit;
+  background: rgb(74 127 226 / 34%);
+  text-decoration: underline;
+  text-decoration-color: rgb(140 190 255 / 80%);
+  text-underline-offset: 0.16em;
+}

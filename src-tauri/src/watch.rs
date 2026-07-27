@@ -26,6 +26,8 @@ use std::os::windows::process::CommandExt;
 use serde::Serialize;
 
 pub(crate) mod subtitles;
+#[cfg(target_os = "windows")]
+pub(crate) mod window;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -244,6 +246,19 @@ impl MpvConnection {
     /// line" is what keeps a property read from accidentally consuming an event — the
     /// bug this design would otherwise have.
     fn request(&mut self, command: &[&str]) -> Result<serde_json::Value, String> {
+        // Every existing caller sends strings, and mpv coerces them, so the string form
+        // stays the front door and simply widens into the JSON one. Keeping it means the
+        // verified mine path is not touched by adding a setter.
+        let command = command
+            .iter()
+            .map(|part| serde_json::Value::String((*part).to_string()))
+            .collect::<Vec<_>>();
+        self.request_json(&command)
+    }
+
+    /// The same exchange, but with arbitrary JSON arguments — `set_property` needs a real
+    /// boolean for `sub-visibility`, not the string "no".
+    fn request_json(&mut self, command: &[serde_json::Value]) -> Result<serde_json::Value, String> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
 
@@ -289,6 +304,18 @@ impl MpvConnection {
 
     fn property(&mut self, name: &str) -> Result<serde_json::Value, String> {
         self.request(&["get_property", name])
+    }
+
+    fn set_property(
+        &mut self,
+        name: &str,
+        value: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.request_json(&[
+            serde_json::Value::String("set_property".into()),
+            serde_json::Value::String(name.into()),
+            value,
+        ])
     }
 
     fn optional_seconds_ms(&mut self, name: &str) -> Option<u64> {
@@ -444,6 +471,38 @@ pub(crate) fn seek_watch_session(position_ms: u64) -> Result<(), String> {
         .connection
         .request(&["seek", &seconds, "absolute"])
         .map(|_| ())
+}
+
+/// Hands mpv's own subtitle rendering on or off.
+///
+/// Off is what makes the scanner overlay possible: mpv draws subtitles with libass, which
+/// exposes no glyph positions, so a word can only be hovered if we draw the line ourselves.
+/// Verified in the spike: `sub-text`, `sub-start` and `sub-end` keep reporting normally
+/// while visibility is off, so hiding mpv's layer costs us nothing but the `.ass` styling.
+pub(crate) fn set_watch_subtitle_visibility(visible: bool) -> Result<(), String> {
+    let mut session_guard = SESSION
+        .lock()
+        .map_err(|_| "Could not reach the watch session.".to_string())?;
+    let Some(session) = session_guard.as_mut() else {
+        return Err("No video is playing.".into());
+    };
+    session
+        .connection
+        .set_property("sub-visibility", serde_json::Value::Bool(visible))
+        .map(|_| ())
+}
+
+/// mpv's process id, for finding its window.
+///
+/// Returned rather than the window handle itself because the handle is not stable — mpv
+/// owns several top-level windows and the video one is identified by class and visibility
+/// at the moment it is asked for, not once at launch.
+pub(crate) fn watch_session_pid() -> Option<u32> {
+    SESSION
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|session| session.child.id())
 }
 
 pub(crate) fn stop_watch_session() -> Result<(), String> {

@@ -11,6 +11,7 @@ import type {
   WhisperAssetUpdateResult,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
+import { ScannerSettingsPage } from "./ScannerSettingsPage";
 import { AnkiMappingSettingsPage } from "./AnkiMappingSettingsPage";
 import { ModelSettingsPage } from "./ModelSettingsPage";
 import { PreferencesSettingsPage } from "./PreferencesSettingsPage";
@@ -208,6 +209,13 @@ export function SettingsPages({
             onUpdateAnkiField={onUpdateAnkiField}
             onUpdateSettings={onUpdateSettings}
             settingsDraft={settingsDraft}
+          />
+        </section>
+
+        <section id="settings-scanner" className="settings-section">
+          <ScannerSettingsPage
+            settingsDraft={settingsDraft}
+            onUpdateSettings={onUpdateSettings}
           />
         </section>
       </article>

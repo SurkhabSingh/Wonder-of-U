@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { formatDuration } from "../../lib/format";
 import { highlightMatches } from "./transcriptText";
 
@@ -26,6 +26,7 @@ export function TranscriptSegmentRow({
   canMerge = false,
   onSplit,
   canSplit = false,
+  renderText,
 }: {
   segmentKey: string;
   text: string;
@@ -62,6 +63,10 @@ export function TranscriptSegmentRow({
   canMerge?: boolean;
   onSplit?: () => void;
   canSplit?: boolean;
+  // Lets a caller own how the line's text is drawn — the watch page makes it
+  // word-scannable. Left undefined everywhere else, which keeps the search-highlighted
+  // rendering below exactly as it was.
+  renderText?: (text: string) => ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   const hasTiming = startMs !== null && endMs !== null;
@@ -122,7 +127,9 @@ export function TranscriptSegmentRow({
           </span>
         ) : null}
       </span>
-      <p className="transcript-segment-body">{highlightMatches(text, query)}</p>
+      <p className="transcript-segment-body">
+        {renderText ? renderText(text) : highlightMatches(text, query)}
+      </p>
       <div className="transcript-segment-aside">
         <button
           type="button"

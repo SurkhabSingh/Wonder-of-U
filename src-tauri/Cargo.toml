@@ -42,6 +42,11 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_System_Threading",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  # The scanner overlay: monitor lookup for the window mpv is actually on,
+  # per-window DPI, and polling the modifier key while mpv holds focus.
+  "Win32_Graphics_Gdi",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
 [dev-dependencies]

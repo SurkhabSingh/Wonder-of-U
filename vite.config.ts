@@ -8,13 +8,16 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  // Two HTML entries: the main app window and the standalone recording indicator
-  // overlay. The overlay ships its own tiny bundle so it never pulls in React.
+  // Three HTML entries: the main app window, the standalone recording indicator, and
+  // the word-scanner overlay drawn over mpv. The indicator ships its own tiny bundle so
+  // it never pulls in React; the scanner does use React, because it renders the same
+  // dictionary popup the main window does and a second implementation would drift.
   build: {
     rollupOptions: {
       input: {
         main: "index.html",
         overlay: "overlay.html",
+        scanner: "scanner.html",
       },
     },
   },

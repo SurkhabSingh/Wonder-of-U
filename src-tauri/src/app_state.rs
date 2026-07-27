@@ -16,7 +16,7 @@ use crate::{
     app_types::{
         default_translation_provider, default_translation_target_language, whisper_model_spec,
         AnkiFieldMapping, AnkiSettings, AppPathsState, AppSettings, FeatureSettings, PersistedData,
-        TranslationSettings, WhisperSettings,
+        ScannerSettings, TranslationSettings, WhisperSettings,
     },
     runtime_assets::{all_managed_model_paths, collect_managed_whisper_cli_candidates},
 };
@@ -153,11 +153,60 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 &settings.translation.target_language,
             ),
         },
+        scanner: ScannerSettings {
+            modifier: normalize_scan_modifier(&settings.scanner.modifier).into(),
+            release_behavior: normalize_scan_release_behavior(&settings.scanner.release_behavior)
+                .into(),
+            // Above ~250 ms a held-modifier hover stops feeling like a lookup and starts
+            // feeling broken, so the range is capped rather than trusted.
+            debounce_ms: settings.scanner.debounce_ms.min(250),
+            font_family: normalize_font_family(&settings.scanner.font_family),
+            font_size_px: settings.scanner.font_size_px.clamp(10, 32),
+            overlay_enabled: settings.scanner.overlay_enabled,
+            overlay_font_size_px: settings.scanner.overlay_font_size_px.clamp(12, 72),
+            reading_font_family: normalize_font_family(&settings.scanner.reading_font_family),
+            reading_font_size_px: settings.scanner.reading_font_size_px.clamp(12, 32),
+        },
         theme: theme.into(),
         indicator_position: indicator_position.into(),
         launch_at_login: settings.launch_at_login,
         start_minimized: settings.start_minimized,
     })
+}
+
+/// The four modifiers the scanner can watch for. Anything else — including a hand-edited
+/// typo — becomes Shift rather than disabling scanning, which would look like a broken
+/// feature rather than a bad setting.
+fn normalize_scan_modifier(modifier: &str) -> &str {
+    match modifier.trim().to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => "ctrl",
+        "alt" => "alt",
+        "none" => "none",
+        _ => "shift",
+    }
+}
+
+fn normalize_scan_release_behavior(behavior: &str) -> &str {
+    if behavior.trim().eq_ignore_ascii_case("close") {
+        "close"
+    } else {
+        "remainOpen"
+    }
+}
+
+/// Format only, never a whitelist.
+///
+/// This is a raw CSS `font-family` value and the UI owns which families it offers; checking
+/// it against a Rust-side list would mean a font added to the picker silently reverting.
+/// The cap exists so a corrupted state file cannot carry an unbounded string into a
+/// stylesheet, and quotes are dropped because the value is interpolated into one.
+fn normalize_font_family(family: &str) -> String {
+    family
+        .trim()
+        .chars()
+        .filter(|character| !matches!(character, '"' | ';' | '{' | '}' | '<' | '>'))
+        .take(200)
+        .collect()
 }
 
 /// Keep the decoder-speed setting to the two values the engine branches on. Only

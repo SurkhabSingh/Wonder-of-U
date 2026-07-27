@@ -1,0 +1,149 @@
+/* Design tokens: colours, spacing, radii, the type scale and the reading ramp.
+ *
+ * Split out of styles.css so documents other than the main app can be themed — the
+ * scanner overlay renders in its own window with its own document, and every rule it
+ * needs is written against these variables. styles.css imports this first, so the main
+ * app is unchanged by the move.
+ */
+:root {
+  color-scheme: light dark;
+  font-family: Inter, "Segoe UI Variable", "Segoe UI", sans-serif;
+  font-feature-settings: "calt", "kern", "liga", "ss03";
+  line-height: 1.5;
+  font-weight: 400;
+  --canvas: #f3f3f5;
+  --surface: #ffffff;
+  --surface-raised: #f8f8f9;
+  --surface-active: #eeeef1;
+  --surface-input: #ffffff;
+  --text: #17171a;
+  --text-strong: #0c0c0e;
+  --text-muted: #68686f;
+  --text-subtle: #8a8a92;
+  --border: #dedee3;
+  --border-strong: #c9c9d0;
+  --primary: #17171a;
+  --on-primary: #ffffff;
+  --accent: #2878d0;
+  --accent-soft: rgba(40, 120, 208, 0.1);
+  --success: #18794e;
+  --success-soft: rgba(24, 121, 78, 0.09);
+  --warning: #9a5b13;
+  --warning-soft: rgba(154, 91, 19, 0.1);
+  --error: #c23b3b;
+  --error-soft: rgba(194, 59, 59, 0.09);
+  --recording: #d4572b;
+  --focus: rgba(40, 120, 208, 0.26);
+
+  /* --- Additive token foundation ---------------------------------------
+     Reverse-engineered from the magic numbers already used across this
+     sheet so nothing shifts visually; existing declarations keep their
+     literal values, new surfaces (this viewer + later work) build on these. */
+
+  /* Spacing scale */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-9: 18px;
+
+  /* Corner radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+
+  /* Type scale */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-2xl: 29px;
+
+  /* Weights (codifies the app's own 550/650 habit) */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-mid: 550;
+  --weight-semibold: 600;
+  --weight-bold: 650;
+
+  /* Reading ramp */
+  --font-sans: Inter, "Segoe UI Variable", "Segoe UI", sans-serif;
+  --font-reading: var(--font-sans);
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono",
+    Menlo, monospace;
+  --reading-base: 17px;
+  --leading-reading: 1.75;
+  --measure-reading: 62ch;
+  --reading-base-cjk: 18px;
+  --leading-reading-cjk: 2;
+  --measure-reading-cjk: 42ch;
+
+  /* Elevation */
+  --shadow-sm: 0 14px 38px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.34);
+  --shadow-lg: 0 20px 58px rgba(0, 0, 0, 0.34);
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur-medium: 180ms;
+  --dur-slow: 800ms;
+  --ease-standard: ease;
+
+  /* Stacking */
+  --z-toast: 50;
+  --z-overlay: 80;
+  --z-select: 100;
+  --z-dropdown: 130;
+  --z-tooltip: 160;
+
+  /* Semantic layer — reading surfaces */
+  --reading-surface: var(--surface);
+  --segment-hover: var(--surface-raised);
+  --segment-active-rail: var(--accent);
+  --segment-mark: color-mix(in srgb, var(--accent) 22%, transparent);
+  --timestamp-color: var(--text-subtle);
+  --gutter-width: 3.25rem;
+
+  color: var(--text);
+  background: var(--canvas);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #090a0b;
+  --surface: #101112;
+  --surface-raised: #151617;
+  --surface-active: #1c1d1f;
+  --surface-input: #0d0e0f;
+  --text: #d7d7da;
+  --text-strong: #f4f4f6;
+  --text-muted: #9c9ca3;
+  --text-subtle: #707077;
+  --border: #28292c;
+  --border-strong: #393a3f;
+  --primary: #f4f4f6;
+  --on-primary: #111214;
+  --accent: #66b5ff;
+  --accent-soft: rgba(102, 181, 255, 0.13);
+  --success: #65cf99;
+  --success-soft: rgba(101, 207, 153, 0.11);
+  --warning: #e7ad62;
+  --warning-soft: rgba(231, 173, 98, 0.12);
+  --error: #ff8585;
+  --error-soft: rgba(255, 133, 133, 0.12);
+  --recording: #ff8a5f;
+  --focus: rgba(102, 181, 255, 0.28);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}

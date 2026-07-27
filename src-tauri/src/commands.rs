@@ -5,7 +5,8 @@ use tauri::{AppHandle, Manager};
 use crate::{
     app_types::SharedPersistedState,
     runtime_assets::detect_local_mpv,
-    anki::mine_watched_line_inner,
+    anki::{lookup_term_inner, mine_watched_line_inner, LookupResult},
+    scanner_overlay::{set_scanner_overlay_enabled, set_scanner_popup_open},
     watch::{
         seek_watch_session as seek_watch_session_inner,
         start_watch_session as start_watch_session_inner,
@@ -326,6 +327,42 @@ pub(crate) async fn mine_watch_line_at(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Looks a word up in the Anki add-on's dictionary.
+///
+/// Takes the sentence and a character offset rather than a word, because the backend
+/// deinflects prefix candidates and picks the longest match — segmenting first would be
+/// a second, worse segmenter.
+#[tauri::command]
+pub(crate) async fn lookup_term(
+    text: String,
+    offset: usize,
+    limit: Option<u32>,
+) -> Result<LookupResult, String> {
+    tauri::async_runtime::spawn_blocking(move || lookup_term_inner(text, offset, limit))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Turns the scannable subtitle overlay over mpv on or off.
+///
+/// Also flips mpv's own subtitle rendering the other way — two layers at once would draw
+/// every line twice.
+#[tauri::command]
+pub(crate) async fn set_scanner_overlay(app: AppHandle, enabled: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || set_scanner_overlay_enabled(&app, enabled))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// The overlay reporting whether a dictionary popup is on screen.
+///
+/// Needed because click-through is a property of the whole window: without this, releasing
+/// the scan modifier would make the popup unclickable the instant it appeared.
+#[tauri::command]
+pub(crate) fn set_scanner_popup(open: bool) {
+    set_scanner_popup_open(open);
 }
 
 /// Jumps the player to a position — what clicking a line in the subtitle list does.

@@ -10,6 +10,9 @@ export type HotkeyBindings = {
   start: string;
   stop: string;
   showWindow: string;
+  // Mines the line playing in a watch session. Global so it fires while mpv has
+  // focus — mining should not mean leaving the video.
+  mine: string;
 };
 
 export type ShellSnapshot = {
@@ -85,6 +88,26 @@ export type TranslationSettings = {
 
 export type ThemePreference = "system" | "light" | "dark";
 
+// Held to scan. Must stay in lockstep with the Rust `normalize_scan_modifier`.
+export type ScanModifier = "shift" | "ctrl" | "alt" | "none";
+export type ScanReleaseBehavior = "remainOpen" | "close";
+
+export type ScannerSettings = {
+  modifier: ScanModifier;
+  releaseBehavior: ScanReleaseBehavior;
+  debounceMs: number;
+  // Popup font. Empty means inherit the app's reading font.
+  fontFamily: string;
+  fontSizePx: number;
+  // Draw our own scannable subtitles over mpv instead of mpv's styled ones.
+  // Off by default: mpv's .ass rendering is what works today.
+  overlayEnabled: boolean;
+  overlayFontSizePx: number;
+  // The app's own reading typography, driving --font-reading and --reading-base.
+  readingFontFamily: string;
+  readingFontSizePx: number;
+};
+
 // Where the global recording-indicator toast is anchored on screen. Must stay in
 // lockstep with the six values the Rust `normalize_indicator_position` accepts.
 export type IndicatorPosition =
@@ -102,6 +125,7 @@ export type AppSettings = {
   anki: AnkiSettings;
   features: FeatureSettings;
   translation: TranslationSettings;
+  scanner: ScannerSettings;
   theme: ThemePreference;
   indicatorPosition: IndicatorPosition;
   launchAtLogin: boolean;
@@ -324,6 +348,38 @@ export type WatchSnapshot = {
   subtitleDelayMs: number;
 };
 
+export type LookupFrequency = {
+  dictionary: string;
+  displayValue: string | null;
+};
+
+export type LookupPitch = {
+  /// Mora index where the pitch drops. 0 is 平板 (no drop).
+  position: number;
+};
+
+export type LookupEntry = {
+  expression: string;
+  reading: string;
+  dictionary: string;
+  definitions: string[];
+  /// Why a conjugated form matched its dictionary form, e.g. ["past"] for 食べた.
+  inflectionReasons: string[];
+  frequencies: LookupFrequency[];
+  pitchAccents: LookupPitch[];
+};
+
+export type LookupResult = {
+  /// "ready" | "empty" | "unavailable". `unavailable` means Anki is closed, which is an
+  /// ordinary state — the dictionary lives inside the add-on — not an error.
+  status: "ready" | "empty" | "unavailable";
+  message: string;
+  /// The candidate that actually matched. Usually longer than the clicked character,
+  /// and it is what gets highlighted in the line.
+  term: string;
+  entries: LookupEntry[];
+};
+
 export type BusyAction =
   | "start"
   | "stop"
@@ -360,7 +416,12 @@ export type AppPage =
 
 // The stacked sections inside the single Settings page. Setup-checklist rows and
 // post-download navigation deep-link to one of these, scrolling it into view.
-export type SettingsSection = "preferences" | "whisper" | "storage" | "anki";
+export type SettingsSection =
+  | "preferences"
+  | "whisper"
+  | "storage"
+  | "anki"
+  | "scanner";
 
 export type RecordingFilter =
   | "all"

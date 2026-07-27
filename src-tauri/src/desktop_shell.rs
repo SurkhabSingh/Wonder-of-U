@@ -21,10 +21,13 @@ use windows_sys::Win32::{
 };
 
 use crate::{
+    anki::mine_watched_line_inner,
     app_config::AUTOSTART_ARGUMENT,
     app_runtime::{log_event, update_shell_snapshot},
+    watch::watch_snapshot,
     app_types::{
-        SharedPersistedState, SharedShellState, SHOW_SHORTCUT, START_SHORTCUT, STOP_SHORTCUT,
+        SharedPersistedState, SharedShellState, MINE_SHORTCUT, SHOW_SHORTCUT, START_SHORTCUT,
+        STOP_SHORTCUT,
     },
     recording_indicator::{
         configure_recording_indicator, signal_recording_indicator, IndicatorSignal,
@@ -36,6 +39,7 @@ const APP_TITLE: &str = "Wonder of U";
 const START_SHORTCUT_CANDIDATES: [&str; 3] = [START_SHORTCUT, "Ctrl+Alt+Shift+R", "Ctrl+Alt+F8"];
 const STOP_SHORTCUT_CANDIDATES: [&str; 3] = [STOP_SHORTCUT, "Ctrl+Alt+Shift+S", "Ctrl+Alt+F9"];
 const SHOW_SHORTCUT_CANDIDATES: [&str; 3] = [SHOW_SHORTCUT, "Ctrl+Alt+Shift+W", "Ctrl+Alt+F10"];
+const MINE_SHORTCUT_CANDIDATES: [&str; 3] = [MINE_SHORTCUT, "Ctrl+Alt+Shift+M", "Ctrl+Alt+F11"];
 
 #[derive(Default)]
 pub(crate) struct StartupVisibility {
@@ -50,6 +54,7 @@ enum HotkeyAction {
     Start,
     Stop,
     ShowWindow,
+    Mine,
 }
 
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -105,6 +110,14 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
         HotkeyAction::Start => start_recording_inner(app, None),
         HotkeyAction::Stop => stop_recording_inner(app),
         HotkeyAction::ShowWindow => show_main_window(app).map_err(|error| error.to_string()),
+        // Mining reads mpv fresh, so the card is made from the line being heard right
+        // now. Doing nothing when no video is playing is correct rather than an error:
+        // the hotkey is global and will get pressed by accident.
+        HotkeyAction::Mine => match mine_watched_line_from_player(app) {
+            Ok(()) => Ok(()),
+            Err(error) if error == NO_WATCH_SESSION => Ok(()),
+            Err(error) => Err(error),
+        },
     };
 
     if let Err(error) = action_result {
@@ -130,6 +143,46 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
             shell.current_recording_name = None;
         });
     }
+}
+
+/// The one "failure" that is really just "nothing to do", so the hotkey can stay silent
+/// rather than logging an error every time it is pressed outside a watch session.
+const NO_WATCH_SESSION: &str = "No video is playing.";
+
+/// Mines whatever line mpv has on screen right now.
+///
+/// Reads the player rather than any cached UI state: the user presses the key because of
+/// what they are hearing, and the watch panel's poll can be a quarter-second behind.
+fn mine_watched_line_from_player<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let snapshot = watch_snapshot()?;
+    if !snapshot.connected {
+        return Err(NO_WATCH_SESSION.into());
+    }
+    let Some(video_path) = snapshot.path else {
+        return Err(NO_WATCH_SESSION.into());
+    };
+    let Some(text) = snapshot
+        .subtitle_text
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+    else {
+        return Err("There is no subtitle on screen to mine.".into());
+    };
+    // Both bounds come from mpv. Without them there is nothing to cut, and guessing a
+    // window around the position would produce a clip that does not match the card.
+    let (Some(start_ms), Some(end_ms)) = (snapshot.subtitle_start_ms, snapshot.subtitle_end_ms)
+    else {
+        return Err("mpv did not report this line's timing.".into());
+    };
+
+    let result = mine_watched_line_inner(app, video_path, text, start_ms, end_ms, None, None)?;
+    // The status line is the only feedback available when the app window is behind mpv,
+    // so a hotkey mine has to say what happened there.
+    let message = result.message.clone();
+    update_shell_snapshot(app, |shell| {
+        shell.status_text = message.clone();
+    })?;
+    Ok(())
 }
 
 fn register_hotkey<R: Runtime>(
@@ -262,9 +315,15 @@ pub(crate) fn configure_desktop_shell<R: Runtime>(
         "Show window",
         &SHOW_SHORTCUT_CANDIDATES,
     )?;
+    let (mine_binding, mine_warning) = register_hotkey(
+        app.handle(),
+        HotkeyAction::Mine,
+        "Mine line",
+        &MINE_SHORTCUT_CANDIDATES,
+    )?;
 
     warnings.extend(
-        [start_warning, stop_warning, show_warning]
+        [start_warning, stop_warning, show_warning, mine_warning]
             .into_iter()
             .flatten(),
     );
@@ -278,6 +337,7 @@ pub(crate) fn configure_desktop_shell<R: Runtime>(
         shell.hotkeys.start = start_binding;
         shell.hotkeys.stop = stop_binding;
         shell.hotkeys.show_window = show_binding;
+        shell.hotkeys.mine = mine_binding;
         if !warnings.is_empty() {
             shell.status_text = format!(
                 "Tray shell is ready with fallback hotkeys. {}",

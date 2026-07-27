@@ -10,16 +10,21 @@ import type {
   AppSettings,
   AutosaveState,
   FeatureSettings,
+  ScannerSettings,
   TranslationSettings,
   WhisperSettings,
 } from "../types";
 
 type SettingsUpdate = Partial<
-  Omit<AppSettings, "features" | "whisper" | "anki" | "translation">
+  Omit<
+    AppSettings,
+    "features" | "whisper" | "anki" | "translation" | "scanner"
+  >
 > & {
   features?: Partial<FeatureSettings>;
   whisper?: Partial<WhisperSettings>;
   translation?: Partial<TranslationSettings>;
+  scanner?: Partial<ScannerSettings>;
   anki?: Partial<Omit<AnkiSettings, "fields">> & {
     fields?: Partial<AnkiFieldMapping>;
   };
@@ -239,6 +244,13 @@ export function useAppBootstrap() {
         ...current.translation,
         ...(update.translation ?? {}),
       };
+      // Every nested group needs its own merge line. Without one, the `...update`
+      // below REPLACES the whole object with whatever partial the caller passed,
+      // wiping its siblings — silently, with no type error.
+      const nextScanner: ScannerSettings = {
+        ...current.scanner,
+        ...(update.scanner ?? {}),
+      };
       const nextAnki: AnkiSettings = {
         ...current.anki,
         ...(update.anki ?? {}),
@@ -255,6 +267,7 @@ export function useAppBootstrap() {
         translation: nextTranslation,
         anki: nextAnki,
         features: nextFeatures,
+        scanner: nextScanner,
       };
     });
   }, []);

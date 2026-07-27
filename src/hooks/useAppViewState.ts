@@ -54,6 +54,26 @@ export function useAppViewState({
     document.documentElement.style.colorScheme = resolvedTheme;
   }, [resolvedTheme]);
 
+  // Reading typography, applied the same way as the theme and for the same reason: these
+  // are the tokens the transcript rows, the live pane and the watch line already size
+  // themselves from, so overriding the variables reaches all three without touching any
+  // component. Read from `settingsDraft`, so the change previews before the autosave.
+  const { readingFontFamily, readingFontSizePx } = settingsDraft.scanner;
+  useEffect(() => {
+    const root = document.documentElement.style;
+    if (readingFontFamily.trim()) {
+      // Kept ahead of the built-in stack rather than replacing it, so a font that lacks
+      // Japanese glyphs still falls back instead of rendering tofu.
+      root.setProperty(
+        "--font-reading",
+        `${readingFontFamily}, var(--font-sans)`,
+      );
+    } else {
+      root.removeProperty("--font-reading");
+    }
+    root.setProperty("--reading-base", `${readingFontSizePx}px`);
+  }, [readingFontFamily, readingFontSizePx]);
+
   useEffect(() => {
     if (
       bootstrap.shell.startedAtMs === null ||

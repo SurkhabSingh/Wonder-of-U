@@ -3,7 +3,24 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { formatDuration, fileNameFromPath } from "../../lib/format";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { SubtitleListPane } from "./SubtitleListPane";
-import type { RecordingSegment, WatchSnapshot } from "../../types";
+import { ScannableText } from "./ScannableText";
+import { LookupPopup } from "./LookupPopup";
+import { useWordScanner } from "../../hooks/useWordScanner";
+import type { RecordingSegment, ScannerSettings, WatchSnapshot } from "../../types";
+
+// How the scan gesture reads in the user's own configuration.
+const MODIFIER_LABELS: Record<string, string> = {
+  shift: "Hold Shift",
+  ctrl: "Hold Ctrl",
+  alt: "Hold Alt",
+};
+
+function scanHintFor(scanner: ScannerSettings): string {
+  const prefix = MODIFIER_LABELS[scanner.modifier] ?? "Hold Shift";
+  return scanner.modifier === "none"
+    ? "Hover a word to look it up (needs Anki open)"
+    : `${prefix} and hover a word to look it up (needs Anki open)`;
+}
 
 // Containers mpv plays that the app's own webview cannot — which is the whole reason the
 // video is handed to mpv instead of being rendered here.
@@ -31,6 +48,7 @@ export function WatchPage({
   onMine,
   isMining,
   mineResult,
+  mineHotkey,
   cues,
   subtitlesError,
   minedKeys,
@@ -45,6 +63,8 @@ export function WatchPage({
   padAfterMs,
   onPadBeforeChange,
   onPadAfterChange,
+  scanner,
+  onToggleOverlay,
 }: {
   snapshot: WatchSnapshot;
   isStarting: boolean;
@@ -56,6 +76,8 @@ export function WatchPage({
   // What the last mine said — success or the reason it failed. Shown rather than
   // swallowed, so a card that did not get made is never mistaken for one that did.
   mineResult: { ok: boolean; message: string } | null;
+  // The registered global shortcut, or null if the OS refused every candidate.
+  mineHotkey: string | null;
   cues: RecordingSegment[];
   subtitlesError: string | null;
   minedKeys: Set<string>;
@@ -70,10 +92,21 @@ export function WatchPage({
   padAfterMs: string;
   onPadBeforeChange: (value: string) => void;
   onPadAfterChange: (value: string) => void;
+  scanner: ScannerSettings;
+  onToggleOverlay: (enabled: boolean) => void;
 }) {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const lookup = useWordScanner({
+    modifier: scanner.modifier,
+    releaseBehavior: scanner.releaseBehavior,
+    debounceMs: scanner.debounceMs,
+  });
+
+  // The line on screen changes as the video plays. Keying the owner to the cue's start
+  // means a highlight never survives onto a different line.
+  const currentLineKey = `current:${snapshot.subtitleStartMs ?? 0}`;
 
   const pickVideo = async () => {
     const picked = await open({
@@ -185,7 +218,9 @@ export function WatchPage({
       <div className="watch-line">
         {snapshot.subtitleText ? (
           <>
-            <p className="watch-line-text">{snapshot.subtitleText}</p>
+            <p className="watch-line-text">
+              <ScannableText ownerKey={currentLineKey} text={snapshot.subtitleText} />
+            </p>
             <p className="microcopy">
               {formatDuration(snapshot.subtitleStartMs ?? 0)} &ndash;{" "}
               {formatDuration(snapshot.subtitleEndMs ?? 0)}
@@ -212,6 +247,26 @@ export function WatchPage({
         >
           {isMining ? "Mining…" : "Mine the current line"}
         </button>
+        {/* The hotkey is the point — it fires while mpv has focus, so mining does not
+            mean leaving the video. The button is for when you are already looking here. */}
+        {mineHotkey ? (
+          <span className="watch-hotkey-hint">
+            or press <kbd>{mineHotkey}</kbd> without leaving mpv
+          </span>
+        ) : null}
+
+        {/* Off by default: mpv's own .ass rendering — positioning, colours, karaoke — is
+            what works today, and ours replaces it only when the user wants to scan over
+            the video. mpv cannot report where a word is drawn, so there is no way to have
+            both. */}
+        <label className="toggle watch-overlay-toggle">
+          <input
+            type="checkbox"
+            checked={scanner.overlayEnabled}
+            onChange={(event) => onToggleOverlay(event.currentTarget.checked)}
+          />
+          <span>Scannable subtitles over the video</span>
+        </label>
 
         {/* Padding is asymmetric because the two edges fail differently: a line's start is
             usually tight, while its end clips a trailing syllable. "Default" defers to the
@@ -263,8 +318,24 @@ export function WatchPage({
           onMine={onMineLine}
           onMerge={onMerge}
           onSplit={onSplit}
+          scanHint={scanHintFor(scanner)}
         />
       </div>
+
+      {lookup.target ? (
+        <LookupPopup
+          anchor={lookup.target.anchor}
+          result={lookup.result}
+          isLoading={lookup.isLoading}
+          error={lookup.error}
+          // `useAppViewState` stamps the resolved theme on <html>; reading it here beats
+          // threading the same value through three components to reach one attribute.
+          theme={document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+          fontFamily={scanner.fontFamily}
+          fontSizePx={scanner.fontSizePx}
+          onClose={lookup.close}
+        />
+      ) : null}
     </>
   );
 }

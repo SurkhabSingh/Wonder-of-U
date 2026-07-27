@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wonder of U Scanner</title>
+    <style>
+      /* The window is transparent and exactly covers mpv's video area; only the
+         subtitle line and the popup are ever painted. No scrollbars, and no text
+         selection — a drag over the video should not leave a selection behind. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/scanner/main.tsx"></script>
+  </body>
+</html>

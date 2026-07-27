@@ -11,6 +11,9 @@ use crate::{app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION, recording::Recordin
 pub(crate) const START_SHORTCUT: &str = "Ctrl+Alt+R";
 pub(crate) const STOP_SHORTCUT: &str = "Ctrl+Alt+S";
 pub(crate) const SHOW_SHORTCUT: &str = "Ctrl+Alt+W";
+/// Mines the line playing in a watch session. Global on purpose: it has to fire while
+/// mpv has focus, which is the whole point — mining should not mean leaving the video.
+pub(crate) const MINE_SHORTCUT: &str = "Ctrl+Alt+M";
 
 #[derive(Copy, Clone)]
 pub(crate) struct WhisperModelSpec {
@@ -143,6 +146,96 @@ impl Default for TranslationSettings {
         Self {
             provider: default_translation_provider(),
             target_language: default_translation_target_language(),
+        }
+    }
+}
+
+/// Shift, matching Yomitan — the gesture users of this workflow already have in their
+/// fingers. It is also the mechanism: over the video, holding the modifier is exactly what
+/// stops the overlay being click-through, so the key and the hit-testing are one thing.
+pub(crate) fn default_scan_modifier() -> String {
+    "shift".into()
+}
+
+/// `remainOpen` — releasing the modifier leaves the popup up so it can be read and
+/// scrolled. Matches the add-on's own default.
+pub(crate) fn default_scan_release_behavior() -> String {
+    "remainOpen".into()
+}
+
+/// 20 ms, the add-on's value. It is a floor on how often a lookup may *start*, not a delay
+/// before the first one — see the two-stage throttle in the scanner.
+pub(crate) fn default_scan_debounce_ms() -> u64 {
+    20
+}
+
+/// 14 px, the add-on's popup default, so a transplanted stylesheet looks identical.
+pub(crate) fn default_lookup_font_size_px() -> u64 {
+    14
+}
+
+/// 28 px, matching the browser extension's `DEFAULT_FONT_SIZE_PX` for subtitles drawn over
+/// video — a size chosen against real playback rather than guessed.
+pub(crate) fn default_overlay_font_size_px() -> u64 {
+    28
+}
+
+/// 17 px, the existing `--reading-base` token. Naming it here keeps the Rust default and
+/// the stylesheet from drifting.
+pub(crate) fn default_reading_font_size_px() -> u64 {
+    17
+}
+
+/// The word scanner and the typography it is read at.
+///
+/// Grouped rather than flattened onto `AppSettings` because these are one feature — but
+/// note that a nested group must also gain a merge line in the frontend's `updateSettings`,
+/// or a partial update silently wipes its siblings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScannerSettings {
+    /// Held to scan: `shift` | `ctrl` | `alt` | `none`. `none` scans on bare hover, which
+    /// is why the debounce below matters more in that mode.
+    #[serde(default = "default_scan_modifier")]
+    pub(crate) modifier: String,
+    /// What releasing the modifier does: `remainOpen` | `close`.
+    #[serde(default = "default_scan_release_behavior")]
+    pub(crate) release_behavior: String,
+    #[serde(default = "default_scan_debounce_ms")]
+    pub(crate) debounce_ms: u64,
+    /// Popup font. Empty means inherit the app's reading font. A free string, deliberately:
+    /// the UI owns which families it offers, Rust only bounds the length.
+    #[serde(default)]
+    pub(crate) font_family: String,
+    #[serde(default = "default_lookup_font_size_px")]
+    pub(crate) font_size_px: u64,
+    /// Draw our own scannable subtitles over mpv instead of mpv's styled ones. **Off by
+    /// default**: mpv's `.ass` rendering is what works today and stays the default.
+    #[serde(default)]
+    pub(crate) overlay_enabled: bool,
+    #[serde(default = "default_overlay_font_size_px")]
+    pub(crate) overlay_font_size_px: u64,
+    /// The app's own reading font, driving `--font-reading`. Empty = the built-in stack.
+    #[serde(default)]
+    pub(crate) reading_font_family: String,
+    /// Drives `--reading-base`, which the transcript rows, the live pane and the watch line
+    /// already size themselves from.
+    #[serde(default = "default_reading_font_size_px")]
+    pub(crate) reading_font_size_px: u64,
+}
+
+impl Default for ScannerSettings {
+    fn default() -> Self {
+        Self {
+            modifier: default_scan_modifier(),
+            release_behavior: default_scan_release_behavior(),
+            debounce_ms: default_scan_debounce_ms(),
+            font_family: String::new(),
+            font_size_px: default_lookup_font_size_px(),
+            overlay_enabled: false,
+            overlay_font_size_px: default_overlay_font_size_px(),
+            reading_font_family: String::new(),
+            reading_font_size_px: default_reading_font_size_px(),
         }
     }
 }
@@ -284,6 +377,8 @@ pub(crate) struct AppSettings {
     pub(crate) features: FeatureSettings,
     #[serde(default)]
     pub(crate) translation: TranslationSettings,
+    #[serde(default)]
+    pub(crate) scanner: ScannerSettings,
     #[serde(default = "default_theme_preference")]
     pub(crate) theme: String,
     #[serde(default = "default_indicator_position")]
@@ -449,6 +544,9 @@ pub(crate) struct HotkeyBindings {
     pub(crate) start: String,
     pub(crate) stop: String,
     pub(crate) show_window: String,
+    /// Mines the line currently playing in a watch session.
+    #[serde(default)]
+    pub(crate) mine: String,
 }
 
 impl Default for HotkeyBindings {
@@ -457,6 +555,7 @@ impl Default for HotkeyBindings {
             start: START_SHORTCUT.to_string(),
             stop: STOP_SHORTCUT.to_string(),
             show_window: SHOW_SHORTCUT.to_string(),
+            mine: MINE_SHORTCUT.to_string(),
         }
     }
 }

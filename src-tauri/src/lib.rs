@@ -12,6 +12,7 @@ mod recording_indicator;
 mod recording_library;
 mod recording_session;
 mod runtime_assets;
+mod scanner_overlay;
 mod settings;
 mod transcription;
 mod translation_bridge;
@@ -53,6 +54,16 @@ pub fn run() {
 
             allow_recording_directories_in_asset_scope(app.handle());
 
+            // Non-fatal on purpose: a failure here costs the word scanner, not the app.
+            if let Err(error) = scanner_overlay::configure_scanner_overlay(app.handle()) {
+                log_event(
+                    app.handle(),
+                    "WARN",
+                    "scanner.overlay",
+                    serde_json::json!({ "message": error }),
+                );
+            }
+
             translation_bridge::start_bridge_server(app.handle().clone());
 
             emit_app_snapshot(app.handle());
@@ -92,6 +103,9 @@ pub fn run() {
             mine_watch_line_at,
             load_watch_subtitles,
             seek_watch_session,
+            lookup_term,
+            set_scanner_overlay,
+            set_scanner_popup,
             create_anki_note_type,
             play_recording,
             read_recording_texts,

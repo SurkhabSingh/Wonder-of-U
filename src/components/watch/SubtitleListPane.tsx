@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { TranscriptSegmentRow } from "../transcripts/TranscriptSegmentRow";
+import { ScannableText } from "./ScannableText";
 import { segmentMineKey } from "../../lib/segments";
 import type { RecordingSegment } from "../../types";
 
@@ -27,6 +28,7 @@ export function SubtitleListPane({
   onMine,
   onMerge,
   onSplit,
+  scanHint,
 }: {
   cues: RecordingSegment[];
   /// Where mpv is now. The playing row is found by containment, not identity.
@@ -42,6 +44,9 @@ export function SubtitleListPane({
   onMine: (index: number) => void;
   onMerge: (index: number) => void;
   onSplit: (index: number) => void;
+  /// How to scan, in the user's configured terms. Passed in rather than derived here so
+  /// the pane stays presentational.
+  scanHint: string;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const playingIndex =
@@ -94,7 +99,11 @@ export function SubtitleListPane({
           <p className="panel-kicker">Subtitles</p>
           <h3>{cues.length} lines</h3>
         </div>
-        <span className="transcript-pane-note">Click a line to jump there</span>
+        {/* The dictionary lives in the Anki add-on, so Anki has to be running. Saying so
+            up front beats letting the first lookup be the thing that explains it. */}
+        <span className="transcript-pane-note">
+          {scanHint} &middot; &#9654; jumps the video there
+        </span>
       </header>
       <div className="transcript-pane-body" ref={bodyRef}>
         {cues.map((cue, index) => {
@@ -128,6 +137,7 @@ export function SubtitleListPane({
               canMerge={index < cues.length - 1}
               onSplit={() => onSplit(index)}
               canSplit={cue.text.length >= 2}
+              renderText={(text) => <ScannableText ownerKey={key} text={text} />}
             />
           );
         })}
