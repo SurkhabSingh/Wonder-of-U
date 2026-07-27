@@ -519,6 +519,100 @@ pub(crate) fn stop_watch_session() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    /// A stand-in for the named pipe: records what was written and replays canned replies.
+    struct FakeTransport {
+        written: Arc<StdMutex<Vec<String>>>,
+        replies: Vec<String>,
+    }
+
+    impl Transport for FakeTransport {
+        fn write_line(&mut self, line: &str) -> Result<(), String> {
+            self.written.lock().unwrap().push(line.to_string());
+            Ok(())
+        }
+
+        fn read_line(&mut self, buffer: &mut String) -> Result<usize, String> {
+            if self.replies.is_empty() {
+                return Ok(0);
+            }
+            let reply = self.replies.remove(0);
+            buffer.push_str(&reply);
+            buffer.push_str("\n");
+            Ok(buffer.len())
+        }
+    }
+
+    fn connection_with(replies: &[&str]) -> (MpvConnection, Arc<StdMutex<Vec<String>>>) {
+        let written = Arc::new(StdMutex::new(Vec::new()));
+        let transport = FakeTransport {
+            written: Arc::clone(&written),
+            replies: replies.iter().map(|reply| (*reply).to_string()).collect(),
+        };
+        (
+            MpvConnection {
+                transport: Box::new(transport),
+                next_request_id: 1,
+            },
+            written,
+        )
+    }
+
+    /// `request` was rewritten to delegate to `request_json` so a property could be SET.
+    /// Every existing caller — the mine hotkey, seek, all nine snapshot reads — goes through
+    /// it, so the bytes mpv receives must be exactly what they were before.
+    #[test]
+    fn string_commands_are_sent_unchanged_after_the_json_split() {
+        let (mut connection, written) =
+            connection_with(&[r#"{"request_id":1,"error":"success","data":12.5}"#]);
+        let value = connection.request(&["get_property", "time-pos"]).unwrap();
+
+        assert_eq!(value.as_f64(), Some(12.5));
+        let sent = written.lock().unwrap();
+        assert_eq!(
+            sent[0],
+            r#"{"command":["get_property","time-pos"],"request_id":1}"#
+        );
+    }
+
+    #[test]
+    fn seek_still_sends_three_string_arguments() {
+        let (mut connection, written) =
+            connection_with(&[r#"{"request_id":1,"error":"success"}"#]);
+        connection.request(&["seek", "22.400", "absolute"]).unwrap();
+        assert_eq!(
+            written.lock().unwrap()[0],
+            r#"{"command":["seek","22.400","absolute"],"request_id":1}"#
+        );
+    }
+
+    /// The reason the JSON path exists: `sub-visibility` needs a real boolean, and sending
+    /// the string "false" would set the property to a truthy value instead of unsetting it.
+    #[test]
+    fn set_property_sends_a_real_boolean_not_a_string() {
+        let (mut connection, written) =
+            connection_with(&[r#"{"request_id":1,"error":"success"}"#]);
+        connection
+            .set_property("sub-visibility", serde_json::Value::Bool(false))
+            .unwrap();
+        assert_eq!(
+            written.lock().unwrap()[0],
+            r#"{"command":["set_property","sub-visibility",false],"request_id":1}"#
+        );
+    }
+
+    /// Events interleave with replies on the same channel; matching on `request_id` is what
+    /// keeps a property read from consuming one. Unchanged by the split, and worth pinning.
+    #[test]
+    fn an_interleaved_event_is_skipped_rather_than_returned() {
+        let (mut connection, _written) = connection_with(&[
+            r#"{"event":"playback-restart"}"#,
+            r#"{"request_id":1,"error":"success","data":"hello"}"#,
+        ]);
+        let value = connection.request(&["get_property", "sub-text"]).unwrap();
+        assert_eq!(value.as_str(), Some("hello"));
+    }
 
     #[test]
     fn seconds_convert_to_whole_milliseconds() {

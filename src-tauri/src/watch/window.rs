@@ -23,8 +23,8 @@ use windows_sys::Win32::{
     UI::HiDpi::GetDpiForWindow,
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT},
     UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetClientRect, GetWindowThreadProcessId, IsWindowVisible,
-        USER_DEFAULT_SCREEN_DPI,
+        EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow,
+        GetWindowThreadProcessId, IsWindowVisible, USER_DEFAULT_SCREEN_DPI,
     },
 };
 
@@ -177,6 +177,26 @@ pub(crate) fn video_window_rect(pid: u32) -> Option<VideoWindowRect> {
     })
 }
 
+/// Whether mpv is the window the user is actually looking at.
+///
+/// The overlay is always-on-top and follows mpv's rectangle, which says nothing about
+/// whether mpv is in FRONT. Without this check, alt-tabbing to another app leaves a
+/// subtitle line floating over it — the overlay is doing exactly what it was told, in a
+/// place it has no business being.
+///
+/// Compared by process rather than by handle because mpv owns several top-level windows and
+/// the foreground one is not guaranteed to be the same handle we track. The overlay itself
+/// can never be the foreground window: it carries `WS_EX_NOACTIVATE`.
+pub(crate) fn mpv_is_foreground(pid: u32) -> bool {
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_null() {
+        return false;
+    }
+    let mut owner = 0u32;
+    unsafe { GetWindowThreadProcessId(foreground, &mut owner) };
+    owner == pid
+}
+
 /// Which scanner modifier is held right now.
 ///
 /// Polled rather than bound as a shortcut, deliberately: `tauri-plugin-global-shortcut`
@@ -234,6 +254,13 @@ mod tests {
     #[test]
     fn no_modifier_reads_as_always_held() {
         assert!(ScanModifier::None.is_held());
+    }
+
+    #[test]
+    fn a_dead_process_is_never_the_foreground_one() {
+        // Guards the overlay's show/hide rule: an unknown pid must read as "not in front",
+        // never as "in front", or the overlay would sit over other apps.
+        assert!(!mpv_is_foreground(u32::MAX));
     }
 
     #[test]

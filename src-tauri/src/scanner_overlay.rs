@@ -34,7 +34,9 @@ use tauri::{
 
 use crate::app_types::SharedPersistedState;
 #[cfg(target_os = "windows")]
-use crate::watch::window::{video_window_rect, ScanModifier, VideoWindowRect};
+use crate::watch::window::{
+    mpv_is_foreground, video_window_rect, ScanModifier, VideoWindowRect,
+};
 use crate::watch::watch_session_pid;
 
 pub(crate) const SCANNER_WINDOW_LABEL: &str = "scanner";
@@ -216,6 +218,13 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
             hide_overlay(&app);
             continue;
         };
+        // Only draw while mpv is the window in front. The overlay is always-on-top and
+        // follows mpv's rectangle, so without this it would keep painting a subtitle line
+        // over whatever the user alt-tabbed to.
+        if !mpv_is_foreground(pid) {
+            hide_overlay(&app);
+            continue;
+        }
         let Some(rect) = video_window_rect(pid) else {
             hide_overlay(&app);
             continue;
