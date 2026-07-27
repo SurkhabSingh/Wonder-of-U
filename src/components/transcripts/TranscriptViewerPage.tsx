@@ -7,6 +7,7 @@ import {
   formatTimestamp,
 } from "../../lib/format";
 import { transcriptLanguageLabel } from "../../lib/helpers";
+import { ScannableText } from "../scanner/ScannableText";
 import type {
   RecentRecording,
   RecordingSegment,
@@ -264,7 +265,11 @@ function LiveTranscriptPane({
               <span className="transcript-live-time">
                 {formatDuration(segment.startMs)}
               </span>
-              <p className="transcript-live-text">{segment.text}</p>
+              <p className="transcript-live-text">
+                <ScannableText ownerKey={`live:${segment.startMs}`}>
+                  {segment.text}
+                </ScannableText>
+              </p>
             </li>
           ))}
         </ol>

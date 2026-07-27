@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ScannableText } from "../components/watch/ScannableText";
-import { LookupPopup } from "../components/watch/LookupPopup";
+import { ScannableText } from "../components/scanner/ScannableText";
+import { LookupPopup } from "../components/scanner/LookupPopup";
 import { useWordScanner } from "../hooks/useWordScanner";
 import type { AppBootstrap, WatchSnapshot } from "../types";
 import { APP_SNAPSHOT_EVENT, DEFAULT_BOOTSTRAP } from "../constants";
@@ -146,7 +146,7 @@ export function ScannerOverlay() {
         className={`scanner-line${state.scanning ? " is-scanning" : ""}`}
         style={{ fontSize: `${settings.scanner.overlayFontSizePx}px` }}
       >
-        <ScannableText ownerKey={ownerKey} text={line} />
+        <ScannableText ownerKey={ownerKey}>{line}</ScannableText>
       </div>
 
       {scanner.target ? (

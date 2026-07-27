@@ -1,5 +1,13 @@
 @import "./styles/tokens.css";
 
+/* The app window's own paint. Deliberately here rather than in tokens.css: the scanner
+   overlay imports the tokens into a transparent window over the video, where an opaque
+   canvas would hide the picture. */
+:root {
+  color: var(--text);
+  background: var(--canvas);
+}
+
 * {
   box-sizing: border-box;
 }

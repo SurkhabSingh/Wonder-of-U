@@ -10,6 +10,8 @@ import { SettingsPages } from "./components/settings/SettingsPages";
 import { SetupChecklist } from "./components/settings/SetupChecklist";
 import { TranscriptViewerPage } from "./components/transcripts/TranscriptViewerPage";
 import { WatchPage } from "./components/watch/WatchPage";
+import { LookupPopup } from "./components/scanner/LookupPopup";
+import { useWordScanner } from "./hooks/useWordScanner";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
 import { useAnkiCatalog } from "./hooks/useAnkiCatalog";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
@@ -390,6 +392,16 @@ function App() {
     viewingRecording?.filePath,
     refreshMinedSentences,
   ]);
+
+  // App-wide, not per page: a word should be lookupable wherever it is read — a transcript,
+  // the live transcript as it streams, or the watch subtitle list. The hook listens on the
+  // document and finds its target by walking up from the pointer, so one instance covers
+  // every surface and a second would fire every lookup twice.
+  const lookup = useWordScanner({
+    modifier: settingsDraft.scanner.modifier,
+    releaseBehavior: settingsDraft.scanner.releaseBehavior,
+    debounceMs: settingsDraft.scanner.debounceMs,
+  });
 
   return (
     <main className="app-shell">
@@ -807,6 +819,21 @@ function App() {
         </section>
       </section>
       </TooltipPrimitive.Provider>
+
+      {lookup.target ? (
+        <LookupPopup
+          anchor={lookup.target.anchor}
+          result={lookup.result}
+          isLoading={lookup.isLoading}
+          error={lookup.error}
+          // `useAppViewState` stamps the resolved theme on <html>; reading it here beats
+          // threading the same value down to one attribute.
+          theme={document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+          fontFamily={settingsDraft.scanner.fontFamily}
+          fontSizePx={settingsDraft.scanner.fontSizePx}
+          onClose={lookup.close}
+        />
+      ) : null}
     </main>
   );
 }

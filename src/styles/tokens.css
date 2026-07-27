@@ -4,6 +4,10 @@
  * scanner overlay renders in its own window with its own document, and every rule it
  * needs is written against these variables. styles.css imports this first, so the main
  * app is unchanged by the move.
+ *
+ * This file declares TOKENS ONLY — never `color` or `background` on :root. The scanner
+ * overlay imports it into a transparent window laid over the video, and an opaque canvas
+ * here paints the video black. That is not hypothetical: it happened.
  */
 :root {
   color-scheme: light dark;
@@ -112,9 +116,6 @@
   --segment-mark: color-mix(in srgb, var(--accent) 22%, transparent);
   --timestamp-color: var(--text-subtle);
   --gutter-width: 3.25rem;
-
-  color: var(--text);
-  background: var(--canvas);
 }
 
 :root[data-theme="dark"] {

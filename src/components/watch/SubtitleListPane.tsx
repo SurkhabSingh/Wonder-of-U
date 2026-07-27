@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { TranscriptSegmentRow } from "../transcripts/TranscriptSegmentRow";
-import { ScannableText } from "./ScannableText";
 import { segmentMineKey } from "../../lib/segments";
 import type { RecordingSegment } from "../../types";
 
@@ -137,7 +136,6 @@ export function SubtitleListPane({
               canMerge={index < cues.length - 1}
               onSplit={() => onSplit(index)}
               canSplit={cue.text.length >= 2}
-              renderText={(text) => <ScannableText ownerKey={key} text={text} />}
             />
           );
         })}

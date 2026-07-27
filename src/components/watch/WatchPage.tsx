@@ -3,9 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { formatDuration, fileNameFromPath } from "../../lib/format";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { SubtitleListPane } from "./SubtitleListPane";
-import { ScannableText } from "./ScannableText";
-import { LookupPopup } from "./LookupPopup";
-import { useWordScanner } from "../../hooks/useWordScanner";
+import { ScannableText } from "../scanner/ScannableText";
 import type { RecordingSegment, ScannerSettings, WatchSnapshot } from "../../types";
 
 // How the scan gesture reads in the user's own configuration.
@@ -98,12 +96,6 @@ export function WatchPage({
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const lookup = useWordScanner({
-    modifier: scanner.modifier,
-    releaseBehavior: scanner.releaseBehavior,
-    debounceMs: scanner.debounceMs,
-  });
-
   // The line on screen changes as the video plays. Keying the owner to the cue's start
   // means a highlight never survives onto a different line.
   const currentLineKey = `current:${snapshot.subtitleStartMs ?? 0}`;
@@ -219,7 +211,9 @@ export function WatchPage({
         {snapshot.subtitleText ? (
           <>
             <p className="watch-line-text">
-              <ScannableText ownerKey={currentLineKey} text={snapshot.subtitleText} />
+              <ScannableText ownerKey={currentLineKey}>
+                {snapshot.subtitleText}
+              </ScannableText>
             </p>
             <p className="microcopy">
               {formatDuration(snapshot.subtitleStartMs ?? 0)} &ndash;{" "}
@@ -322,20 +316,6 @@ export function WatchPage({
         />
       </div>
 
-      {lookup.target ? (
-        <LookupPopup
-          anchor={lookup.target.anchor}
-          result={lookup.result}
-          isLoading={lookup.isLoading}
-          error={lookup.error}
-          // `useAppViewState` stamps the resolved theme on <html>; reading it here beats
-          // threading the same value through three components to reach one attribute.
-          theme={document.documentElement.dataset.theme === "light" ? "light" : "dark"}
-          fontFamily={scanner.fontFamily}
-          fontSizePx={scanner.fontSizePx}
-          onClose={lookup.close}
-        />
-      ) : null}
     </>
   );
 }
