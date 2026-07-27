@@ -109,7 +109,50 @@ fn normalize_mined_text(raw: &str) -> String {
         }
     }
 
-    collapse_whitespace(&decode_html_entities(&strip_media_references(&text)))
+    collapse_whitespace(&strip_furigana_brackets(&decode_html_entities(
+        &strip_media_references(&text),
+    )))
+}
+
+/// Removes Anki furigana bracket notation, so `これは 漢字[かんじ] です` compares equal to
+/// the transcript's `これは漢字です`.
+///
+/// Both halves matter. The reading itself is obviously not part of the sentence — but the
+/// SPACE in front of the group is not either: it is inserted purely so Anki's
+/// `{{furigana:}}` filter knows where the base text starts. Dropping the reading without
+/// dropping that space would leave `これは 漢字 です`, which still would not match, and
+/// "already mined" would quietly stop recognising every furigana'd card.
+///
+/// Only a space between two non-ASCII characters is removed, so an English sentence keeps
+/// its word spacing.
+fn strip_furigana_brackets(value: &str) -> String {
+    let mut without_readings = String::with_capacity(value.len());
+    let mut remaining = value;
+    while let Some(open) = remaining.find('[') {
+        // An unterminated `[` is not a reading — it is text that happens to contain a
+        // bracket, such as a malformed `[sound:` tag. Keeping the rest verbatim is what
+        // stops one stray character erasing the whole sentence.
+        let Some(close) = remaining[open..].find(']') else {
+            break;
+        };
+        without_readings.push_str(&remaining[..open]);
+        remaining = &remaining[open + close + 1..];
+    }
+    without_readings.push_str(remaining);
+
+    let characters = without_readings.chars().collect::<Vec<_>>();
+    let mut cleaned = String::with_capacity(without_readings.len());
+    for (index, character) in characters.iter().enumerate() {
+        if *character == ' ' && index > 0 && index + 1 < characters.len() {
+            let before = characters[index - 1];
+            let after = characters[index + 1];
+            if !before.is_ascii() && !after.is_ascii() {
+                continue;
+            }
+        }
+        cleaned.push(*character);
+    }
+    cleaned
 }
 
 /// Index of the `>` that ends the tag opening at `start`, or None when there is none.
@@ -418,6 +461,28 @@ mod tests {
         // Malformed references stay as written rather than vanishing.
         assert_eq!(normalize_mined_text("a &#zz; b"), "a &#zz; b");
         assert_eq!(normalize_mined_text("50% off &#"), "50% off &#");
+    }
+
+    #[test]
+    fn furigana_bracket_notation_normalizes_back_to_the_sentence() {
+        // Furigana is now stored as Anki bracket notation rather than ruby HTML, so the
+        // matcher has to undo BOTH the reading and the space that separates the group —
+        // without the second, no furigana'd card would ever match its transcript again.
+        assert_eq!(
+            normalize_mined_text("これは 漢字[かんじ]です"),
+            "これは漢字です"
+        );
+        assert_eq!(
+            normalize_mined_text("日本語[にほんご]の 勉強[べんきょう]をしています"),
+            "日本語の勉強をしています"
+        );
+    }
+
+    #[test]
+    fn english_keeps_its_word_spacing() {
+        // Only a space BETWEEN two non-ASCII characters is furigana separation.
+        assert_eq!(normalize_mined_text("the cat sat"), "the cat sat");
+        assert_eq!(normalize_mined_text("a 猫[ねこ] here"), "a 猫 here");
     }
 
     #[test]

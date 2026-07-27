@@ -685,8 +685,37 @@ fn youtube_timestamped_link(url: &str, start_ms: u64) -> Option<String> {
         return None;
     }
     let seconds = start_ms / 1000;
-    let separator = if url.contains('?') { '&' } else { '?' };
-    Some(format!("{url}{separator}t={seconds}s"))
+    // Drop any `t=` the source URL already carries before adding ours. Imports store the
+    // URL the user pasted, which is very often already timestamped
+    // (`...?v=abc&t=298s`) — and YouTube honours the FIRST `t` it sees, so appending a
+    // second one silently sent every card to wherever the import started instead of to
+    // its own sentence.
+    let (base, query) = match url.split_once('?') {
+        Some((base, query)) => (base, query),
+        None => (url, ""),
+    };
+    let kept = query
+        .split('&')
+        .filter(|parameter| {
+            !parameter.is_empty()
+                && parameter != &"t"
+                && !parameter.starts_with("t=")
+                // `start=` is YouTube's other seek parameter and would win the same way.
+                && parameter != &"start"
+                && !parameter.starts_with("start=")
+        })
+        .collect::<Vec<_>>();
+
+    let mut rebuilt = String::from(base);
+    if !kept.is_empty() {
+        rebuilt.push('?');
+        rebuilt.push_str(&kept.join("&"));
+        rebuilt.push('&');
+    } else {
+        rebuilt.push('?');
+    }
+    rebuilt.push_str(&format!("t={seconds}s"));
+    Some(rebuilt)
 }
 
 /// Formats a segment start time as `H:MM:SS`, or `M:SS` under an hour.
@@ -811,6 +840,38 @@ mod tests {
             Some("https://youtube.com/shorts/xyz?t=0s"),
         );
         assert_eq!(youtube_timestamped_link("https://example.com/v", 5_000), None);
+    }
+
+    #[test]
+    fn youtube_links_replace_a_timestamp_the_url_already_had() {
+        // Imports store the URL the user pasted, which is very often already
+        // timestamped. YouTube honours the FIRST `t`, so appending a second one sent
+        // every card to the import's start instead of to its own sentence.
+        assert_eq!(
+            youtube_timestamped_link("https://www.youtube.com/watch?v=abc&t=298s", 153_000)
+                .as_deref(),
+            Some("https://www.youtube.com/watch?v=abc&t=153s"),
+        );
+        // `start=` is YouTube's other seek parameter and would win the same way.
+        assert_eq!(
+            youtube_timestamped_link("https://www.youtube.com/watch?v=abc&start=60", 12_000)
+                .as_deref(),
+            Some("https://www.youtube.com/watch?v=abc&t=12s"),
+        );
+        // Every other parameter is preserved, and order is otherwise untouched.
+        assert_eq!(
+            youtube_timestamped_link(
+                "https://www.youtube.com/watch?v=abc&list=PL1&t=30s&index=2",
+                7_000
+            )
+            .as_deref(),
+            Some("https://www.youtube.com/watch?v=abc&list=PL1&index=2&t=7s"),
+        );
+        // A short link whose only parameter was the timestamp must not keep a stray `&`.
+        assert_eq!(
+            youtube_timestamped_link("https://youtu.be/abc?t=99s", 4_000).as_deref(),
+            Some("https://youtu.be/abc?t=4s"),
+        );
     }
 
     #[test]

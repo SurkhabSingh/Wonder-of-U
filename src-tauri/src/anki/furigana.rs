@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::fields::preserve_anki_sound_tags;
+use super::fields::{html_escape, preserve_anki_sound_tags};
 use crate::{
     app_state::{is_japanese_transcript_language, transcript_looks_japanese},
     app_types::{AnkiSettings, RecentRecording},
@@ -10,11 +10,6 @@ use crate::{
 
 const ANKI_LOOKUP_FURIGANA_URL: &str = "http://127.0.0.1:8766/furigana";
 const ANKI_LOOKUP_TIMEOUT: Duration = Duration::from_millis(2500);
-
-/// The only markup furigana needs: a `<ruby>` wrapper, `<rt>`/`<rb>` for the
-/// reading and base text, `<rp>` fallback parens, and `<br>` for the line breaks
-/// a multi-line transcript carries over.
-const ALLOWED_FURIGANA_TAGS: [&str; 5] = ["ruby", "rt", "rb", "rp", "br"];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,8 +48,17 @@ pub(super) fn request_furigana_html(text: &str) -> Result<String, String> {
         let furigana_html = response
             .furigana_html
             .ok_or_else(|| "Anki Lookup add-on did not return furigana HTML.".to_string())?;
-        validate_furigana_html(&furigana_html)?;
-        Ok(furigana_html)
+        // Converted to bracket notation rather than validated as markup. The old strict
+        // tag allowlist existed because ruby HTML from an unauthenticated port went
+        // straight into a field Anki renders; converting drops every tag instead, so
+        // there is no markup left to allow or reject. It also means an add-on that
+        // changes its wrapper — which is exactly what silently broke this — can no longer
+        // break furigana.
+        let brackets = ruby_html_to_furigana_brackets(&furigana_html);
+        if brackets.trim().is_empty() {
+            return Err("Anki Lookup add-on returned furigana with no readable text.".into());
+        }
+        Ok(brackets)
     } else {
         Err(response
             .error
@@ -62,54 +66,143 @@ pub(super) fn request_furigana_html(text: &str) -> Result<String, String> {
     }
 }
 
-/// Rejects anything the furigana endpoint returns that is not plain ruby markup.
+
+/// Converts the bridge's ruby HTML into Anki's bracket notation:
+/// `<ruby>漢字<rt>かんじ</rt></ruby>` becomes `漢字[かんじ]`.
 ///
-/// Unlike every other Anki field, furigana cannot be `html_escape`d — the ruby
-/// tags are the whole point of the feature. But port 8766 is unauthenticated, so
-/// whatever local process binds it first is what we are reading, and Anki renders
-/// card fields in QtWebEngine. A strict allowlist is what keeps that channel from
-/// being stored XSS in the user's collection. Both callers treat a rejection as a
-/// lookup miss and fall back to the plain text, so being over-strict costs a user
-/// their furigana on one card; being under-strict costs them script execution
-/// inside Anki.
-fn validate_furigana_html(html: &str) -> Result<(), String> {
-    let mut remaining = html;
-    while let Some(tag_start) = remaining.find('<') {
-        remaining = &remaining[tag_start + 1..];
-        let tag_end = remaining
-            .find('>')
-            .ok_or_else(|| {
-                "Anki Lookup add-on returned furigana with an unterminated tag.".to_string()
-            })?;
-        validate_furigana_tag(&remaining[..tag_end])?;
-        remaining = &remaining[tag_end + 1..];
+/// This is what the Lapis note type does, and what Yomitan and mpvacious emit. The point
+/// is not cosmetic — it removes the security problem rather than managing it. Storing
+/// ruby HTML meant accepting markup from an unauthenticated localhost port and rendering
+/// it inside Anki's QtWebEngine, which is why a strict tag allowlist existed at all.
+/// Bracket notation is PLAIN TEXT: the field is escaped like every other field, and
+/// Anki's own `{{furigana:}}` filter builds the ruby at render time. Nothing the bridge
+/// sends can be markup any more, because every tag is dropped here.
+///
+/// A space is inserted before a reading group when the preceding character is not
+/// already one. Anki's filter matches `([^ >]+?)\[(.+?)\]`, so without that separator
+/// `これは漢字[かんじ]` makes the WHOLE run the base text and renders the reading over
+/// `これは漢字`. Yomitan inserts the same space for the same reason.
+pub(super) fn ruby_html_to_furigana_brackets(html: &str) -> String {
+    let characters = html.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(html.len());
+    // Text collected inside the current <ruby>, i.e. the base the reading belongs to.
+    let mut base = String::new();
+    let mut reading = String::new();
+    let mut index = 0;
+    let mut in_ruby = false;
+    // <rt> is the reading; <rp> is fallback parens for renderers without ruby support and
+    // must be dropped whole; <style>/<script> content is not text at all.
+    let mut in_reading = false;
+    let mut skip_depth: Option<&'static str> = None;
+
+    while index < characters.len() {
+        let character = characters[index];
+        if character != '<' {
+            if skip_depth.is_some() {
+                // Inside <rp>/<style>/<script>: swallowed.
+            } else if in_reading {
+                reading.push(character);
+            } else if in_ruby {
+                base.push(character);
+            } else {
+                output.push(character);
+            }
+            index += 1;
+            continue;
+        }
+
+        let Some(end) = characters[index..].iter().position(|value| *value == '>') else {
+            // An unterminated `<` is literal text, not a tag.
+            if skip_depth.is_none() && !in_reading {
+                if in_ruby {
+                    base.push('<');
+                } else {
+                    output.push('<');
+                }
+            }
+            index += 1;
+            continue;
+        };
+        let tag = characters[index + 1..index + end].iter().collect::<String>();
+        index += end + 1;
+
+        let closing = tag.starts_with('/');
+        let name = tag
+            .trim_start_matches('/')
+            .trim_end_matches('/')
+            .split(char::is_whitespace)
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        if let Some(open) = skip_depth {
+            if closing && open == name {
+                skip_depth = None;
+            }
+            continue;
+        }
+
+        match (name.as_str(), closing) {
+            ("ruby", false) => {
+                in_ruby = true;
+                base.clear();
+                reading.clear();
+            }
+            ("ruby", true) => {
+                let base_text = base.trim();
+                let reading_text = reading.trim();
+                if !base_text.is_empty() {
+                    if !reading_text.is_empty() {
+                        // Separate the group from whatever precedes it, or Anki's filter
+                        // swallows that text into the base.
+                        //
+                        // The test is against a LITERAL SPACE, not `is_whitespace`. Anki's
+                        // pattern is ` ?([^ >]+?)\[(.+?)\]`, and that class excludes only
+                        // a space and `>` — a NEWLINE is fair game, so the match crosses
+                        // it and swallows the end of the previous line into the base. On a
+                        // multi-line transcript that renders the reading over the wrong
+                        // words entirely.
+                        if output.chars().last().is_some_and(|last| last != ' ') {
+                            output.push(' ');
+                        }
+                        output.push_str(base_text);
+                        output.push('[');
+                        output.push_str(reading_text);
+                        output.push(']');
+                    } else {
+                        output.push_str(base_text);
+                    }
+                }
+                in_ruby = false;
+                in_reading = false;
+                base.clear();
+                reading.clear();
+            }
+            ("rt", false) => in_reading = true,
+            ("rt", true) => in_reading = false,
+            // Fallback parens, and anything whose contents are not text.
+            ("rp", false) => skip_depth = Some("rp"),
+            ("style", false) => skip_depth = Some("style"),
+            ("script", false) => skip_depth = Some("script"),
+            // A line break is real content the transcript carried over.
+            ("br", _) => {
+                if in_ruby {
+                    base.push('\n');
+                } else {
+                    output.push('\n');
+                }
+            }
+            // <rb>, <span>, and anything else: unwrap, keep the text.
+            _ => {}
+        }
     }
 
-    Ok(())
-}
-
-/// Validates one tag's innards (everything between `<` and `>`). Requiring the
-/// name to be nothing but ASCII letters is what does the real work here: it
-/// leaves no room for an attribute, so `onerror=`, `javascript:` hrefs, comments
-/// and processing instructions are all rejected before the name is even checked.
-fn validate_furigana_tag(tag: &str) -> Result<(), String> {
-    let name = tag.trim();
-    let name = name.strip_prefix('/').unwrap_or(name);
-    let name = name.strip_suffix('/').unwrap_or(name).trim();
-
-    if name.is_empty() || !name.chars().all(|value| value.is_ascii_alphabetic()) {
-        return Err(format!(
-            "Anki Lookup add-on returned furigana with unexpected markup: <{tag}>"
-        ));
+    // An unclosed <ruby> still has text worth keeping.
+    let trailing = base.trim();
+    if !trailing.is_empty() {
+        output.push_str(trailing);
     }
-
-    if !ALLOWED_FURIGANA_TAGS.contains(&name.to_ascii_lowercase().as_str()) {
-        return Err(format!(
-            "Anki Lookup add-on returned furigana with a disallowed <{name}> tag."
-        ));
-    }
-
-    Ok(())
+    output
 }
 
 /// Writes validated furigana over the mapped transcription field, keeping any
@@ -117,10 +210,14 @@ fn validate_furigana_tag(tag: &str) -> Result<(), String> {
 /// which differ only in how they report the outcome.
 pub(super) fn insert_furigana_field(
     settings: &AnkiSettings,
-    furigana_html: &str,
+    furigana_brackets: &str,
     media_file_name: &str,
     fields: &mut serde_json::Map<String, serde_json::Value>,
 ) {
+    // Bracket notation is plain text, so it is escaped like every other field value —
+    // the reason the old ruby-HTML path could not be.
+    let furigana_html = html_escape(furigana_brackets);
+    let furigana_html = furigana_html.as_str();
     let target_field = settings.fields.transcription.as_str();
     let existing_value = fields.get(target_field).and_then(|value| value.as_str());
     let fallback_sound_tag =
@@ -150,44 +247,126 @@ pub(crate) fn recording_transcript_supports_furigana(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_furigana_html;
+    use super::ruby_html_to_furigana_brackets;
 
     #[test]
-    fn accepts_plain_ruby_markup() {
-        assert!(validate_furigana_html("<ruby>漢字<rt>かんじ</rt></ruby>").is_ok());
-        assert!(validate_furigana_html(
-            "<ruby><rb>今日</rb><rp>(</rp><rt>きょう</rt><rp>)</rp></ruby>は"
-        )
-        .is_ok());
-        // Multi-line transcripts reach Anki with <br> between the lines.
-        assert!(validate_furigana_html("一行目<br>二行目").is_ok());
-        assert!(validate_furigana_html("<ruby>猫<rt>ねこ</rt></ruby><br/>").is_ok());
-        // Text with no markup at all is what an all-kana sentence returns.
-        assert!(validate_furigana_html("ねこがすきです").is_ok());
+    fn ruby_becomes_anki_bracket_notation() {
+        assert_eq!(
+            ruby_html_to_furigana_brackets("<ruby>漢字<rt>かんじ</rt></ruby>"),
+            "漢字[かんじ]"
+        );
     }
 
     #[test]
-    fn rejects_script_payloads_from_the_unauthenticated_endpoint() {
-        assert!(validate_furigana_html("<script>alert(1)</script>").is_err());
-        assert!(validate_furigana_html("<ruby>漢字<rt>かんじ</rt></ruby><script>steal()</script>")
-            .is_err());
-        assert!(validate_furigana_html("<SCRIPT>alert(1)</SCRIPT>").is_err());
+    fn a_space_separates_a_group_from_the_text_before_it() {
+        // Anki's filter matches `([^ >]+?)\[(.+?)\]`, so without the space the base
+        // becomes the WHOLE preceding run and the reading renders over これは漢字.
+        assert_eq!(
+            ruby_html_to_furigana_brackets("これは<ruby>漢字<rt>かんじ</rt></ruby>です"),
+            "これは 漢字[かんじ]です"
+        );
+        // No leading space when the group starts the string or already follows one.
+        assert_eq!(
+            ruby_html_to_furigana_brackets("<ruby>猫<rt>ねこ</rt></ruby>だ"),
+            "猫[ねこ]だ"
+        );
     }
 
     #[test]
-    fn rejects_attributes_event_handlers_and_javascript_urls() {
-        assert!(validate_furigana_html("<ruby onclick=\"alert(1)\">漢字</ruby>").is_err());
-        assert!(validate_furigana_html("<img src=x onerror=alert(1)>").is_err());
-        assert!(validate_furigana_html("<a href=\"javascript:alert(1)\">x</a>").is_err());
-        assert!(validate_furigana_html("<iframe src=\"http://evil\"></iframe>").is_err());
-        assert!(validate_furigana_html("<!-- <ruby>x</ruby> -->").is_err());
-        assert!(validate_furigana_html("<ruby").is_err());
+    fn the_addons_style_and_span_wrapper_is_dropped() {
+        // The exact shape that silently broke furigana: a <style> block plus a class'd
+        // <span>. The CSS must not leak into the card as text.
+        let html = concat!(
+            "<style>.wonder-of-u-furigana rt{visibility:hidden;}</style>",
+            "<span class=\"wonder-of-u-furigana\">",
+            "<ruby>日本語<rt>にほんご</rt></ruby>の<ruby>勉強<rt>べんきょう</rt></ruby>",
+            "</span>"
+        );
+        assert_eq!(
+            ruby_html_to_furigana_brackets(html),
+            "日本語[にほんご]の 勉強[べんきょう]"
+        );
     }
 
     #[test]
-    fn allows_unbalanced_ruby_tags() {
-        // Nesting is a rendering concern, not a safety one, so the allowlist
-        // deliberately does not track open/close pairs.
-        assert!(validate_furigana_html("<ruby>漢字<rt>かんじ</rt>").is_ok());
+    fn rp_fallback_parens_are_dropped_and_rb_is_unwrapped() {
+        assert_eq!(
+            ruby_html_to_furigana_brackets(
+                "<ruby><rb>今日</rb><rp>(</rp><rt>きょう</rt><rp>)</rp></ruby>は"
+            ),
+            "今日[きょう]は"
+        );
+    }
+
+    #[test]
+    fn markup_can_never_survive_the_conversion() {
+        // This is what replaced the old tag allowlist: there is no markup left to allow
+        // or reject, because every tag is dropped and the result is escaped by the caller.
+        let converted = ruby_html_to_furigana_brackets(
+            "<script>steal()</script><ruby>猫<rt>ねこ</rt></ruby><img src=x onerror=alert(1)>"
+        );
+        assert!(!converted.contains('<'), "got {converted:?}");
+        assert!(!converted.contains("steal"), "got {converted:?}");
+        assert!(!converted.contains("onerror"), "got {converted:?}");
+        assert_eq!(converted, "猫[ねこ]");
+    }
+
+    #[test]
+    fn plain_text_and_line_breaks_survive() {
+        assert_eq!(ruby_html_to_furigana_brackets("ただの文です"), "ただの文です");
+        assert_eq!(ruby_html_to_furigana_brackets("一行目<br>二行目"), "一行目
+二行目");
+    }
+
+    #[test]
+    fn a_ruby_without_a_reading_keeps_its_base_text() {
+        // The add-on emits bare <ruby> for words it has no reading for; those must not
+        // vanish from the sentence.
+        assert_eq!(
+            ruby_html_to_furigana_brackets("<ruby>ねこ</ruby>がいる"),
+            "ねこがいる"
+        );
+    }
+
+    #[test]
+    fn converts_a_real_addon_response() {
+        let html = concat!(
+            "<span class=\"wonder-of-u-furigana\">これを1つお",
+            "<ruby>願<rt>ねが</rt></ruby>いします。",
+            "<ruby>単品<rt>たんぴん</rt></ruby></span>"
+        );
+        assert_eq!(
+            ruby_html_to_furigana_brackets(html),
+            "これを1つお 願[ねが]いします。 単品[たんぴん]"
+        );
+    }
+
+    #[test]
+    fn a_group_after_a_newline_still_gets_its_separating_space() {
+        // The bug this pins. Anki's pattern is ` ?([^ >]+?)\[(.+?)\]` and that class
+        // excludes only a SPACE and `>` — a newline is fair game. Without a space the
+        // match crosses the line break, the base becomes the end of the PREVIOUS line,
+        // and the reading renders over the wrong words. Multi-line transcripts hit this
+        // on nearly every line, which is exactly what was seen on a real card.
+        let html = concat!(
+            "お<ruby>願<rt>ねが</rt></ruby>いします。\n",
+            "<ruby>単品<rt>たんぴん</rt></ruby>です"
+        );
+        let got = ruby_html_to_furigana_brackets(html);
+        assert_eq!(got, "お 願[ねが]いします。\n 単品[たんぴん]です");
+
+        // Every group's base must start after a literal space (or the string start), and
+        // must not reach back across a newline.
+        for (bracket, _) in got.match_indices('[') {
+            let base_start = got[..bracket].rfind(' ').map(|at| at + 1).unwrap_or(0);
+            assert!(
+                base_start == 0 || got.as_bytes()[base_start - 1] == b' ',
+                "group at {bracket} is not space-delimited in {got:?}"
+            );
+            assert!(
+                !got[base_start..bracket].contains('\n'),
+                "base text crosses a newline in {got:?}"
+            );
+        }
     }
 }

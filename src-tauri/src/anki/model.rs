@@ -36,15 +36,20 @@ const FRONT_TEMPLATE: &str = r#"<div class="wu-card wu-front">
   <div class="wu-hint">Listen and recall</div>
 </div>"#;
 
-/// Card back: replay + the sentence (already carrying inline `<ruby>` furigana from the
-/// add-on bridge, so it is rendered directly, NOT through Anki's `{{furigana:}}` filter)
-/// + translation + an optional reading + a small source/title/time row. Every block is
-/// `{{#Field}}…{{/Field}}`-guarded so a blank field leaves no empty row. It does not use
-/// `{{FrontSide}}` — the back shows its own `{{Audio}}` replay without repeating the hint.
+/// Card back: the replay, the sentence, the translation, an optional reading, and a small
+/// source/title/time row.
+///
+/// The sentence goes through Anki's `{{furigana:}}` filter because the field stores
+/// bracket notation like `漢字[かんじ]`, the way Lapis and Yomitan do — so no markup ever
+/// arrives from outside, and the reading is hidden until hover by the CSS below.
+///
+/// Every block is `{{#Field}}…{{/Field}}`-guarded so a blank field leaves no empty row. It
+/// does not use `{{FrontSide}}`: the back shows its own `{{Audio}}` replay without
+/// repeating the hint.
 const BACK_TEMPLATE: &str = r#"<div class="wu-card wu-back">
   {{#Image}}<div class="wu-image">{{Image}}</div>{{/Image}}
   {{#Audio}}<div class="wu-audio">{{Audio}}</div>{{/Audio}}
-  {{#Sentence}}<div class="wu-sentence">{{Sentence}}</div>{{/Sentence}}
+  {{#Sentence}}<div class="wu-sentence">{{furigana:Sentence}}</div>{{/Sentence}}
   {{#Reading}}<div class="wu-reading">{{Reading}}</div>{{/Reading}}
   {{#Translation}}<div class="wu-translation">{{Translation}}</div>{{/Translation}}
   <div class="wu-meta">
@@ -113,6 +118,17 @@ const CARD_CSS: &str = r#".card {
   font-weight: 400;
   user-select: none;
 }
+/* Readings on hover, the way the Lapis note type does it: the reading is hidden until
+   you ask for it, so the card still tests you. Scoped to .wu-sentence so nothing else on
+   the card is affected. The field stores Anki bracket notation and {{furigana:}} builds
+   the ruby, so no markup ever comes from outside. */
+.wu-sentence rt { visibility: hidden; }
+.wu-sentence ruby:hover rt,
+.wu-sentence ruby:focus-within rt { visibility: visible; }
+/* Touch devices have no hover: a tap reveals instead. */
+@media (hover: none) {
+  .wu-sentence ruby:active rt { visibility: visible; }
+}
 .wu-reading { color: var(--wu-muted); font-size: 0.95em; margin-top: 2px; }
 .wu-translation {
   color: var(--wu-muted);
@@ -139,11 +155,90 @@ const CARD_CSS: &str = r#".card {
 /// does not enforce unique model names, so the name guard is ours). The distinct name
 /// means this never collides with the add-on's "Anki Lookup" vocabulary type. Returns
 /// the note type name so the caller can map its role→field settings onto it.
+/// The furigana rules, kept apart from `CARD_CSS` so they can be appended to a note type
+/// that already exists without touching whatever else is in its styling.
+const FURIGANA_CSS: &str = r#"
+/* Wonder of U furigana — readings hidden until hover, the way Lapis does it. */
+.wu-sentence rt { visibility: hidden; }
+.wu-sentence ruby:hover rt,
+.wu-sentence ruby:focus-within rt { visibility: visible; }
+@media (hover: none) {
+  .wu-sentence ruby:active rt { visibility: visible; }
+}"#;
+
+/// Marker used to tell whether the furigana rules are already present, so re-running this
+/// never appends them twice.
+const FURIGANA_CSS_MARKER: &str = ".wu-sentence ruby:hover rt";
+
+/// Brings an EXISTING note type up to date: the sentence through `{{furigana:}}`, and the
+/// hover rules appended to its styling.
+///
+/// Deliberately surgical rather than a wholesale overwrite. `updateModelStyling` replaces
+/// the entire stylesheet, so writing `CARD_CSS` over a note type the user has since
+/// customised would silently discard their work. Instead the current template and CSS are
+/// read, patched only where needed, and written back — and both patches are idempotent,
+/// so clicking the button twice changes nothing the second time.
+fn update_existing_note_type() -> Result<(), String> {
+    let templates = anki_connect_request(
+        "modelTemplates",
+        serde_json::json!({ "modelName": NOTE_TYPE_NAME }),
+    )?;
+
+    if let Some(templates) = templates.as_object() {
+        let mut patched = serde_json::Map::new();
+        for (name, sides) in templates {
+            let Some(sides) = sides.as_object() else {
+                continue;
+            };
+            let mut next = serde_json::Map::new();
+            for (side, html) in sides {
+                let html = html.as_str().unwrap_or_default();
+                // Only an unfiltered {{Sentence}} needs rewriting; a template already
+                // using the filter (or a hand-edited one) is left exactly as it is.
+                let updated = html.replace("{{Sentence}}", "{{furigana:Sentence}}");
+                next.insert(side.clone(), serde_json::Value::String(updated));
+            }
+            patched.insert(name.clone(), serde_json::Value::Object(next));
+        }
+        if !patched.is_empty() {
+            anki_connect_request(
+                "updateModelTemplates",
+                serde_json::json!({
+                    "model": { "name": NOTE_TYPE_NAME, "templates": patched }
+                }),
+            )?;
+        }
+    }
+
+    let styling = anki_connect_request(
+        "modelStyling",
+        serde_json::json!({ "modelName": NOTE_TYPE_NAME }),
+    )?;
+    let current_css = styling
+        .get("css")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if !current_css.contains(FURIGANA_CSS_MARKER) {
+        let merged = format!("{current_css}\n{FURIGANA_CSS}");
+        anki_connect_request(
+            "updateModelStyling",
+            serde_json::json!({
+                "model": { "name": NOTE_TYPE_NAME, "css": merged }
+            }),
+        )?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn create_recommended_note_type_inner() -> Result<String, String> {
     anki_connect_health_check().map_err(|error| anki_offline_message(&error))?;
 
     let existing = json_string_array(anki_connect_request("modelNames", serde_json::json!({}))?);
     if existing.iter().any(|name| name == NOTE_TYPE_NAME) {
+        // The note type predates the furigana change, so bring it up to date rather than
+        // leaving the user with `漢字[かんじ]` rendered as literal text.
+        update_existing_note_type()?;
         return Ok(NOTE_TYPE_NAME.to_string());
     }
 

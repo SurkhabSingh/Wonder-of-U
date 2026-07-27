@@ -33,7 +33,11 @@ export function AnkiMappingSettingsPage({
   // card: audio on the front, transcript/translation on the back), then auto-maps our
   // roles onto its fields so mining works with zero manual setup. The transcript maps
   // to the Sentence field (field 1, so Anki dedup still works); furigana has no separate
-  // field — it is written into that same Sentence field as ruby HTML.
+  // field — it is written into that same Sentence field as Anki bracket notation
+  // (漢字[かんじ]) and rendered by the template's {{furigana:}} filter.
+  //
+  // Re-running this on a note type that already exists UPDATES it rather than skipping,
+  // which is how an older note type picks up the furigana filter and hover styling.
   const handleCreateNoteType = async () => {
     try {
       const noteType = await invoke<string>("create_anki_note_type");
@@ -115,8 +119,11 @@ export function AnkiMappingSettingsPage({
         <p className="microcopy">
           No matching note type? Create the app&rsquo;s &ldquo;Wonder of U
           Listening&rdquo; note type in one click &mdash; a listening card that plays the
-          audio on the front and reveals the transcript, translation, and source on the
-          back &mdash; and the fields below map automatically.
+          audio on the front and reveals the screenshot, transcript, translation, and
+          source on the back &mdash; and the fields below map automatically. If you already
+          have it, this brings it up to date instead: readings render as furigana and stay
+          hidden until you hover. Your own styling is kept &mdash; the rules are appended,
+          never overwritten.
         </p>
         <button
           type="button"
@@ -126,7 +133,7 @@ export function AnkiMappingSettingsPage({
             busyAction === "loadAnki" || displayedAnkiCatalog.status !== "ready"
           }
         >
-          Create the Wonder of U Listening note type
+          Create or update the Wonder of U Listening note type
         </button>
       </div>
 
