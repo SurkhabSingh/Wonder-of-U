@@ -452,10 +452,17 @@ function App() {
   return (
     <main className="app-shell">
       <TooltipPrimitive.Provider delayDuration={180}>
+        {/* `visibleToasts` is the ceiling for genuinely concurrent events — a mine landing
+            while a transcription finishes. It is deliberately low: past three, a stack stops
+            being information and becomes a wall. `gap` gives them room to read as separate
+            notices. The recording phases share one id instead of stacking (see
+            RECORDING_TOAST_ID), which is the fix that mattered most. */}
         <Toaster
           position="top-right"
           richColors
           closeButton
+          visibleToasts={3}
+          gap={12}
           toastOptions={{
             className: "app-toast",
           }}

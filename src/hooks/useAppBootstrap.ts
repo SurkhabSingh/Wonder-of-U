@@ -30,6 +30,14 @@ type SettingsUpdate = Partial<
   };
 };
 
+/// One recording is one notice, not four.
+///
+/// The phase machine below walks recording → saving → idle → (error) and used to fire a
+/// SEPARATE toast at each step, so a single recording could stack three on screen at once.
+/// Sharing an id makes sonner replace the previous one instead, which is what "the recording
+/// is at this stage" should have been all along.
+const RECORDING_TOAST_ID = "recording-phase";
+
 export function useAppBootstrap() {
   const [bootstrap, setBootstrap] = useState<AppBootstrap>(DEFAULT_BOOTSTRAP);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>(
@@ -111,6 +119,7 @@ export function useAppBootstrap() {
 
       if (nextPhase === "recording" && previousPhase !== "recording") {
         toast.success("Recording started", {
+          id: RECORDING_TOAST_ID,
           description: recordingName,
           duration: 2500,
         });
@@ -119,6 +128,7 @@ export function useAppBootstrap() {
 
       if (nextPhase === "saving" && previousPhase === "recording") {
         toast("Recording stopped", {
+          id: RECORDING_TOAST_ID,
           description: "Saving and processing the audio.",
           duration: 2500,
         });
@@ -132,6 +142,7 @@ export function useAppBootstrap() {
           previousPhase === "recording")
       ) {
         toast.success("Recording saved", {
+          id: RECORDING_TOAST_ID,
           description: nextBootstrap.shell.statusText,
           duration: 3500,
         });
@@ -140,6 +151,7 @@ export function useAppBootstrap() {
 
       if (nextPhase === "error" && previousPhase !== "error") {
         toast.error("Recording failed", {
+          id: RECORDING_TOAST_ID,
           description: nextBootstrap.shell.statusText,
           duration: 5000,
         });
