@@ -113,7 +113,7 @@ export function RuntimeSettingsPage({
 
       <details className="disclosure">
         <summary>Manual runtime override</summary>
-        <label className="field">
+        <label className="field field-wide">
           <span>whisper-cli path</span>
           <div className="input-with-action">
             <input

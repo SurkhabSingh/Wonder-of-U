@@ -704,9 +704,22 @@ input::placeholder {
   margin-top: var(--space-6);
 }
 
+/* Two columns everywhere, not just on the Anki page.
+ *
+ * `.settings-grid` had no `grid-template-columns`, so it fell back to one column and every
+ * settings section stacked — except Anki Mapping, which added its own two-column override.
+ * That is why Dictionary & Reading read as a long single file of controls next to a page
+ * that read as a tidy grid. A field that genuinely needs the width (a file path, a key)
+ * asks for it with `.field-wide` rather than the whole grid giving up. */
 .settings-grid {
-  margin-top: var(--space-6);
-  gap: var(--space-4);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: var(--space-md);
+  gap: var(--space-md) var(--space-lg);
+}
+
+/* Paths, keys and anything else that reads badly at half width. */
+.field-wide {
+  grid-column: 1 / -1;
 }
 
 .autosave-error {
@@ -1410,16 +1423,10 @@ input::placeholder {
   color: var(--error) !important;
 }
 
-.anki-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-/* Deck and Note type lead the grid full-width; the field-mapping selects follow
-   two-per-row below them. */
-.anki-grid .field:nth-child(1),
-.anki-grid .field:nth-child(2) {
-  grid-column: span 2;
-}
+/* `.anki-grid` used to supply the two columns and mark its first two fields full-width by
+   POSITION (`:nth-child(1)`, `:nth-child(2)`), which broke the moment anything was inserted
+   above them. Two columns are now the grid default and the two leading fields say so
+   themselves with `.field-wide`. */
 
 .installed-card,
 .update-card,

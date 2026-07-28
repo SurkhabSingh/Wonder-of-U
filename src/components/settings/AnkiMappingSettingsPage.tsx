@@ -138,7 +138,7 @@ export function AnkiMappingSettingsPage({
       </div>
 
       <div className="settings-grid anki-grid">
-        <label className="field">
+        <label className="field field-wide">
           <span className="field-label-with-help">
             <span>Deck</span>
             <TooltipBadge
@@ -175,7 +175,7 @@ export function AnkiMappingSettingsPage({
           />
         </label>
 
-        <label className="field">
+        <label className="field field-wide">
           <span className="field-label-with-help">
             <span>Note type</span>
             <TooltipBadge
@@ -356,23 +356,13 @@ export function AnkiMappingSettingsPage({
           <span>Automatically add furigana when pushing Japanese cards</span>
         </label>
         <p className="microcopy">
-          Requires the Wonder of U Anki add-on to be running. If the add-on is
-          unavailable, Wonder of U still pushes the card and warns that furigana
-          was skipped. Furigana is written onto the expression/transcript field
-          itself.
+          Anki needs to be open. If it is not, the card is still made and you are told
+          furigana was skipped.
         </p>
       </div>
 
       <div className="info-note">
-        <strong>
-          Listening card: Replay audio -&gt; Audio (Front), transcript -&gt; Sentence
-          (Back).
-        </strong>
-        <p className="microcopy">
-          Furigana is applied directly to the sentence/transcript field, not a
-          separate field. The Anki replay icon only shows if the audio field is
-          visible in the current card side template.
-        </p>
+        <strong>Cards play the audio first, then show the sentence.</strong>
       </div>
     </>
   );

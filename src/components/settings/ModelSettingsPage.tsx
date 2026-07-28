@@ -234,7 +234,7 @@ export function ModelSettingsPage({
 
       <details className="disclosure">
         <summary>Manual model override</summary>
-        <label className="field">
+        <label className="field field-wide">
           <span>GGML model path</span>
           <div className="input-with-action">
             <input

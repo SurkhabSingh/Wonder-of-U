@@ -221,7 +221,7 @@ export function ScannerSettingsPage({
       </div>
 
       <div className="settings-grid">
-        <label className="field">
+        <label className="field field-wide">
           <span className="field-label-with-help">
             <span>API key</span>
             <TooltipBadge

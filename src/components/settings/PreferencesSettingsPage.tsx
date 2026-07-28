@@ -81,7 +81,7 @@ export function PreferencesSettingsPage({
           />
         </label>
 
-        <label className="field">
+        <label className="field field-wide">
           <span>Recording output folder</span>
           <div className="input-with-action">
             <input
@@ -105,7 +105,7 @@ export function PreferencesSettingsPage({
           </div>
         </label>
 
-        <label className="field">
+        <label className="field field-wide">
           <span>Model and asset folder</span>
           <div className="input-with-action">
             <input
