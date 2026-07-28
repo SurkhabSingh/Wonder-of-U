@@ -600,6 +600,7 @@ pub(crate) struct AppBootstrap {
     pub(crate) whisper_detection: WhisperDetection,
     pub(crate) ffmpeg_detection: FfmpegDetection,
     pub(crate) ytdlp_detection: YtdlpDetection,
+    pub(crate) alass_detection: AlassDetection,
     pub(crate) model_download: ModelDownloadSnapshot,
     pub(crate) log_path: String,
 }
@@ -659,6 +660,24 @@ impl Default for FfmpegDetection {
             managed: false,
             message: "Install app-managed FFmpeg to manually convert transcribed WAV recordings into MP3."
                 .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AlassDetection {
+    pub(crate) status: String,
+    pub(crate) executable_path: Option<String>,
+    pub(crate) message: String,
+}
+
+impl Default for AlassDetection {
+    fn default() -> Self {
+        Self {
+            status: "notFound".into(),
+            executable_path: None,
+            message: "alass is not installed. Download it to align out-of-sync subtitles automatically.".into(),
         }
     }
 }

@@ -1,3 +1,4 @@
+mod alass;
 mod ffmpeg;
 mod mpv;
 mod path_probe;
@@ -9,11 +10,16 @@ pub(crate) use ffmpeg::{
     collect_managed_ffmpeg_candidates, detect_local_ffmpeg, managed_ffmpeg_install_directory,
     verify_ffmpeg_binary,
 };
+pub(crate) use alass::{
+    alass_args, alass_archive_entry, collect_managed_alass_candidates, detect_local_alass,
+    managed_alass_install_directory, verify_alass_binary,
+};
 pub(crate) use mpv::detect_local_mpv;
 pub(crate) use updates::{
     check_whisper_model_update_inner, check_whisper_runtime_update_inner, check_ytdlp_update_inner,
 };
 pub(crate) use ytdlp::{
+    managed_binary_is_present,
     detect_local_ytdlp, managed_ytdlp_install_directory, verify_ytdlp_binary,
 };
 pub(crate) use whisper::{

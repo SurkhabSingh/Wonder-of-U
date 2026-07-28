@@ -47,7 +47,7 @@ pub(crate) struct SubtitleSource {
     pub(crate) tracks: Vec<SubtitleTrack>,
 }
 
-fn ffprobe_path_for(ffmpeg_executable: &str) -> PathBuf {
+pub(crate) fn ffprobe_path_for(ffmpeg_executable: &str) -> PathBuf {
     let ffmpeg = Path::new(ffmpeg_executable);
     let extension = ffmpeg
         .extension()

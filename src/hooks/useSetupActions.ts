@@ -113,6 +113,19 @@ export function useSetupActions({
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
 
+  const downloadRecommendedAlass = useCallback(async () => {
+    try {
+      setBusyAction("downloadAlass");
+      const nextBootstrap = await invoke<AppBootstrap>("download_recommended_alass");
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("storage");
+    } catch (error) {
+      setLoadError(errorMessage(error, "alass could not be prepared."));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+
   const checkYtdlpUpdate = useCallback(async () => {
     try {
       setBusyAction("checkYtdlpUpdate");
@@ -295,6 +308,7 @@ export function useSetupActions({
     downloadRecommendedModel,
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
+    downloadRecommendedAlass,
     downloadRuntimeVersion,
     toggleDownloadPause,
     updateAnkiField,

@@ -9,9 +9,12 @@ use crate::{
     scanner_overlay::{set_scanner_overlay_enabled, set_scanner_popup_open},
     watch::{
         seek_watch_session as seek_watch_session_inner,
+        add_watch_subtitle_file,
+        set_watch_subtitle_delay as set_watch_subtitle_delay_inner,
         start_watch_session as start_watch_session_inner,
         stop_watch_session as stop_watch_session_inner,
         subtitles::{load_subtitle_source, SubtitleSource},
+        sync::sync_subtitles_with_alass,
         watch_snapshot as watch_snapshot_inner, WatchSnapshot,
     },
 };
@@ -29,7 +32,8 @@ use crate::{
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
         download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
-        download_recommended_ytdlp_inner, download_whisper_runtime_version_inner,
+        download_recommended_alass_inner, download_recommended_ytdlp_inner,
+        download_whisper_runtime_version_inner,
         toggle_whisper_model_download_pause_inner,
     },
     desktop_shell::{
@@ -353,6 +357,56 @@ pub(crate) async fn lookup_term(
     tauri::async_runtime::spawn_blocking(move || lookup_term_inner(text, offset, limit))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// Shifts the subtitles against the audio, in milliseconds.
+///
+/// The cheap fix for the common fault — a file off by a constant. Nothing is written to
+/// disk and it is instantly reversible, which is why it is offered before alass.
+#[tauri::command]
+pub(crate) async fn set_watch_subtitle_delay(delay_ms: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || set_watch_subtitle_delay_inner(delay_ms))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Realigns a subtitle file against the video's audio with alass, returning the new path.
+///
+/// For the harder fault, where the drift varies across the episode and no single offset
+/// works. Writes beside the original rather than over it.
+#[tauri::command]
+pub(crate) async fn sync_watch_subtitles(
+    app: AppHandle,
+    video_path: String,
+    subtitle_path: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = {
+            let persisted_state = app.state::<SharedPersistedState>();
+            let persisted = persisted_state
+                .0
+                .lock()
+                .map_err(|_| "Could not read the app settings.".to_string())?;
+            persisted.settings.clone()
+        };
+        let synced =
+            sync_subtitles_with_alass(&settings, Path::new(&video_path), Path::new(&subtitle_path))?;
+        let synced = synced.display().to_string();
+        // Hand the corrected file straight to the player. Reporting success while mpv keeps
+        // showing the old subtitles would be the worst outcome: the user would trust a fix
+        // they are not actually watching.
+        add_watch_subtitle_file(&synced)?;
+        Ok(synced)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Downloads alass into the managed asset directory.
+#[tauri::command]
+pub(crate) fn download_recommended_alass(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_alass_inner(&app)?;
+    build_app_bootstrap(&app)
 }
 
 /// Turns the scannable subtitle overlay over mpv on or off.

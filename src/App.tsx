@@ -178,6 +178,47 @@ function App() {
   const [watchMiningKey, setWatchMiningKey] = useState<string | null>(null);
   const [padBeforeMs, setPadBeforeMs] = useState("");
   const [padAfterMs, setPadAfterMs] = useState("");
+  // The sidecar file the session was opened with. Remembered because alass rewrites a
+  // subtitle FILE, and mpv's snapshot only reports the line on screen — an embedded track
+  // has no path to hand it.
+  const [watchSubtitlePath, setWatchSubtitlePath] = useState<string | null>(null);
+  const [isSyncingSubtitles, setIsSyncingSubtitles] = useState(false);
+  const [watchSyncResult, setWatchSyncResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
+  // Realign the subtitle file against the video's own audio, then reload the corrected
+  // file into both mpv (done in Rust, so the player never shows subtitles the app thinks
+  // it has fixed) and the app's cue list.
+  const syncWatchSubtitles = useCallback(async () => {
+    const videoPath = watch.snapshot.path;
+    if (!watchSubtitlePath || !videoPath) {
+      return;
+    }
+    setIsSyncingSubtitles(true);
+    setWatchSyncResult(null);
+    try {
+      const syncedPath = await invoke<string>("sync_watch_subtitles", {
+        videoPath,
+        subtitlePath: watchSubtitlePath,
+      });
+      setWatchSubtitlePath(syncedPath);
+      await watchSubtitles.load(videoPath, syncedPath, null);
+      setWatchSyncResult({
+        ok: true,
+        message: `Subtitles realigned — saved as ${fileNameFromPath(syncedPath)} and loaded.`,
+      });
+    } catch (caught) {
+      setWatchSyncResult({
+        ok: false,
+        message:
+          caught instanceof Error ? caught.message : String(caught ?? "Sync failed."),
+      });
+    } finally {
+      setIsSyncingSubtitles(false);
+    }
+  }, [watch.snapshot.path, watchSubtitlePath, watchSubtitles]);
 
   const runtimeUpdateVersion =
     runtimeUpdateResult?.status === "available"
@@ -259,6 +300,7 @@ function App() {
     downloadRecommendedModel,
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
+    downloadRecommendedAlass,
     downloadRuntimeVersion,
     toggleDownloadPause,
     updateAnkiField,
@@ -566,9 +608,21 @@ function App() {
               error={watch.error}
               onStart={(videoPath, subtitlePath) => {
                 setWatchMinedKeys(new Set());
+                setWatchSubtitlePath(subtitlePath);
+                setWatchSyncResult(null);
                 void watch.start(videoPath, subtitlePath);
                 void watchSubtitles.load(videoPath, subtitlePath, null);
               }}
+              onSetSubtitleDelay={(delayMs) => void watch.setSubtitleDelay(delayMs)}
+              isSyncing={isSyncingSubtitles}
+              syncResult={watchSyncResult}
+              // Only a sidecar file can be realigned: alass rewrites a subtitle file, and an
+              // embedded track has none of its own.
+              onSyncSubtitles={
+                watchSubtitlePath && watch.snapshot.path
+                  ? () => void syncWatchSubtitles()
+                  : undefined
+              }
               scanner={settingsDraft.scanner}
               onToggleOverlay={(enabled) => {
                 updateSettings({ scanner: { overlayEnabled: enabled } });
@@ -577,6 +631,8 @@ function App() {
                 void invoke("set_scanner_overlay", { enabled });
               }}
               onStop={() => {
+                setWatchSubtitlePath(null);
+                setWatchSyncResult(null);
                 // Take the overlay down with the video. A scanner window left tracking a
                 // dead player is the one way it could end up stranded on screen.
                 void invoke("set_scanner_overlay", { enabled: false });
@@ -809,6 +865,7 @@ function App() {
             onDownloadRecommendedModel={downloadRecommendedModel}
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
+            onDownloadRecommendedAlass={downloadRecommendedAlass}
             onCheckYtdlpUpdate={checkYtdlpUpdate}
             onToggleDownloadPause={toggleDownloadPause}
             onCancelDownload={cancelDownload}

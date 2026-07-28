@@ -215,6 +215,46 @@ pub(super) fn extract_zip_archive_to_directory(
     Ok(())
 }
 
+/// Pulls a single named file out of an archive, ignoring everything else.
+///
+/// The sibling above unpacks the whole thing, which is right for ffmpeg and wrong for alass:
+/// alass's release carries its own complete copy of ffmpeg, ~70 MB the app already has a
+/// better-managed version of. `select` is handed the entry names and returns the one wanted,
+/// so the choice stays in the module that understands the archive.
+pub(super) fn extract_zip_entry_to_path(
+    archive_path: &Path,
+    target_path: &Path,
+    select: impl Fn(&[String]) -> Option<String>,
+) -> Result<(), String> {
+    let archive_file = fs::File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(archive_file).map_err(|error| error.to_string())?;
+
+    let names = archive
+        .file_names()
+        .map(str::to_string)
+        .collect::<Vec<String>>();
+    let wanted = select(&names).ok_or_else(|| {
+        "The download did not contain the expected program; the release layout may have changed."
+            .to_string()
+    })?;
+
+    let mut entry = archive
+        .by_name(&wanted)
+        .map_err(|error| format!("Could not read {wanted} from the download: {error}"))?;
+    // `enclosed_name` is what rejects `../` traversal in the archive; a name that fails it is
+    // not a file we are willing to write anywhere.
+    if entry.enclosed_name().is_none() {
+        return Err("The download contained an unsafe file path.".into());
+    }
+
+    if let Some(parent) = target_path.parent() {
+        ensure_directory_exists(parent)?;
+    }
+    let mut output_file = fs::File::create(target_path).map_err(|error| error.to_string())?;
+    std::io::copy(&mut entry, &mut output_file).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     app: &AppHandle<R>,
     url: &str,

@@ -63,6 +63,10 @@ export function WatchPage({
   onPadAfterChange,
   scanner,
   onToggleOverlay,
+  onSetSubtitleDelay,
+  onSyncSubtitles,
+  isSyncing,
+  syncResult,
 }: {
   snapshot: WatchSnapshot;
   isStarting: boolean;
@@ -92,6 +96,12 @@ export function WatchPage({
   onPadAfterChange: (value: string) => void;
   scanner: ScannerSettings;
   onToggleOverlay: (enabled: boolean) => void;
+  onSetSubtitleDelay: (delayMs: number) => void;
+  /// Undefined when there is no sidecar file to realign — an embedded track has no file of
+  /// its own, and alass needs one to rewrite.
+  onSyncSubtitles: (() => void) | undefined;
+  isSyncing: boolean;
+  syncResult: { ok: boolean; message: string } | null;
 }) {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
@@ -284,6 +294,66 @@ export function WatchPage({
           />
         </label>
       </div>
+
+      {/* Subtitle timing. The offset is the cheap fix and comes first: it applies instantly,
+          writes nothing, and undoes itself. Automatic alignment is for the case an offset
+          cannot express — drift that varies across the episode. */}
+      <div className="panel-actions watch-sync">
+        <span className="watch-sync-label">Subtitle timing</span>
+        <div className="watch-sync-nudge">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onSetSubtitleDelay(snapshot.subtitleDelayMs - 100)}
+            title="Show subtitles 100 ms earlier"
+            aria-label="Show subtitles 100 milliseconds earlier"
+          >
+            &minus;100 ms
+          </button>
+          <span className="watch-sync-value">
+            {snapshot.subtitleDelayMs > 0 ? "+" : ""}
+            {snapshot.subtitleDelayMs} ms
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onSetSubtitleDelay(snapshot.subtitleDelayMs + 100)}
+            title="Show subtitles 100 ms later"
+            aria-label="Show subtitles 100 milliseconds later"
+          >
+            +100 ms
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onSetSubtitleDelay(0)}
+            disabled={snapshot.subtitleDelayMs === 0}
+            title="Clear the offset"
+          >
+            Reset
+          </button>
+        </div>
+
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onSyncSubtitles?.()}
+          disabled={!onSyncSubtitles || isSyncing}
+          title={
+            onSyncSubtitles
+              ? "Realign the subtitle file against the video's audio, writing a copy beside it"
+              : "Only a subtitle file can be realigned — an embedded track has no file to rewrite"
+          }
+        >
+          {isSyncing ? "Aligning…" : "Sync automatically"}
+        </button>
+      </div>
+
+      {syncResult ? (
+        <div className={`update-card ${syncResult.ok ? "current" : "error"}`}>
+          <strong>{syncResult.message}</strong>
+        </div>
+      ) : null}
 
       {mineResult ? (
         <div className={`update-card ${mineResult.ok ? "current" : "error"}`}>

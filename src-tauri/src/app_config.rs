@@ -6,6 +6,13 @@ pub(crate) const RECOMMENDED_FFMPEG_RUNTIME_FILE: &str =
     "ffmpeg-master-latest-win64-gpl-shared.zip";
 pub(crate) const RECOMMENDED_FFMPEG_RUNTIME_URL: &str =
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip";
+/// alass v2.0.0 — automatic subtitle synchronisation. Pinned to a tag rather than "latest"
+/// so a release that changes the archive layout cannot silently break the extraction.
+///
+/// GPL-3.0, invoked as a separate process. See `runtime_assets/alass.rs`.
+pub(crate) const ALASS_RELEASE_DOWNLOAD_URL: &str =
+    "https://github.com/kaegi/alass/releases/download/v2.0.0/alass-windows64.zip";
+
 pub(crate) const YTDLP_RELEASE_DOWNLOAD_URL: &str =
     "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 pub(crate) const YTDLP_RELEASES_API_URL: &str =

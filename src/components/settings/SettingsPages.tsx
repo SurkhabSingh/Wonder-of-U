@@ -57,6 +57,7 @@ export function SettingsPages({
   onDownloadRecommendedModel,
   onDownloadRecommendedFfmpeg,
   onDownloadRecommendedYtdlp,
+  onDownloadRecommendedAlass,
   onCheckYtdlpUpdate,
   onToggleDownloadPause,
   onCancelDownload,
@@ -94,6 +95,7 @@ export function SettingsPages({
   onDownloadRecommendedModel: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
+  onDownloadRecommendedAlass: () => void | Promise<void>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
   onCancelDownload: () => void | Promise<void>;
@@ -196,6 +198,7 @@ export function SettingsPages({
             onCancelDownload={onCancelDownload}
             onDownloadRecommendedFfmpeg={onDownloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={onDownloadRecommendedYtdlp}
+            onDownloadRecommendedAlass={onDownloadRecommendedAlass}
             onCheckYtdlpUpdate={onCheckYtdlpUpdate}
             onToggleDownloadPause={onToggleDownloadPause}
           />

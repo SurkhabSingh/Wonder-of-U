@@ -401,6 +401,12 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     managed: false,
     message: "Install app-managed yt-dlp to import audio from YouTube and other sites.",
   },
+  alassDetection: {
+    status: "notFound",
+    executablePath: null,
+    message:
+      "alass is not installed. Download it to align out-of-sync subtitles automatically.",
+  },
   modelDownload: {
     kind: null,
     status: "idle",

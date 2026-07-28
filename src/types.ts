@@ -226,6 +226,13 @@ export type YtdlpDetection = {
   message: string;
 };
 
+// alass is managed-only: there is no conventional system install to probe for.
+export type AlassDetection = {
+  status: string;
+  executablePath: string | null;
+  message: string;
+};
+
 export type WhisperAssetUpdateResult = {
   kind: string;
   status: string;
@@ -251,6 +258,7 @@ export type AppBootstrap = {
   whisperDetection: WhisperDetection;
   ffmpegDetection: FfmpegDetection;
   ytdlpDetection: YtdlpDetection;
+  alassDetection: AlassDetection;
   modelDownload: ModelDownloadSnapshot;
   logPath: string;
 };
@@ -388,6 +396,7 @@ export type BusyAction =
   | "downloadModel"
   | "downloadRuntime"
   | "downloadFfmpeg"
+  | "downloadAlass"
   | "downloadYtdlp"
   | "importYoutube"
   | "checkYtdlpUpdate"

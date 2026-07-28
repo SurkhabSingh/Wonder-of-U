@@ -15,6 +15,7 @@ export function StorageSettingsPage({
   onCancelDownload,
   onDownloadRecommendedFfmpeg,
   onDownloadRecommendedYtdlp,
+  onDownloadRecommendedAlass,
   onCheckYtdlpUpdate,
   onToggleDownloadPause,
 }: {
@@ -25,10 +26,12 @@ export function StorageSettingsPage({
   onCancelDownload: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
+  onDownloadRecommendedAlass: () => void | Promise<void>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
 }) {
   const ytdlpReady = bootstrap.ytdlpDetection.status === "ready";
+  const alassReady = bootstrap.alassDetection.status === "ready";
   // Re-downloading the recommended yt-dlp overwrites the binary in place, so the
   // download action doubles as the install for an update the check turned up.
   const ytdlpUpdateVersion =
@@ -148,6 +151,47 @@ export function StorageSettingsPage({
         )}
       </div>
       <UpdateResultCard result={ytdlpUpdateResult} />
+
+      <header className="panel-header">
+        <div>
+          <p className="panel-kicker">Storage</p>
+          <h2>Subtitle Sync</h2>
+        </div>
+        <span
+          className={`status-chip status-chip-${alassReady ? "success" : "warning"}`}
+          title={bootstrap.alassDetection.message}
+        >
+          {alassReady ? "Ready" : "Optional"}
+        </span>
+      </header>
+
+      <div className={`update-card ${alassReady ? "current" : "available"}`}>
+        <strong>{bootstrap.alassDetection.message}</strong>
+        <p className="microcopy">
+          alass realigns a subtitle file against the video&rsquo;s own audio, for releases
+          where the drift changes across the episode and a single offset cannot fix it. If
+          your subtitles are simply late or early by a constant, the offset control on the
+          Watch page is instant and needs none of this. alass is fetched from its official
+          releases (GPL-3.0) and run as a separate program; only its 3.5&nbsp;MB binary is
+          kept &mdash; it reuses the FFmpeg above rather than installing a second copy.
+        </p>
+        {bootstrap.alassDetection.executablePath ? (
+          <p className="path-copy" title={bootstrap.alassDetection.executablePath}>
+            {fileNameFromPath(bootstrap.alassDetection.executablePath)}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="action-row inline-actions">
+        <button
+          type="button"
+          className={alassReady ? "secondary" : undefined}
+          onClick={() => void onDownloadRecommendedAlass()}
+          disabled={downloadIsActive || busyAction === "downloadAlass"}
+        >
+          {alassReady ? "Re-download alass" : "Download alass"}
+        </button>
+      </div>
       {ytdlpReady && ytdlpUpdateVersion ? (
         <div className="action-row compact-actions">
           <button

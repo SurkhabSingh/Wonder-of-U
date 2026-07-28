@@ -29,6 +29,7 @@ use std::os::windows::process::CommandExt;
 use serde::Serialize;
 
 pub(crate) mod subtitles;
+pub(crate) mod sync;
 #[cfg(target_os = "windows")]
 pub(crate) mod window;
 
@@ -511,6 +512,50 @@ pub(crate) fn set_watch_subtitle_visibility(visible: bool) -> Result<(), String>
     session
         .connection
         .set_property("sub-visibility", serde_json::Value::Bool(visible))
+        .map(|_| ())
+}
+
+/// Shifts the subtitles against the audio by `delay_ms`, positive meaning "show later".
+///
+/// This is mpv's own `sub-delay`, so it costs one property write and applies to whatever
+/// mpv is rendering — sidecar or embedded track — with no file rewritten. It is the right
+/// tool for the common failure, where a subtitle file is off by a constant: alass exists
+/// for the harder case where the drift varies across the episode.
+///
+/// mpv measures the property in **seconds**, so the millisecond figure the UI works in is
+/// converted here rather than at the call site.
+pub(crate) fn set_watch_subtitle_delay(delay_ms: i64) -> Result<(), String> {
+    let mut session_guard = SESSION
+        .lock()
+        .map_err(|_| "Could not reach the watch session.".to_string())?;
+    let Some(session) = session_guard.as_mut() else {
+        return Err("No video is playing.".into());
+    };
+    let seconds = delay_ms as f64 / 1000.0;
+    let Some(seconds) = serde_json::Number::from_f64(seconds) else {
+        return Err("That subtitle offset is not a usable number.".into());
+    };
+    session
+        .connection
+        .set_property("sub-delay", serde_json::Value::Number(seconds))
+        .map(|_| ())
+}
+
+/// Hands mpv a subtitle file and selects it, replacing whatever it was showing.
+///
+/// Needed because syncing writes a NEW file: without this, alass would produce a corrected
+/// subtitle that the player never loads, and the user would watch the old one while the app
+/// claimed success. `sub-add` with `select` both adds and switches in one command.
+pub(crate) fn add_watch_subtitle_file(subtitle_path: &str) -> Result<(), String> {
+    let mut session_guard = SESSION
+        .lock()
+        .map_err(|_| "Could not reach the watch session.".to_string())?;
+    let Some(session) = session_guard.as_mut() else {
+        return Err("No video is playing.".into());
+    };
+    session
+        .connection
+        .request(&["sub-add", subtitle_path, "select"])
         .map(|_| ())
 }
 

@@ -215,8 +215,23 @@ export function useWatchSession() {
     }
   }, []);
 
+  // Subtitle offset. mpv owns the value, so the UI never keeps its own copy — it reads
+  // `snapshot.subtitleDelayMs` and asks for a new absolute value, which keeps the two from
+  // disagreeing after a seek or a file change.
+  const setSubtitleDelay = useCallback(async (delayMs: number) => {
+    try {
+      await invoke("set_watch_subtitle_delay", { delayMs });
+      await refresh();
+    } catch (caught) {
+      if (mountedRef.current) {
+        setError(errorMessage(caught, "The subtitle offset could not be changed."));
+      }
+    }
+  }, [refresh]);
+
   return {
     snapshot,
+    setSubtitleDelay,
     isStarting,
     error,
     start,
