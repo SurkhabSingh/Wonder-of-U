@@ -53,8 +53,8 @@ export function ScannerSettingsPage({
 
       <div className="settings-grid">
         <label className="field">
-          <span>
-            Scan with
+          <span className="field-label-with-help">
+            <span>Scan with</span>
             <TooltipBadge
               label="?"
               description="The key you hold while hovering a word. Over the video this key does double duty: while it is down the overlay takes the mouse, and the moment you release it every click goes back to mpv."
@@ -73,8 +73,8 @@ export function ScannerSettingsPage({
         </label>
 
         <label className="field">
-          <span>
-            When you let go
+          <span className="field-label-with-help">
+            <span>When you let go</span>
             <TooltipBadge
               label="?"
               description="Whether releasing the key closes the popup or leaves it up so you can read and scroll it."
@@ -95,8 +95,8 @@ export function ScannerSettingsPage({
         </label>
 
         <label className="field">
-          <span>
-            Lookup delay
+          <span className="field-label-with-help">
+            <span>Lookup delay</span>
             <TooltipBadge
               label="?"
               description="A floor on how often a lookup may start, not a wait before the first one. At the default the underline follows your pointer instantly and only the dictionary query is paced."
@@ -129,8 +129,8 @@ export function ScannerSettingsPage({
         </label>
 
         <label className="field">
-          <span>
-            Popup text size
+          <span className="field-label-with-help">
+            <span>Popup text size</span>
             <TooltipBadge
               label="?"
               description="The whole popup is sized relative to this one value, so it scales as a unit rather than only changing the definitions."
@@ -151,8 +151,8 @@ export function ScannerSettingsPage({
         </label>
 
         <label className="field">
-          <span>
-            Subtitles over the video
+          <span className="field-label-with-help">
+            <span>Subtitles over the video</span>
             <TooltipBadge
               label="?"
               description="Text size for the scannable subtitle line drawn over mpv. Only used while the overlay is switched on from the Watch page."
@@ -173,8 +173,8 @@ export function ScannerSettingsPage({
         </label>
 
         <label className="field">
-          <span>
-            Reading font
+          <span className="field-label-with-help">
+            <span>Reading font</span>
             <TooltipBadge
               label="?"
               description="Used for transcripts, the live transcript and the subtitle line. Your choice is placed ahead of the built-in stack rather than replacing it, so a font without Japanese glyphs still falls back instead of showing boxes."
