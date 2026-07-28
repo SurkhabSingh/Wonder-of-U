@@ -106,6 +106,22 @@ fn get(api_key: &str, path: &str) -> Result<serde_json::Value, String> {
         .map_err(|error| format!("Jimaku returned unreadable data. {error}"))
 }
 
+/// Deserializes a response, **reporting a shape mismatch instead of returning nothing**.
+///
+/// This used to be `unwrap_or_default()`, which is the quiet version of the worst bug this
+/// project has shipped: a rejected furigana response was treated as a lookup miss and the
+/// feature was silently broken for eleven days. The same shape applies here — if Jimaku
+/// renames a field or changes a type, an empty list is indistinguishable from "this title
+/// has no subtitles", and the user would go looking for the fault in their search terms.
+fn parse_response<T: serde::de::DeserializeOwned>(
+    value: serde_json::Value,
+    what: &str,
+) -> Result<T, String> {
+    serde_json::from_value(value).map_err(|error| {
+        format!("Jimaku's {what} could not be read — its API may have changed. ({error})")
+    })
+}
+
 pub(crate) fn search_entries(api_key: &str, query: &str) -> Result<Vec<JimakuEntry>, String> {
     let query = query.trim();
     if query.is_empty() {
@@ -113,13 +129,13 @@ pub(crate) fn search_entries(api_key: &str, query: &str) -> Result<Vec<JimakuEnt
     }
     let encoded = urlencoding(query);
     let value = get(api_key, &format!("/entries/search?query={encoded}"))?;
-    Ok(serde_json::from_value(value).unwrap_or_default())
+    parse_response(value, "search results")
 }
 
 /// Every subtitle file for an entry. See the module note on why there is no episode filter.
 pub(crate) fn entry_files(api_key: &str, entry_id: i64) -> Result<Vec<JimakuFile>, String> {
     let value = get(api_key, &format!("/entries/{entry_id}/files"))?;
-    let mut files: Vec<JimakuFile> = serde_json::from_value(value).unwrap_or_default();
+    let mut files: Vec<JimakuFile> = parse_response(value, "file list")?;
     files.retain(|file| is_usable_subtitle_file(&file.name));
     Ok(files)
 }
@@ -246,6 +262,27 @@ mod tests {
         // Windows silently drops these when resolving, so they are removed rather than kept.
         assert_eq!(sanitize_subtitle_file_name("  ep01.srt.  "), "ep01.srt");
         assert_eq!(sanitize_subtitle_file_name("   "), "subtitles.srt");
+    }
+
+    /// The audit finding this pins: an unreadable response must FAIL, not come back as an
+    /// empty list that the UI renders as "no matches for that title".
+    #[test]
+    fn a_changed_api_shape_is_an_error_not_an_empty_result() {
+        // `id` as a string is exactly the kind of drift a third-party API produces.
+        let drifted = serde_json::json!([{ "id": "1", "name": "Show" }]);
+        let parsed: Result<Vec<JimakuEntry>, String> = parse_response(drifted, "search results");
+        let message = parsed.expect_err("a shape mismatch must not read as zero results");
+        assert!(message.contains("API may have changed"));
+
+        // A missing required field, likewise.
+        let missing_url = serde_json::json!([{ "name": "ep01.srt" }]);
+        let parsed: Result<Vec<JimakuFile>, String> = parse_response(missing_url, "file list");
+        assert!(parsed.is_err());
+
+        // And the honest empty case still parses as empty.
+        let empty: Vec<JimakuEntry> =
+            parse_response(serde_json::json!([]), "search results").expect("empty is valid");
+        assert!(empty.is_empty());
     }
 
     #[test]

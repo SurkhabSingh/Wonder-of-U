@@ -13,6 +13,10 @@ import type { JimakuEntry, JimakuFile } from "../../types";
 // filter needed a retry-unfiltered fallback to be usable at all. Every file is listed and
 // the filename picks one — which is what a user reads regardless.
 
+/// Jimaku returns a long tail of loose matches; past this, scrolling costs more than it
+/// finds. Stated in the UI when it bites, rather than truncating silently.
+const MAX_VISIBLE_ENTRIES = 25;
+
 /// The name most people will recognise, falling back through what Jimaku actually returns.
 function entryLabel(entry: JimakuEntry): string {
   return entry.englishName || entry.name || `Entry ${entry.id}`;
@@ -108,7 +112,9 @@ export function JimakuSearchPanel({
           aria-label="Jimaku title search"
           onChange={(event) => setQuery(event.currentTarget.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            // Guarded like the button: without this, Enter could start a second search
+            // while the first was in flight and whichever landed last would win.
+            if (event.key === "Enter" && !busy && query.trim()) {
               void search();
             }
           }}
@@ -168,7 +174,7 @@ export function JimakuSearchPanel({
           {entries.length === 0 ? (
             <p className="microcopy">No matches on Jimaku for that title.</p>
           ) : (
-            entries.slice(0, 25).map((item) => (
+            entries.slice(0, MAX_VISIBLE_ENTRIES).map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -183,6 +189,12 @@ export function JimakuSearchPanel({
               </button>
             ))
           )}
+          {entries.length > MAX_VISIBLE_ENTRIES ? (
+            <p className="microcopy">
+              Showing the first {MAX_VISIBLE_ENTRIES} of {entries.length} — narrow the title
+              if yours is not here.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

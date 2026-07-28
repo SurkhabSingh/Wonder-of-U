@@ -49,7 +49,16 @@ export function useWatchSubtitles() {
           return;
         }
         setTracks(source.tracks);
-        setCues(parseSubtitles(source.content, source.name));
+        const parsed = parseSubtitles(source.content, source.name);
+        setCues(parsed);
+        // A file that loaded but yielded nothing is a FAILURE, not an empty state. Left
+        // silent it reaches the pane as zero cues and reads as "No subtitles loaded — pick
+        // a file", which tells a user who just picked one to go and do it again.
+        if (parsed.length === 0 && source.content.trim().length > 0) {
+          setError(
+            `${source.name} has no readable subtitle lines — it may be an unsupported format or a text encoding the parser could not decode.`,
+          );
+        }
       } catch (caught) {
         if (mountedRef.current) {
           setCues([]);
