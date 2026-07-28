@@ -2198,10 +2198,25 @@ input::placeholder {
   font-size: var(--text-2xs);
 }
 
-.watch-actions {
+/* A control bar, not a panel footer.
+   These rows borrowed `.panel-actions`, which right-aligns everything — correct for the
+   two buttons that close a panel, wrong for a row that also carries a toggle, a hint and
+   two labelled selects. Right-alignment pushed the primary action into the middle of a
+   wrapping row of controls, and nothing lined up with anything above it. The action now
+   starts where the eye does, and the controls that modify it sit opposite. */
+.watch-controls {
+  display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
   align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-lg);
+}
+
+.watch-controls-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
 }
 
 .watch-line-text {
@@ -3470,22 +3485,22 @@ input::placeholder {
 }
 
 /* Subtitle timing: the offset nudge and automatic alignment, on one row. */
-.watch-sync {
-  align-items: flex-end;
-  gap: var(--space-5);
-  flex-wrap: wrap;
-}
+
 
 /* One label, one typeable field. Two nudge buttons were a worse answer to the same
    question: they cannot express an arbitrary offset, and reading the current value meant
    reading it off a third element. */
-.watch-offset {
+/* Laid out like `.watch-padding`, the control beside it: label, then the input, on one
+   line. It used to stack its label and a line of help text above and below the input,
+   which made it the tallest thing in the row and left the button next to it hanging. */
+.watch-offset,
+.watch-offset-field {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  align-items: center;
+  gap: var(--space-sm);
 }
 
-.watch-offset > span:first-child {
+.watch-offset-field > span:first-child {
   color: var(--text-muted);
   font-size: var(--text-xs);
 }

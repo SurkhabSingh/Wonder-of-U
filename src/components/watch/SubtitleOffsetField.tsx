@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { TooltipBadge } from "../ui/Tooltip";
 
 // The subtitle offset, as one typeable field.
 //
@@ -41,33 +42,39 @@ export function SubtitleOffsetField({
   }
 
   return (
-    <label className="watch-offset">
-      <span>Offset</span>
-      <span className="watch-offset-input">
-        <input
-          ref={inputRef}
-          type="number"
-          step={50}
-          value={draft}
-          aria-label="Subtitle offset in milliseconds"
-          onFocus={() => setEditing(true)}
-          onChange={(event) => setDraft(event.currentTarget.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.currentTarget.blur();
-            } else if (event.key === "Escape") {
-              setEditing(false);
-              setDraft(String(delayMs));
-              event.currentTarget.blur();
-            }
-          }}
-        />
-        <span className="watch-offset-unit">ms</span>
-      </span>
-      <span className="microcopy">
-        Positive shows subtitles later, negative earlier. 0 clears it.
-      </span>
-    </label>
+    // The badge sits outside the label on purpose. A label forwards its clicks to the
+    // control it wraps, so a badge inside it would focus the input — which puts the field
+    // into editing mode and stops it mirroring mpv, just from reading the hint.
+    <div className="watch-offset">
+      <label className="watch-offset-field">
+        <span>Offset</span>
+        <span className="watch-offset-input">
+          <input
+            ref={inputRef}
+            type="number"
+            step={50}
+            value={draft}
+            aria-label="Subtitle offset in milliseconds"
+            onFocus={() => setEditing(true)}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.currentTarget.blur();
+              } else if (event.key === "Escape") {
+                setEditing(false);
+                setDraft(String(delayMs));
+                event.currentTarget.blur();
+              }
+            }}
+          />
+          <span className="watch-offset-unit">ms</span>
+        </span>
+      </label>
+      <TooltipBadge
+        label="?"
+        description="Positive shows the subtitles later, negative earlier. 0 clears it."
+      />
+    </div>
   );
 }

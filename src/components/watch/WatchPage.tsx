@@ -22,8 +22,6 @@ function scanHintFor(scanner: ScannerSettings): string {
     : `${prefix} and hover a word to look it up (needs Anki open)`;
 }
 
-// Containers mpv plays that the app's own webview cannot — which is the whole reason the
-// video is handed to mpv instead of being rendered here.
 const VIDEO_EXTENSIONS = ["mkv", "mp4", "webm", "mov", "m4v", "avi", "ts", "flv"];
 const SUBTITLE_EXTENSIONS = ["srt", "ass", "ssa", "vtt", "sub"];
 
@@ -241,83 +239,93 @@ export function WatchPage({
         )}
       </div>
 
-      <div className="panel-actions watch-actions">
-        <button
-          type="button"
-          onClick={onMine}
-          disabled={isMining || !snapshot.subtitleText}
-          title={
-            snapshot.subtitleText
-              ? "Make an Anki card from the line playing now"
-              : "No subtitle on screen to mine"
-          }
-        >
-          {isMining ? "Mining…" : "Mine the current line"}
-        </button>
-        {/* The hotkey is the point — it fires while mpv has focus, so mining does not
-            mean leaving the video. The button is for when you are already looking here. */}
-        {mineHotkey ? (
-          <span className="watch-hotkey-hint">
-            or press <kbd>{mineHotkey}</kbd> while you watch
-          </span>
-        ) : null}
+      {/* Mining: the action on the left, and the two settings that change what it
+          captures on the right. Padding is asymmetric because the two edges fail
+          differently — a line's start is usually tight, while its end clips a trailing
+          syllable. "Default" defers to the Settings value rather than copying it, so
+          changing that later still applies here. */}
+      <div className="watch-controls">
+        <div className="watch-controls-group">
+          <button
+            type="button"
+            onClick={onMine}
+            disabled={isMining || !snapshot.subtitleText}
+            title={
+              snapshot.subtitleText
+                ? "Make an Anki card from the line playing now"
+                : "No subtitle on screen to mine"
+            }
+          >
+            {isMining ? "Mining…" : "Mine the current line"}
+          </button>
+          {/* The hotkey is the point — it fires while the video has focus, so mining does
+              not mean leaving it. The button is for when you are already looking here. */}
+          {mineHotkey ? (
+            <span className="watch-hotkey-hint">
+              or press <kbd>{mineHotkey}</kbd> while you watch
+            </span>
+          ) : null}
+        </div>
 
-        {/* Off by default — see scanner_overlay.rs for why the two subtitle layers are
-            mutually exclusive. */}
-        <label className="toggle watch-overlay-toggle">
-          <input
-            type="checkbox"
-            checked={scanner.overlayEnabled}
-            onChange={(event) => onToggleOverlay(event.currentTarget.checked)}
-          />
-          <span>Scannable subtitles over the video</span>
-        </label>
-
-        {/* Padding is asymmetric because the two edges fail differently: a line's start is
-            usually tight, while its end clips a trailing syllable. "Default" defers to the
-            Settings value rather than copying it, so changing that later still applies. */}
-        <label className="watch-padding">
-          <span>Pad before</span>
-          <ThemedSelect
-            value={padBeforeMs}
-            options={PADDING_OPTIONS}
-            placeholder="Default"
-            onChange={onPadBeforeChange}
-          />
-        </label>
-        <label className="watch-padding">
-          <span>Pad after</span>
-          <ThemedSelect
-            value={padAfterMs}
-            options={PADDING_OPTIONS}
-            placeholder="Default"
-            onChange={onPadAfterChange}
-          />
-        </label>
+        <div className="watch-controls-group">
+          <label className="watch-padding">
+            <span>Pad before</span>
+            <ThemedSelect
+              value={padBeforeMs}
+              options={PADDING_OPTIONS}
+              placeholder="Default"
+              onChange={onPadBeforeChange}
+            />
+          </label>
+          <label className="watch-padding">
+            <span>Pad after</span>
+            <ThemedSelect
+              value={padAfterMs}
+              options={PADDING_OPTIONS}
+              placeholder="Default"
+              onChange={onPadAfterChange}
+            />
+          </label>
+        </div>
       </div>
 
-      {/* Subtitle timing. The offset is the cheap fix and comes first: it applies instantly,
-          writes nothing, and undoes itself. Automatic alignment is for the case an offset
-          cannot express — drift that varies across the episode. */}
-      <div className="panel-actions watch-sync">
-        <SubtitleOffsetField
-          delayMs={snapshot.subtitleDelayMs}
-          onCommit={onSetSubtitleDelay}
-        />
+      {/* The subtitles themselves: how they are shown, and when they appear. The offset is
+          the cheap fix and comes first — it applies instantly, writes nothing, and undoes
+          itself. Automatic alignment is for the case an offset cannot express: drift that
+          varies across the episode. */}
+      <div className="watch-controls">
+        <div className="watch-controls-group">
+          {/* Off by default — see scanner_overlay.rs for why the two subtitle layers are
+              mutually exclusive. */}
+          <label className="toggle watch-overlay-toggle">
+            <input
+              type="checkbox"
+              checked={scanner.overlayEnabled}
+              onChange={(event) => onToggleOverlay(event.currentTarget.checked)}
+            />
+            <span>Scannable subtitles over the video</span>
+          </label>
+        </div>
 
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => onSyncSubtitles?.()}
-          disabled={!onSyncSubtitles || isSyncing}
-          title={
-            onSyncSubtitles
-              ? "Realign the subtitles to the video, saving a corrected copy"
-              : "Built-in subtitles cannot be realigned — choose a subtitle file instead"
-          }
-        >
-          {isSyncing ? "Aligning…" : "Sync automatically"}
-        </button>
+        <div className="watch-controls-group">
+          <SubtitleOffsetField
+            delayMs={snapshot.subtitleDelayMs}
+            onCommit={onSetSubtitleDelay}
+          />
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onSyncSubtitles?.()}
+            disabled={!onSyncSubtitles || isSyncing}
+            title={
+              onSyncSubtitles
+                ? "Realign the subtitles to the video, saving a corrected copy"
+                : "Built-in subtitles cannot be realigned — choose a subtitle file instead"
+            }
+          >
+            {isSyncing ? "Aligning…" : "Sync automatically"}
+          </button>
+        </div>
       </div>
 
       {syncResult ? (
