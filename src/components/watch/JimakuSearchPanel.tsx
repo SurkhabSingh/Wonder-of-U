@@ -6,11 +6,12 @@ import type { JimakuEntry, JimakuFile } from "../../types";
 
 // Finding Japanese subtitles for the video you are about to watch.
 //
-// Two steps, because Jimaku's API is two steps: search a title, then list its files. The
-// episode box narrows the second — but Jimaku derives the episode from free-form filenames
-// and misses often (a per-season title will not match an absolute number), so the backend
-// retries unfiltered rather than showing an empty list. That is why "no exact match" still
-// produces results here.
+// Two steps, because Jimaku's API is two steps: search a title, then list its files.
+//
+// There is deliberately no episode box. Jimaku derives the episode from free-form filenames
+// and misses whenever a title is numbered per-season against an absolute number, so the
+// filter needed a retry-unfiltered fallback to be usable at all. Every file is listed and
+// the filename picks one — which is what a user reads regardless.
 
 /// The name most people will recognise, falling back through what Jimaku actually returns.
 function entryLabel(entry: JimakuEntry): string {
@@ -30,7 +31,6 @@ export function JimakuSearchPanel({
   onOpenSettings: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [episode, setEpisode] = useState("");
   const [entries, setEntries] = useState<JimakuEntry[] | null>(null);
   const [entry, setEntry] = useState<JimakuEntry | null>(null);
   const [files, setFiles] = useState<JimakuFile[] | null>(null);
@@ -57,13 +57,7 @@ export function JimakuSearchPanel({
     setError(null);
     setEntry(next);
     try {
-      const parsed = Number(episode.trim());
-      setFiles(
-        await invoke<JimakuFile[]>("jimaku_files", {
-          entryId: next.id,
-          episode: Number.isFinite(parsed) && parsed > 0 ? parsed : null,
-        }),
-      );
+      setFiles(await invoke<JimakuFile[]>("jimaku_files", { entryId: next.id }));
     } catch (caught) {
       setFiles(null);
       setError(errorMessage(caught, "Those files could not be listed."));
@@ -118,15 +112,6 @@ export function JimakuSearchPanel({
               void search();
             }
           }}
-        />
-        <input
-          type="number"
-          className="jimaku-episode"
-          value={episode}
-          min={1}
-          placeholder="Ep."
-          aria-label="Episode number (optional)"
-          onChange={(event) => setEpisode(event.currentTarget.value)}
         />
         <button
           type="button"

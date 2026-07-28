@@ -3514,12 +3514,6 @@ input::placeholder {
   color: var(--text);
 }
 
-.jimaku-search-row .jimaku-episode {
-  flex: none;
-  width: 6ch;
-  text-align: right;
-}
-
 /* Capped and scrollable: a popular title returns dozens of files, and pushing the
    Open button off-screen would be worse than a scrollbar. */
 .jimaku-results {

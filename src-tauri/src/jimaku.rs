@@ -5,12 +5,17 @@
 //! call jimaku.cc directly because its `<all_urls>` host permission bypasses CORS; this app
 //! has no such escape hatch, and would not want one.
 //!
-//! Ported from the extension's four calls (`background.js`), including the parts that look
-//! like quirks and are not:
+//! Ported from the extension's calls (`background.js`), including the parts that look like
+//! quirks and are not:
 //! - the API key is sent as a bare `Authorization` header, not `Bearer <key>`;
-//! - the episode filter parses numbers out of free-form filenames and misses often (absolute
-//!   vs per-season numbering), so a filtered search that finds nothing retries unfiltered;
 //! - archives are hidden, because the app can only parse a subtitle file, not unpack one.
+//!
+//! **There is deliberately no episode filter.** Jimaku derives the episode from free-form
+//! filenames, so it misses whenever a title is numbered per-season and the user types an
+//! absolute number (or the reverse). The port originally carried the filter plus a
+//! retry-unfiltered fallback to paper over it; dropping the filter drops the reason the
+//! fallback existed. Every file for a title is listed and the filename is what picks one —
+//! which is what a user reads anyway.
 //!
 //! Personal-use API with a 25 requests/60s limit, surfaced as-is rather than retried: a
 //! silent retry against a rate limit just spends the next minute's budget too.
@@ -111,28 +116,10 @@ pub(crate) fn search_entries(api_key: &str, query: &str) -> Result<Vec<JimakuEnt
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
-/// Files for an entry, optionally narrowed to an episode.
-///
-/// Retries without the filter when a filtered request finds nothing. Jimaku derives the
-/// episode from free-form filenames, so a title numbered per-season will not match an
-/// absolute episode number — and showing every file beats showing none.
-pub(crate) fn entry_files(
-    api_key: &str,
-    entry_id: i64,
-    episode: Option<u32>,
-) -> Result<Vec<JimakuFile>, String> {
-    let path = match episode {
-        Some(episode) => format!("/entries/{entry_id}/files?episode={episode}"),
-        None => format!("/entries/{entry_id}/files"),
-    };
-    let value = get(api_key, &path)?;
+/// Every subtitle file for an entry. See the module note on why there is no episode filter.
+pub(crate) fn entry_files(api_key: &str, entry_id: i64) -> Result<Vec<JimakuFile>, String> {
+    let value = get(api_key, &format!("/entries/{entry_id}/files"))?;
     let mut files: Vec<JimakuFile> = serde_json::from_value(value).unwrap_or_default();
-
-    if files.is_empty() && episode.is_some() {
-        let value = get(api_key, &format!("/entries/{entry_id}/files"))?;
-        files = serde_json::from_value(value).unwrap_or_default();
-    }
-
     files.retain(|file| is_usable_subtitle_file(&file.name));
     Ok(files)
 }

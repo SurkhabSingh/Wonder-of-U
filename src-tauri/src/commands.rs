@@ -447,16 +447,15 @@ pub(crate) async fn jimaku_search(
     .map_err(|error| error.to_string())?
 }
 
-/// Lists an entry's subtitle files, optionally narrowed to an episode.
+/// Lists every subtitle file for an entry.
 #[tauri::command]
 pub(crate) async fn jimaku_files(
     app: AppHandle,
     entry_id: i64,
-    episode: Option<u32>,
 ) -> Result<Vec<JimakuFile>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let key = jimaku_api_key(&app)?;
-        entry_files(&key, entry_id, episode)
+        entry_files(&key, entry_id)
     })
     .await
     .map_err(|error| error.to_string())?
