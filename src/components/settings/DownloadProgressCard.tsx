@@ -62,7 +62,7 @@ export function DownloadProgressCard({
             onClick={onCancel}
             disabled={snapshot.status === "cancelling"}
           >
-            Cancel Download
+            Cancel download
           </button>
         </div>
       ) : null}

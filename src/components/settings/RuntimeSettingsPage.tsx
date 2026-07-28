@@ -152,7 +152,7 @@ export function RuntimeSettingsPage({
                   onClick={() => void onCheckRuntimeUpdate()}
                   disabled={busyAction === "checkRuntimeUpdate"}
                 >
-                  Check for Updates
+                  Check for updates
                 </button>
               </div>
             </div>
@@ -176,7 +176,7 @@ export function RuntimeSettingsPage({
               onClick={() => void onDownloadRecommendedRuntime()}
               disabled={downloadIsActive || busyAction === "downloadRuntime"}
             >
-              Download Recommended Runtime
+              Download recommended runtime
             </button>
           </div>
         )}

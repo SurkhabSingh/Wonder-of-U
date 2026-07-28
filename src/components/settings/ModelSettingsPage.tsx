@@ -274,7 +274,7 @@ export function ModelSettingsPage({
                     onClick={() => void onCheckModelUpdate()}
                     disabled={busyAction === "checkModelUpdate"}
                   >
-                    Check for Updates
+                    Check for updates
                   </button>
                 </div>
               ) : null}

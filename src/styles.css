@@ -2718,6 +2718,16 @@ input::placeholder {
   transition: clip-path 90ms linear;
 }
 
+.home-record-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.home-record-heading h2 {
+  margin: 0;
+}
+
 .home-record-actions {
   display: flex;
   flex-wrap: wrap;

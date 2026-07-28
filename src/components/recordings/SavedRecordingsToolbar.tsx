@@ -128,7 +128,7 @@ export function SavedRecordingsToolbar({
                 )
               }
             >
-              Transcribe All
+              Transcribe all
             </button>
           ) : null}
           {recordingFilter === "needsAnki" && pushableRecordings.length > 0 ? (
@@ -142,7 +142,7 @@ export function SavedRecordingsToolbar({
               }
               disabled={busyAction === "pushAnki"}
             >
-              Push All
+              Push all
             </button>
           ) : null}
           {recordingFilter === "needsTranslation" &&
@@ -157,7 +157,7 @@ export function SavedRecordingsToolbar({
               }
               disabled={busyAction === "translateRecording"}
             >
-              Translate All
+              Translate all
             </button>
           ) : null}
           {allowMp3Conversion && convertibleRecordings.length > 0 ? (
@@ -172,7 +172,7 @@ export function SavedRecordingsToolbar({
                 }
                 disabled={busyAction === "convertMp3"}
               >
-                Convert All WAV
+                Convert all WAV
               </button>
             </TooltipWrap>
           ) : null}

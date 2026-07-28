@@ -45,7 +45,7 @@ export function RecorderPage({
         <header className="panel-header">
           <div>
             <p className="panel-kicker">Recorder</p>
-            <h2>System Audio</h2>
+            <h2>System audio</h2>
           </div>
           <div className="panel-actions">
             <TooltipBadge label="Shortcuts" description={hotkeyTooltip} />
@@ -65,7 +65,7 @@ export function RecorderPage({
 
         <div className="action-row">
           <button type="button" onClick={onStartRecording} disabled={recorderBusy}>
-            Start Recording
+            Start recording
           </button>
           <button
             type="button"
@@ -73,7 +73,7 @@ export function RecorderPage({
             onClick={onStopRecording}
             disabled={!isRecording || stopBusy}
           >
-            Stop Recording
+            Stop recording
           </button>
           <button
             type="button"
@@ -81,7 +81,7 @@ export function RecorderPage({
             onClick={onHideToTray}
             disabled={anyBusy}
           >
-            Hide To Tray
+            Hide to tray
           </button>
         </div>
       </article>

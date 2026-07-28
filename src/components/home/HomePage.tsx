@@ -192,7 +192,13 @@ export function HomePage({
       <article className="panel home-record-card">
         <div className="home-record-info">
           <p className="panel-kicker">Capture</p>
-          <h2>Record system audio</h2>
+          {/* Beside the heading, not in the button row below. It is a hint about the
+              actions, not one of them, and among real buttons it reads as a fourth one
+              that refuses to be clicked. The Recorder page already places it here. */}
+          <div className="home-record-heading">
+            <h2>Record system audio</h2>
+            <TooltipBadge label="Shortcuts" description={hotkeyTooltip} />
+          </div>
           <div className="home-record-status">
             <span className="home-record-elapsed">{formatDuration(elapsedMs)}</span>
             <span className="home-record-phase" title={statusText}>
@@ -204,9 +210,8 @@ export function HomePage({
           ) : null}
         </div>
         <div className="home-record-actions">
-          <TooltipBadge label="Shortcuts" description={hotkeyTooltip} />
           <button type="button" onClick={onStartRecording} disabled={recorderBusy}>
-            Start Recording
+            Start recording
           </button>
           <button
             type="button"
@@ -214,7 +219,7 @@ export function HomePage({
             onClick={onStopRecording}
             disabled={!isRecording || stopBusy}
           >
-            Stop Recording
+            Stop recording
           </button>
           <button
             type="button"
@@ -222,7 +227,7 @@ export function HomePage({
             onClick={onHideToTray}
             disabled={anyBusy}
           >
-            Hide To Tray
+            Hide to tray
           </button>
         </div>
       </article>
