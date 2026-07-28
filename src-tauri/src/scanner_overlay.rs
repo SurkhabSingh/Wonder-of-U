@@ -64,6 +64,7 @@ static TRACKER_RUNNING: AtomicBool = AtomicBool::new(false);
 /// the moment the modifier came up, the window would go click-through underneath it.
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
 /// Mirrors the window's current click-through state so it is only ever set on a change.
+/// Only ever written through [`apply_interactive`] — see the note there.
 static INTERACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// The last state pushed, so the tracker only emits on change rather than 60 times a second.
@@ -85,6 +86,21 @@ pub(crate) struct ScannerState {
     /// Physical pixels per logical pixel × 100, so the overlay can size text against the
     /// monitor mpv is actually on rather than the primary one.
     pub(crate) dpi: u32,
+}
+
+impl ScannerState {
+    /// What the overlay is told whenever it goes off screen. Chiefly `tracking: false`,
+    /// which is the frontend's cue to drop a popup anchored to a line it can no longer show.
+    fn hidden() -> Self {
+        Self {
+            tracking: false,
+            scanning: false,
+            escape_pressed: false,
+            width: 0,
+            height: 0,
+            dpi: 96,
+        }
+    }
 }
 
 /// Turns the overlay on or off, switching mpv's own subtitles the other way.
@@ -120,13 +136,16 @@ pub(crate) fn set_scanner_overlay_enabled<R: Runtime>(
         start_tracker(app);
     } else if let Some(window) = app.get_webview_window(SCANNER_WINDOW_LABEL) {
         POPUP_OPEN.store(false, Ordering::Relaxed);
-        INTERACTIVE.store(false, Ordering::Relaxed);
         let _ = window.hide();
         // Leave it click-through so a stranded window can never eat a click.
-        let _ = window.set_ignore_cursor_events(true);
+        #[cfg(target_os = "windows")]
+        apply_interactive(&window, false);
         if let Ok(mut last) = LAST_STATE.lock() {
             *last = None;
         }
+        // Same reason as `hide_overlay`: tell the frontend, or a popup opened before the
+        // toggle survives in its state and reappears the next time the overlay is shown.
+        let _ = app.emit_to(SCANNER_WINDOW_LABEL, SCANNER_STATE_EVENT, ScannerState::hidden());
     }
     Ok(())
 }
@@ -237,6 +256,29 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
+/// Sets click-through and records it in the same breath.
+///
+/// `INTERACTIVE` is a mirror of the window's real state and is only consulted to avoid
+/// redundant calls, which makes any path that changes the window WITHOUT updating the
+/// mirror silently poisonous: the two drift, the next comparison sees "no change", and the
+/// window is left in whatever state the drift produced. That is not hypothetical — hiding
+/// the overlay used to make it click-through directly, so alt-tabbing away and back left
+/// the mirror claiming "interactive" while the window ignored the mouse, and the popup's
+/// close button stopped working. Every caller goes through here now.
+#[cfg(target_os = "windows")]
+fn apply_interactive<R: Runtime>(window: &WebviewWindow<R>, interactive: bool) -> bool {
+    if INTERACTIVE.swap(interactive, Ordering::Relaxed) == interactive {
+        return false;
+    }
+    let _ = window.set_ignore_cursor_events(!interactive);
+    true
+}
+
+/// Takes the overlay off screen — mpv is not in front, has no placeable window, or is gone.
+///
+/// Also tells the frontend, which is what lets it drop a popup that is anchored to a line
+/// the user can no longer see. Without that the popup survives the round trip and comes
+/// back attached to stale text.
 #[cfg(target_os = "windows")]
 fn hide_overlay<R: Runtime>(app: &AppHandle<R>) {
     let mut last = match LAST_STATE.lock() {
@@ -250,7 +292,12 @@ fn hide_overlay<R: Runtime>(app: &AppHandle<R>) {
     drop(last);
     if let Some(window) = app.get_webview_window(SCANNER_WINDOW_LABEL) {
         let _ = window.hide();
-        let _ = window.set_ignore_cursor_events(true);
+        apply_interactive(&window, false);
+        let _ = app.emit_to(
+            SCANNER_WINDOW_LABEL,
+            SCANNER_STATE_EVENT,
+            ScannerState::hidden(),
+        );
     }
 }
 
@@ -311,13 +358,9 @@ fn track_once<R: Runtime>(
         };
         last.as_ref().map(|previous| previous.escape_pressed) != Some(escape_pressed)
     };
-    let interactive_changed = INTERACTIVE.swap(interactive, Ordering::Relaxed) != interactive;
-
-    if interactive_changed {
-        // The whole interaction, in one call: while it is on the overlay takes the pointer;
-        // the instant it goes off mpv gets every click back, including its OSC controls.
-        let _ = window.set_ignore_cursor_events(!interactive);
-    }
+    // The whole interaction, in one call: while it is on the overlay takes the pointer;
+    // the instant it goes off mpv gets every click back, including its OSC controls.
+    let interactive_changed = apply_interactive(&window, interactive);
 
     let changed = geometry_changed || scanning_changed || interactive_changed || escape_changed;
     if let Ok(mut last) = LAST_STATE.lock() {
