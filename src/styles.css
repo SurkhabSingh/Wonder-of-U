@@ -912,8 +912,11 @@ input::placeholder {
   min-width: 0;
   min-height: 34px;
   display: flex;
-  justify-content: space-between;
-  gap: var(--space-4);
+  /* Label and count sit TOGETHER, not at opposite ends. These tabs are a fifth of the
+     window each, so `space-between` pushed "Needs transcript" and its 61 nearly 300px
+     apart and they stopped reading as one thing. */
+  justify-content: flex-start;
+  gap: var(--space-sm);
   align-items: center;
   padding: var(--space-3) var(--space-4);
   border-color: transparent;
