@@ -1423,11 +1423,6 @@ input::placeholder {
   color: var(--error) !important;
 }
 
-/* `.anki-grid` used to supply the two columns and mark its first two fields full-width by
-   POSITION (`:nth-child(1)`, `:nth-child(2)`), which broke the moment anything was inserted
-   above them. Two columns are now the grid default and the two leading fields say so
-   themselves with `.field-wide`. */
-
 .installed-card,
 .update-card,
 .download-card {
@@ -1711,10 +1706,6 @@ input::placeholder {
   .toggle-grid {
     grid-template-columns: 1fr;
   }
-
-  .anki-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 820px) {
@@ -1729,14 +1720,11 @@ input::placeholder {
     border-bottom: 1px solid var(--border);
   }
 
+  /* Every settings section is two columns now, so all of them collapse here — this used
+     to name `.anki-grid` because it was the only two-column grid in the app. */
   .compact-meta-list,
-  .anki-grid {
+  .settings-grid {
     grid-template-columns: 1fr;
-  }
-
-  .anki-grid .field:nth-child(1),
-  .anki-grid .field:nth-child(2) {
-    grid-column: auto;
   }
 
   .recording-filter-tabs {

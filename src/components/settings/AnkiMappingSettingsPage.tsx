@@ -137,7 +137,7 @@ export function AnkiMappingSettingsPage({
         </button>
       </div>
 
-      <div className="settings-grid anki-grid">
+      <div className="settings-grid">
         <label className="field field-wide">
           <span className="field-label-with-help">
             <span>Deck</span>
