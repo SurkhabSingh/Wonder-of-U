@@ -45,9 +45,8 @@ export function ScannerSettingsPage({
       <div className="info-note">
         <p className="microcopy">
           Hold a key and hover a word to see its dictionary entry &mdash; in the subtitle
-          list, and over the video when the overlay is on. The dictionary is your{" "}
-          <strong>Anki add-on&rsquo;s</strong>, so <strong>Anki has to be running</strong>;
-          mining already needs it, so this asks for nothing new.
+          list, and over the video when the overlay is on.{" "}
+          <strong>Anki needs to be open.</strong>
         </p>
       </div>
 
@@ -57,7 +56,7 @@ export function ScannerSettingsPage({
             <span>Scan with</span>
             <TooltipBadge
               label="?"
-              description="The key you hold while hovering a word. Over the video this key does double duty: while it is down the overlay takes the mouse, and the moment you release it every click goes back to mpv."
+              description="The key you hold while hovering a word. Over the video it also decides who gets the mouse: hold it to scan, release it to go back to the player's controls."
             />
           </span>
           <ThemedSelect
@@ -155,7 +154,7 @@ export function ScannerSettingsPage({
             <span>Subtitles over the video</span>
             <TooltipBadge
               label="?"
-              description="Text size for the scannable subtitle line drawn over mpv. Only used while the overlay is switched on from the Watch page."
+              description="Text size for the subtitle line drawn over the video. Only used while that is switched on from the Watch page."
             />
           </span>
           <ThemedSelect
@@ -216,10 +215,8 @@ export function ScannerSettingsPage({
 
       <div className="info-note">
         <p className="microcopy">
-          A key from <strong>jimaku.cc/account</strong> lets the Watch page search Jimaku for
-          Japanese subtitles and save them beside your video. Personal-use API, limited to 25
-          requests a minute &mdash; that limit is reported as-is rather than retried behind
-          your back.
+          Search Jimaku for Japanese subtitles from the Watch page and save them beside
+          your video. Get a key from <strong>jimaku.cc/account</strong>.
         </p>
       </div>
 

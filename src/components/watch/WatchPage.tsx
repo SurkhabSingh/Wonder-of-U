@@ -146,15 +146,6 @@ export function WatchPage({
           </div>
         </header>
 
-        <div className="info-note">
-          <p className="microcopy">
-            The video plays in <strong>mpv</strong>, not in this window &mdash; mpv handles
-            MKV, H.265 and everything else this app&rsquo;s built-in player cannot. Wonder
-            of U reads the position and the subtitles from it, so you can mine the line you
-            are hearing.
-          </p>
-        </div>
-
         <div className="settings-grid">
           <label className="field">
             <span>Video</span>
@@ -172,8 +163,7 @@ export function WatchPage({
         </div>
 
         <p className="microcopy">
-          Leave subtitles empty if the file already has them built in &mdash; the track is
-          read straight out of the container.
+          Leave this empty if the video already has subtitles built in.
         </p>
 
         <JimakuSearchPanel
@@ -189,7 +179,7 @@ export function WatchPage({
             onClick={() => videoPath && onStart(videoPath, subtitlePath)}
             disabled={!videoPath || isStarting}
           >
-            {isStarting ? "Opening…" : "Open in mpv"}
+            {isStarting ? "Opening…" : "Start watching"}
           </button>
         </div>
 
@@ -259,7 +249,7 @@ export function WatchPage({
           title={
             snapshot.subtitleText
               ? "Make an Anki card from the line playing now"
-              : "There is no line on screen to mine"
+              : "No subtitle on screen to mine"
           }
         >
           {isMining ? "Mining…" : "Mine the current line"}
@@ -268,14 +258,12 @@ export function WatchPage({
             mean leaving the video. The button is for when you are already looking here. */}
         {mineHotkey ? (
           <span className="watch-hotkey-hint">
-            or press <kbd>{mineHotkey}</kbd> without leaving mpv
+            or press <kbd>{mineHotkey}</kbd> while you watch
           </span>
         ) : null}
 
-        {/* Off by default: mpv's own .ass rendering — positioning, colours, karaoke — is
-            what works today, and ours replaces it only when the user wants to scan over
-            the video. mpv cannot report where a word is drawn, so there is no way to have
-            both. */}
+        {/* Off by default — see scanner_overlay.rs for why the two subtitle layers are
+            mutually exclusive. */}
         <label className="toggle watch-overlay-toggle">
           <input
             type="checkbox"
@@ -324,8 +312,8 @@ export function WatchPage({
           disabled={!onSyncSubtitles || isSyncing}
           title={
             onSyncSubtitles
-              ? "Realign the subtitle file against the video's audio, writing a copy beside it"
-              : "Only a subtitle file can be realigned — an embedded track has no file to rewrite"
+              ? "Realign the subtitles to the video, saving a corrected copy"
+              : "Built-in subtitles cannot be realigned — choose a subtitle file instead"
           }
         >
           {isSyncing ? "Aligning…" : "Sync automatically"}

@@ -118,10 +118,8 @@ export function StorageSettingsPage({
               : "Install yt-dlp to import audio from a YouTube link.")}
         </strong>
         <p className="microcopy">
-          Wonder of U uses yt-dlp to fetch a YouTube video's audio into your
-          Library. Once it lands, transcribe it from the Library like any other
-          recording. yt-dlp is fetched from its official releases (GPLv3); it is
-          not bundled.
+          Paste a YouTube link on the Home page and its audio lands in your Library,
+          ready to transcribe like any other recording.
         </p>
         {bootstrap.ytdlpDetection.executablePath ? (
           <p className="path-copy" title={bootstrap.ytdlpDetection.executablePath}>
@@ -168,12 +166,9 @@ export function StorageSettingsPage({
       <div className={`update-card ${alassReady ? "current" : "available"}`}>
         <strong>{bootstrap.alassDetection.message}</strong>
         <p className="microcopy">
-          alass realigns a subtitle file against the video&rsquo;s own audio, for releases
-          where the drift changes across the episode and a single offset cannot fix it. If
-          your subtitles are simply late or early by a constant, the offset control on the
-          Watch page is instant and needs none of this. alass is fetched from its official
-          releases (GPL-3.0) and run as a separate program; only its 3.5&nbsp;MB binary is
-          kept &mdash; it reuses the FFmpeg above rather than installing a second copy.
+          Realigns a subtitle file against the video, for when the timing drifts as the
+          episode goes on. If your subtitles are simply late or early throughout, the
+          offset on the Watch page fixes that on its own.
         </p>
         {bootstrap.alassDetection.executablePath ? (
           <p className="path-copy" title={bootstrap.alassDetection.executablePath}>
