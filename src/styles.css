@@ -3490,3 +3490,89 @@ input::placeholder {
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
+
+/* Jimaku subtitle search, on the Watch page's pre-session screen. */
+.jimaku-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.jimaku-search-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.jimaku-search-row input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text);
+}
+
+.jimaku-search-row .jimaku-episode {
+  flex: none;
+  width: 6ch;
+  text-align: right;
+}
+
+/* Capped and scrollable: a popular title returns dozens of files, and pushing the
+   Open button off-screen would be worse than a scrollbar. */
+.jimaku-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 260px;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  overflow-y: auto;
+}
+
+.jimaku-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.jimaku-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.jimaku-result:hover:not(:disabled) {
+  background: var(--surface-active);
+}
+
+.jimaku-result:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}

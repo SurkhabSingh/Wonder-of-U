@@ -66,6 +66,7 @@ fn default_settings<R: Runtime>(
         features: FeatureSettings::default(),
         translation: TranslationSettings::default(),
         scanner: ScannerSettings::default(),
+        jimaku_api_key: String::new(),
         theme: default_theme_preference(),
         indicator_position: default_indicator_position(),
         launch_at_login: false,

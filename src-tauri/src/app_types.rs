@@ -379,6 +379,10 @@ pub(crate) struct AppSettings {
     pub(crate) translation: TranslationSettings,
     #[serde(default)]
     pub(crate) scanner: ScannerSettings,
+    /// Jimaku API key (jimaku.cc/account). Flat rather than a nested group on purpose: a
+    /// single field cannot hit the trap where a partial update wipes a group's siblings.
+    #[serde(default)]
+    pub(crate) jimaku_api_key: String,
     #[serde(default = "default_theme_preference")]
     pub(crate) theme: String,
     #[serde(default = "default_indicator_position")]

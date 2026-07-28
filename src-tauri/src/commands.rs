@@ -6,6 +6,10 @@ use crate::{
     app_types::SharedPersistedState,
     runtime_assets::detect_local_mpv,
     anki::{lookup_term_inner, mine_watched_line_inner, LookupResult},
+    jimaku::{
+        download_file, entry_files, sanitize_subtitle_file_name, search_entries, JimakuEntry,
+        JimakuFile,
+    },
     scanner_overlay::{set_scanner_overlay_enabled, set_scanner_popup_open},
     watch::{
         seek_watch_session as seek_watch_session_inner,
@@ -418,6 +422,84 @@ pub(crate) async fn sync_watch_subtitles(
 pub(crate) fn download_recommended_alass(app: AppHandle) -> Result<AppBootstrap, String> {
     download_recommended_alass_inner(&app)?;
     build_app_bootstrap(&app)
+}
+
+fn jimaku_api_key(app: &AppHandle) -> Result<String, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not read the app settings.".to_string())?;
+    Ok(persisted.settings.jimaku_api_key.clone())
+}
+
+/// Searches Jimaku for a title.
+#[tauri::command]
+pub(crate) async fn jimaku_search(
+    app: AppHandle,
+    query: String,
+) -> Result<Vec<JimakuEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let key = jimaku_api_key(&app)?;
+        search_entries(&key, &query)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Lists an entry's subtitle files, optionally narrowed to an episode.
+#[tauri::command]
+pub(crate) async fn jimaku_files(
+    app: AppHandle,
+    entry_id: i64,
+    episode: Option<u32>,
+) -> Result<Vec<JimakuFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let key = jimaku_api_key(&app)?;
+        entry_files(&key, entry_id, episode)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Downloads a Jimaku subtitle file next to the video, and returns where it landed.
+///
+/// Saved beside the video rather than into a temp directory because it is the user's file
+/// now: they will re-open it, and alass will write its corrected copy alongside.
+#[tauri::command]
+pub(crate) async fn jimaku_download(
+    app: AppHandle,
+    url: String,
+    file_name: String,
+    video_path: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let key = jimaku_api_key(&app)?;
+        let content = download_file(&key, &url)?;
+
+        let directory = video_path
+            .as_deref()
+            .map(Path::new)
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .map_or_else(
+                || {
+                    let persisted_state = app.state::<SharedPersistedState>();
+                    let persisted = persisted_state
+                        .0
+                        .lock()
+                        .map_err(|_| "Could not read the app settings.".to_string())?;
+                    Ok::<_, String>(std::path::PathBuf::from(&persisted.settings.output_directory))
+                },
+                Ok,
+            )?;
+
+        let target = directory.join(sanitize_subtitle_file_name(&file_name));
+        std::fs::write(&target, content)
+            .map_err(|error| format!("The subtitle file could not be saved: {error}"))?;
+        Ok(target.display().to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Turns the scannable subtitle overlay over mpv on or off.

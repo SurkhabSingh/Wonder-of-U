@@ -7,6 +7,7 @@ mod app_types;
 mod asset_downloads;
 mod commands;
 mod desktop_shell;
+mod jimaku;
 mod recording;
 mod recording_indicator;
 mod recording_library;
@@ -109,6 +110,9 @@ pub fn run() {
             set_watch_subtitle_delay,
             sync_watch_subtitles,
             download_recommended_alass,
+            jimaku_search,
+            jimaku_files,
+            jimaku_download,
             create_anki_note_type,
             play_recording,
             read_recording_texts,

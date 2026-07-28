@@ -167,6 +167,9 @@ pub(crate) fn normalize_settings<R: Runtime>(
             reading_font_family: normalize_font_family(&settings.scanner.reading_font_family),
             reading_font_size_px: settings.scanner.reading_font_size_px.clamp(12, 32),
         },
+        // Format only, as with every other opaque credential-shaped value: trim it, cap it,
+        // and let Jimaku be the judge of whether it is valid.
+        jimaku_api_key: settings.jimaku_api_key.trim().chars().take(200).collect(),
         theme: theme.into(),
         indicator_position: indicator_position.into(),
         launch_at_login: settings.launch_at_login,

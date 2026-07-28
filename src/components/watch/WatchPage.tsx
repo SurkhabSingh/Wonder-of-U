@@ -5,6 +5,7 @@ import { ThemedSelect } from "../ui/ThemedSelect";
 import { SubtitleListPane } from "./SubtitleListPane";
 import { ScannableText } from "../scanner/ScannableText";
 import { SubtitleOffsetField } from "./SubtitleOffsetField";
+import { JimakuSearchPanel } from "./JimakuSearchPanel";
 import type { RecordingSegment, ScannerSettings, WatchSnapshot } from "../../types";
 
 // How the scan gesture reads in the user's own configuration.
@@ -65,6 +66,8 @@ export function WatchPage({
   scanner,
   onToggleOverlay,
   onSetSubtitleDelay,
+  hasJimakuKey,
+  onOpenScannerSettings,
   onSyncSubtitles,
   isSyncing,
   syncResult,
@@ -98,6 +101,8 @@ export function WatchPage({
   scanner: ScannerSettings;
   onToggleOverlay: (enabled: boolean) => void;
   onSetSubtitleDelay: (delayMs: number) => void;
+  hasJimakuKey: boolean;
+  onOpenScannerSettings: () => void;
   /// Undefined when there is no sidecar file to realign — an embedded track has no file of
   /// its own, and alass needs one to rewrite.
   onSyncSubtitles: (() => void) | undefined;
@@ -170,6 +175,13 @@ export function WatchPage({
           Leave subtitles empty if the file already has them built in &mdash; the track is
           read straight out of the container.
         </p>
+
+        <JimakuSearchPanel
+          hasApiKey={hasJimakuKey}
+          videoPath={videoPath}
+          onDownloaded={setSubtitlePath}
+          onOpenSettings={onOpenScannerSettings}
+        />
 
         <div className="panel-actions">
           <button

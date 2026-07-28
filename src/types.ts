@@ -108,6 +108,19 @@ export type ScannerSettings = {
   readingFontSizePx: number;
 };
 
+export type JimakuEntry = {
+  id: number;
+  name: string | null;
+  englishName: string | null;
+  japaneseName: string | null;
+};
+
+export type JimakuFile = {
+  name: string;
+  url: string;
+  size: number | null;
+};
+
 // Where the global recording-indicator toast is anchored on screen. Must stay in
 // lockstep with the six values the Rust `normalize_indicator_position` accepts.
 export type IndicatorPosition =
@@ -126,6 +139,9 @@ export type AppSettings = {
   features: FeatureSettings;
   translation: TranslationSettings;
   scanner: ScannerSettings;
+  // jimaku.cc API key. Flat rather than a nested group: a single field cannot hit the
+  // trap where a partial update wipes a group's siblings.
+  jimakuApiKey: string;
   theme: ThemePreference;
   indicatorPosition: IndicatorPosition;
   launchAtLogin: boolean;

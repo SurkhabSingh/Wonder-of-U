@@ -368,6 +368,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       readingFontFamily: "",
       readingFontSizePx: 17,
     },
+    jimakuApiKey: "",
     theme: "system",
     indicatorPosition: "top-center",
     launchAtLogin: false,

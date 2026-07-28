@@ -618,6 +618,8 @@ function App() {
                 void watchSubtitles.load(videoPath, subtitlePath, null);
               }}
               onSetSubtitleDelay={(delayMs) => void watch.setSubtitleDelay(delayMs)}
+              hasJimakuKey={settingsDraft.jimakuApiKey.trim().length > 0}
+              onOpenScannerSettings={() => openSettingsSection("scanner")}
               isSyncing={isSyncingSubtitles}
               syncResult={watchSyncResult}
               // Only a sidecar file can be realigned: alass rewrites a subtitle file, and an

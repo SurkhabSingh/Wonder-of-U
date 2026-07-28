@@ -206,6 +206,44 @@ export function ScannerSettingsPage({
           />
         </label>
       </div>
+
+      <header className="panel-header">
+        <div>
+          <p className="panel-kicker">Settings</p>
+          <h2>Jimaku</h2>
+        </div>
+      </header>
+
+      <div className="info-note">
+        <p className="microcopy">
+          A key from <strong>jimaku.cc/account</strong> lets the Watch page search Jimaku for
+          Japanese subtitles and save them beside your video. Personal-use API, limited to 25
+          requests a minute &mdash; that limit is reported as-is rather than retried behind
+          your back.
+        </p>
+      </div>
+
+      <div className="settings-grid">
+        <label className="field">
+          <span className="field-label-with-help">
+            <span>API key</span>
+            <TooltipBadge
+              label="?"
+              description="Stored in this app's settings file in plain text, like every other key here. Leave it empty to hide the Jimaku search entirely."
+            />
+          </span>
+          <input
+            type="password"
+            value={settingsDraft.jimakuApiKey}
+            placeholder="Paste your Jimaku API key"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) =>
+              onUpdateSettings({ jimakuApiKey: event.currentTarget.value })
+            }
+          />
+        </label>
+      </div>
     </>
   );
 }
