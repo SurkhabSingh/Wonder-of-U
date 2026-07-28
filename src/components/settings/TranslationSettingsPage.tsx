@@ -85,7 +85,6 @@ export function TranslationSettingsPage({
     <>
       <header className="panel-header">
         <div>
-          <p className="panel-kicker">Settings</p>
           <h2>Translation</h2>
         </div>
       </header>

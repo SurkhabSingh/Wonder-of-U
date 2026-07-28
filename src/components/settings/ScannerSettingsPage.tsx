@@ -37,7 +37,6 @@ export function ScannerSettingsPage({
     <>
       <header className="panel-header">
         <div>
-          <p className="panel-kicker">Settings</p>
           <h2>Dictionary &amp; Reading</h2>
         </div>
       </header>
@@ -208,7 +207,6 @@ export function ScannerSettingsPage({
 
       <header className="panel-header">
         <div>
-          <p className="panel-kicker">Settings</p>
           <h2>Jimaku</h2>
         </div>
       </header>

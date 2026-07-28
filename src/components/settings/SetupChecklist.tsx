@@ -76,7 +76,6 @@ export function SetupChecklist({
       <article className="panel settings-card setup-checklist">
         <header className="panel-header">
           <div>
-            <p className="panel-kicker">Setup</p>
             <h2>Guided setup</h2>
           </div>
           <span className={`setup-progress ${summary.allDone ? "complete" : ""}`}>

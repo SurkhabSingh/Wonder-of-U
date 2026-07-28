@@ -69,7 +69,6 @@ export function AnkiMappingSettingsPage({
     <>
       <header className="panel-header">
         <div>
-          <p className="panel-kicker">Anki</p>
           <h2>Card Mapping</h2>
         </div>
         <div className="panel-actions">

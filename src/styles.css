@@ -2706,6 +2706,18 @@ input::placeholder {
   transition: clip-path 90ms linear;
 }
 
+/* A heading with its explanation badge beside it. The badge holds what the section is
+   for; the status chip on the far side of the header holds whether it works. */
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.section-heading h2 {
+  margin: 0;
+}
+
 .home-record-heading {
   display: flex;
   align-items: center;

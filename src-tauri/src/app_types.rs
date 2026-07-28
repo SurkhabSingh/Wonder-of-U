@@ -662,7 +662,7 @@ impl Default for FfmpegDetection {
             status: "notFound".into(),
             executable_path: None,
             managed: false,
-            message: "Install app-managed FFmpeg to manually convert transcribed WAV recordings into MP3."
+            message: "Not set up yet. Download it to convert transcribed recordings to MP3."
                 .into(),
         }
     }
@@ -681,7 +681,7 @@ impl Default for AlassDetection {
         Self {
             status: "notFound".into(),
             executable_path: None,
-            message: "alass is not installed. Download it to align out-of-sync subtitles automatically.".into(),
+            message: "Not set up yet. Download it to align out-of-sync subtitles automatically.".into(),
         }
     }
 }
@@ -701,7 +701,7 @@ impl Default for YtdlpDetection {
             status: "notFound".into(),
             executable_path: None,
             managed: false,
-            message: "Install app-managed yt-dlp to import audio from YouTube and other sites."
+            message: "Not set up yet. Download it to import audio from YouTube."
                 .into(),
         }
     }

@@ -1,4 +1,3 @@
-import { fileNameFromPath } from "../../lib/format";
 import type {
   AppBootstrap,
   BusyAction,
@@ -6,6 +5,7 @@ import type {
 } from "../../types";
 import { UpdateResultCard } from "../ui/UpdateResultCard";
 import { DownloadProgressCard } from "./DownloadProgressCard";
+import { CapabilitySection } from "./CapabilitySection";
 
 export function StorageSettingsPage({
   bootstrap,
@@ -38,173 +38,123 @@ export function StorageSettingsPage({
     ytdlpUpdateResult?.status === "available"
       ? ytdlpUpdateResult.latestVersion
       : null;
+  const ffmpegReady = bootstrap.ffmpegDetection.status === "ready";
   return (
     <>
-      <header className="panel-header">
-        <div>
-          <p className="panel-kicker">Storage</p>
-          <h2>MP3 Compression</h2>
-        </div>
-        <span
-          className={`status-chip status-chip-${
-            bootstrap.ffmpegDetection.status === "ready" ? "success" : "warning"
-          }`}
-          title={bootstrap.ffmpegDetection.message}
-        >
-          {bootstrap.ffmpegDetection.status === "ready" ? "Ready" : "Missing"}
-        </span>
-      </header>
-
-      <div
-        className={`update-card ${
-          bootstrap.ffmpegDetection.status === "ready" ? "current" : "available"
-        }`}
+      <CapabilitySection
+        title="MP3 Compression"
+        ready={ffmpegReady}
+        callToAction={bootstrap.ffmpegDetection.message}
+        help={
+          "Recordings are kept as WAV while they are transcribed. Once a recording has a " +
+          "transcript you can convert it to MP3 from the Library, one at a time or in bulk, " +
+          "and cards already pushed to Anki keep working. The action appears once you turn " +
+          "on manual MP3 conversion in App Preferences."
+        }
       >
-        <strong>{bootstrap.ffmpegDetection.message}</strong>
-        <p className="microcopy">
-          Wonder of U keeps WAV audio for transcription because that is the safest
-          input path for Whisper. After a transcript exists, you can convert
-          individual recordings, selected recordings, or all available WAV
-          recordings to MP3 from the Library. If a card was already pushed to
-          Anki, converting the local file later will not break that existing Anki
-          card because Anki keeps its own copied media file. The Convert to MP3
-          action stays hidden until you enable manual MP3 conversion in App
-          Preferences.
-        </p>
-        {bootstrap.ffmpegDetection.executablePath ? (
-          <p className="path-copy" title={bootstrap.ffmpegDetection.executablePath}>
-            {fileNameFromPath(bootstrap.ffmpegDetection.executablePath)}
-          </p>
-        ) : null}
-      </div>
+        {ffmpegReady ? null : (
+          <div className="action-row inline-actions">
+            <button
+              type="button"
+              onClick={() => void onDownloadRecommendedFfmpeg()}
+              disabled={downloadIsActive || busyAction === "downloadFfmpeg"}
+            >
+              Download
+            </button>
+          </div>
+        )}
+        <DownloadProgressCard
+          snapshot={bootstrap.modelDownload}
+          kind="ffmpeg"
+          downloadIsActive={downloadIsActive}
+          onTogglePause={() => void onToggleDownloadPause()}
+          onCancel={() => void onCancelDownload()}
+        />
+      </CapabilitySection>
 
-      {bootstrap.ffmpegDetection.status !== "ready" ? (
+      <CapabilitySection
+        title="YouTube Import"
+        ready={ytdlpReady}
+        callToAction={bootstrap.ytdlpDetection.message}
+        help={
+          "Paste a YouTube link on the Home page and its audio lands in your Library, ready " +
+          "to transcribe like any other recording."
+        }
+      >
+        <div className="action-row inline-actions">
+          {ytdlpReady ? (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void onCheckYtdlpUpdate()}
+              disabled={busyAction === "checkYtdlpUpdate"}
+            >
+              Check for updates
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void onDownloadRecommendedYtdlp()}
+              disabled={downloadIsActive || busyAction === "downloadYtdlp"}
+            >
+              Download
+            </button>
+          )}
+        </div>
+        <UpdateResultCard result={ytdlpUpdateResult} />
+        {/* The install for an update the check turned up. This and the progress bar below
+            used to render at the very bottom of the page, under Subtitle Sync, so the
+            result of checking appeared here and the button to act on it appeared two
+            sections away. */}
+        {ytdlpReady && ytdlpUpdateVersion ? (
+          <div className="action-row compact-actions">
+            <button
+              type="button"
+              onClick={() => void onDownloadRecommendedYtdlp()}
+              disabled={downloadIsActive || busyAction === "downloadYtdlp"}
+            >
+              Update to {ytdlpUpdateVersion}
+            </button>
+          </div>
+        ) : null}
+        <DownloadProgressCard
+          snapshot={bootstrap.modelDownload}
+          kind="ytdlp"
+          downloadIsActive={downloadIsActive}
+          onTogglePause={() => void onToggleDownloadPause()}
+          onCancel={() => void onCancelDownload()}
+        />
+      </CapabilitySection>
+
+      <CapabilitySection
+        title="Subtitle Sync"
+        ready={alassReady}
+        missingLabel="Optional"
+        callToAction={bootstrap.alassDetection.message}
+        help={
+          "Realigns a subtitle file against the video, for when the timing drifts as the " +
+          "episode goes on. If your subtitles are simply late or early throughout, the " +
+          "offset on the Watch page fixes that on its own."
+        }
+      >
         <div className="action-row inline-actions">
           <button
             type="button"
-            onClick={() => void onDownloadRecommendedFfmpeg()}
-            disabled={downloadIsActive || busyAction === "downloadFfmpeg"}
+            className={alassReady ? "secondary" : undefined}
+            onClick={() => void onDownloadRecommendedAlass()}
+            disabled={downloadIsActive || busyAction === "downloadAlass"}
           >
-            Download FFmpeg
+            {alassReady ? "Re-download" : "Download"}
           </button>
         </div>
-      ) : null}
-      <DownloadProgressCard
-        snapshot={bootstrap.modelDownload}
-        kind="ffmpeg"
-        downloadIsActive={downloadIsActive}
-        onTogglePause={() => void onToggleDownloadPause()}
-        onCancel={() => void onCancelDownload()}
-      />
-
-      <header className="panel-header">
-        <div>
-          <p className="panel-kicker">Storage</p>
-          <h2>YouTube Import</h2>
-        </div>
-        <span
-          className={`status-chip status-chip-${ytdlpReady ? "success" : "warning"}`}
-          title={bootstrap.ytdlpDetection.message}
-        >
-          {ytdlpReady ? "Ready" : "Missing"}
-        </span>
-      </header>
-
-      <div className={`update-card ${ytdlpReady ? "current" : "available"}`}>
-        <strong>
-          {bootstrap.ytdlpDetection.message ||
-            (ytdlpReady
-              ? "yt-dlp is installed and ready to fetch YouTube audio."
-              : "Install yt-dlp to import audio from a YouTube link.")}
-        </strong>
-        <p className="microcopy">
-          Paste a YouTube link on the Home page and its audio lands in your Library,
-          ready to transcribe like any other recording.
-        </p>
-        {bootstrap.ytdlpDetection.executablePath ? (
-          <p className="path-copy" title={bootstrap.ytdlpDetection.executablePath}>
-            {fileNameFromPath(bootstrap.ytdlpDetection.executablePath)}
-          </p>
-        ) : null}
-      </div>
-
-      <div className="action-row inline-actions">
-        {ytdlpReady ? (
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void onCheckYtdlpUpdate()}
-            disabled={busyAction === "checkYtdlpUpdate"}
-          >
-            Update yt-dlp
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void onDownloadRecommendedYtdlp()}
-            disabled={downloadIsActive || busyAction === "downloadYtdlp"}
-          >
-            Download yt-dlp
-          </button>
-        )}
-      </div>
-      <UpdateResultCard result={ytdlpUpdateResult} />
-
-      <header className="panel-header">
-        <div>
-          <p className="panel-kicker">Storage</p>
-          <h2>Subtitle Sync</h2>
-        </div>
-        <span
-          className={`status-chip status-chip-${alassReady ? "success" : "warning"}`}
-          title={bootstrap.alassDetection.message}
-        >
-          {alassReady ? "Ready" : "Optional"}
-        </span>
-      </header>
-
-      <div className={`update-card ${alassReady ? "current" : "available"}`}>
-        <strong>{bootstrap.alassDetection.message}</strong>
-        <p className="microcopy">
-          Realigns a subtitle file against the video, for when the timing drifts as the
-          episode goes on. If your subtitles are simply late or early throughout, the
-          offset on the Watch page fixes that on its own.
-        </p>
-        {bootstrap.alassDetection.executablePath ? (
-          <p className="path-copy" title={bootstrap.alassDetection.executablePath}>
-            {fileNameFromPath(bootstrap.alassDetection.executablePath)}
-          </p>
-        ) : null}
-      </div>
-
-      <div className="action-row inline-actions">
-        <button
-          type="button"
-          className={alassReady ? "secondary" : undefined}
-          onClick={() => void onDownloadRecommendedAlass()}
-          disabled={downloadIsActive || busyAction === "downloadAlass"}
-        >
-          {alassReady ? "Re-download alass" : "Download alass"}
-        </button>
-      </div>
-      {ytdlpReady && ytdlpUpdateVersion ? (
-        <div className="action-row compact-actions">
-          <button
-            type="button"
-            onClick={() => void onDownloadRecommendedYtdlp()}
-            disabled={downloadIsActive || busyAction === "downloadYtdlp"}
-          >
-            Download {ytdlpUpdateVersion}
-          </button>
-        </div>
-      ) : null}
-      <DownloadProgressCard
-        snapshot={bootstrap.modelDownload}
-        kind="ytdlp"
-        downloadIsActive={downloadIsActive}
-        onTogglePause={() => void onToggleDownloadPause()}
-        onCancel={() => void onCancelDownload()}
-      />
+        <DownloadProgressCard
+          snapshot={bootstrap.modelDownload}
+          kind="alass"
+          downloadIsActive={downloadIsActive}
+          onTogglePause={() => void onToggleDownloadPause()}
+          onCancel={() => void onCancelDownload()}
+        />
+      </CapabilitySection>
     </>
   );
 }

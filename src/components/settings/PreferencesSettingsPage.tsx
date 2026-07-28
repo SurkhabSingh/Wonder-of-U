@@ -30,7 +30,6 @@ export function PreferencesSettingsPage({
     <>
       <header className="panel-header">
         <div>
-          <p className="panel-kicker">Settings</p>
           <h2>App Preferences</h2>
         </div>
       </header>

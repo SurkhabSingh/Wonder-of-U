@@ -1,5 +1,5 @@
 import { fileNameFromPath, formatProgressBytes } from "../../lib/format";
-import type { ModelDownloadSnapshot } from "../../types";
+import type { DownloadKind, ModelDownloadSnapshot } from "../../types";
 
 export function DownloadProgressCard({
   snapshot,
@@ -9,7 +9,7 @@ export function DownloadProgressCard({
   onCancel,
 }: {
   snapshot: ModelDownloadSnapshot;
-  kind: "runtime" | "model" | "ffmpeg" | "ytdlp";
+  kind: DownloadKind;
   downloadIsActive: boolean;
   onTogglePause: () => void;
   onCancel: () => void;
@@ -54,7 +54,7 @@ export function DownloadProgressCard({
               snapshot.status === "starting" || snapshot.status === "cancelling"
             }
           >
-            {snapshot.status === "paused" ? "Resume Download" : "Pause Download"}
+            {snapshot.status === "paused" ? "Resume download" : "Pause download"}
           </button>
           <button
             type="button"

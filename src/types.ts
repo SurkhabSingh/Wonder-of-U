@@ -257,8 +257,17 @@ export type WhisperAssetUpdateResult = {
   latestVersion: string | null;
 };
 
+/// Everything the app can download, exactly as `asset_downloads` reports it.
+///
+/// This was a bare `string` on the snapshot and a hand-written union on the progress card,
+/// with nothing tying the two together — so `alass` was added to the backend and to this
+/// page without anyone noticing that no progress card could ever match it. Downloading it
+/// showed no bar, no size, and no way to cancel. One name for the set means the card and
+/// the payload cannot drift apart again.
+export type DownloadKind = "runtime" | "model" | "ffmpeg" | "ytdlp" | "alass";
+
 export type ModelDownloadSnapshot = {
-  kind: string | null;
+  kind: DownloadKind | null;
   status: string;
   message: string;
   downloadedBytes: number;

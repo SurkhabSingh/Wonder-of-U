@@ -30,7 +30,6 @@ export function WhisperStatusSettingsPage({
     <>
       <header className="panel-header">
         <div>
-          <p className="panel-kicker">Whisper Setup</p>
           <h2>Whisper</h2>
         </div>
         <span
