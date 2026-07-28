@@ -47,10 +47,27 @@ const SCANNER_STATE_EVENT: &str = "scanner-overlay-state";
 ///
 /// 16 ms, not the watch panel's 250 ms: this drives whether the pointer belongs to the
 /// overlay or to mpv, and a quarter-second of lag there is the difference between "hold
-/// Shift and hover" and "hold Shift, wait, then hover". It costs nothing that matters —
-/// the sampled calls are ~3 µs and, crucially, **none of them touch mpv's IPC socket or the
-/// session mutex**, so the mine hotkey and the watch poll are unaffected.
+/// Shift and hover" and "hold Shift, wait, then hover".
+///
+/// It costs nothing that matters only because every call on this path is lock-free Win32:
+/// the pid comes from an atomic mirror rather than the session mutex, and the modifier is
+/// cached rather than read from settings. Both were originally not true, and reading them
+/// through their mutexes would have let this thread stall behind `watch_snapshot`'s nine
+/// blocking round trips — freezing click-through in whatever state it happened to be in.
 const TRACK_INTERVAL: Duration = Duration::from_millis(16);
+
+/// How long the tracker sleeps while the overlay is switched off. The thread lives for the
+/// app's life, and waking 60 times a second to read one atomic and go back to sleep is a
+/// real cost on a laptop for a feature that is off by default.
+const IDLE_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How often the configured modifier is re-read from settings, in ticks.
+///
+/// Reading it every tick meant taking the global settings mutex — the same one
+/// `save_settings` holds while it clones the whole persisted blob — sixty times a second,
+/// and allocating a String each time. Changing the scan key is a settings action, so a
+/// delay of up to a second before it takes effect is imperceptible.
+const MODIFIER_REFRESH_TICKS: u32 = 60;
 
 /// Whether the overlay is switched on. Off by default: mpv keeps its own styled `.ass`
 /// rendering unless the user asks for the scanner, so nothing that works today changes.
@@ -231,10 +248,18 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
         return;
     }
     let app = app.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(TRACK_INTERVAL);
+    std::thread::spawn(move || {
+        let mut modifier = ScanModifier::from_setting(&configured_modifier(&app));
+        let mut ticks: u32 = 0;
+        loop {
         if !ENABLED.load(Ordering::Relaxed) {
+            std::thread::sleep(IDLE_INTERVAL);
             continue;
+        }
+        std::thread::sleep(TRACK_INTERVAL);
+        ticks = ticks.wrapping_add(1);
+        if ticks.is_multiple_of(MODIFIER_REFRESH_TICKS) {
+            modifier = ScanModifier::from_setting(&configured_modifier(&app));
         }
         let Some(pid) = watch_session_pid() else {
             hide_overlay(&app);
@@ -251,8 +276,8 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
             hide_overlay(&app);
             continue;
         };
-        let scanning = ScanModifier::from_setting(&configured_modifier(&app)).is_held();
-        track_once(&app, rect, scanning, escape_is_held());
+        track_once(&app, rect, modifier.is_held(), escape_is_held());
+        }
     });
 }
 

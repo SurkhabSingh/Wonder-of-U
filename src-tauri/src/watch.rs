@@ -16,7 +16,10 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::Path,
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -111,6 +114,21 @@ struct MpvSession {
 /// The single running session, if any. Watch & Mine is deliberately one-player-at-a-time:
 /// "mine the line I am hearing" has no meaning with two videos open.
 static SESSION: Mutex<Option<MpvSession>> = Mutex::new(None);
+
+/// mpv's process id, mirrored outside the session mutex.
+///
+/// The scanner overlay's tracker asks for this 60 times a second to find mpv's window, and
+/// it must never block: it owns click-through, so a stall there leaves the overlay taking
+/// the mouse when it should not — or refusing it when it should. Reading it through
+/// `SESSION` would do exactly that, because `watch_snapshot` holds that lock across NINE
+/// blocking IPC round trips, each able to wait out `REQUEST_TIMEOUT` if mpv stops
+/// answering. Zero means no session.
+static SESSION_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Kept in lockstep with `SESSION` — every place that assigns the session assigns this.
+fn set_session_pid(pid: Option<u32>) {
+    SESSION_PID.store(pid.unwrap_or(0), Ordering::Relaxed);
+}
 
 impl MpvSession {
     /// Kills mpv and drops the connection. Called on stop, and on any launch so a stale
@@ -354,6 +372,7 @@ pub(crate) fn start_watch_session(
     if let Some(existing) = session_guard.as_mut() {
         existing.shut_down();
     }
+    set_session_pid(None);
     *session_guard = None;
 
     let endpoint = ipc_endpoint();
@@ -399,6 +418,7 @@ pub(crate) fn start_watch_session(
         }
     };
 
+    set_session_pid(Some(child.id()));
     *session_guard = Some(MpvSession { child, connection });
     Ok(())
 }
@@ -417,6 +437,7 @@ pub(crate) fn watch_snapshot() -> Result<WatchSnapshot, String> {
 
     // The user closing mpv is the normal way to stop watching.
     if matches!(session.child.try_wait(), Ok(Some(_))) {
+        set_session_pid(None);
         *session_guard = None;
         return Ok(WatchSnapshot::default());
     }
@@ -448,6 +469,7 @@ pub(crate) fn watch_snapshot() -> Result<WatchSnapshot, String> {
     // process is alive; drop the session so the UI stops claiming to be connected.
     if snapshot.path.is_none() && snapshot.position_ms.is_none() && snapshot.duration_ms.is_none() {
         session.shut_down();
+        set_session_pid(None);
         *session_guard = None;
         return Ok(WatchSnapshot::default());
     }
@@ -497,12 +519,13 @@ pub(crate) fn set_watch_subtitle_visibility(visible: bool) -> Result<(), String>
 /// Returned rather than the window handle itself because the handle is not stable — mpv
 /// owns several top-level windows and the video one is identified by class and visibility
 /// at the moment it is asked for, not once at launch.
+///
+/// Lock-free by design; see [`SESSION_PID`].
 pub(crate) fn watch_session_pid() -> Option<u32> {
-    SESSION
-        .lock()
-        .ok()?
-        .as_ref()
-        .map(|session| session.child.id())
+    match SESSION_PID.load(Ordering::Relaxed) {
+        0 => None,
+        pid => Some(pid),
+    }
 }
 
 pub(crate) fn stop_watch_session() -> Result<(), String> {
@@ -512,6 +535,7 @@ pub(crate) fn stop_watch_session() -> Result<(), String> {
     if let Some(session) = session_guard.as_mut() {
         session.shut_down();
     }
+    set_session_pid(None);
     *session_guard = None;
     Ok(())
 }
