@@ -199,15 +199,19 @@ function App() {
     setIsSyncingSubtitles(true);
     setWatchSyncResult(null);
     try {
-      const syncedPath = await invoke<string>("sync_watch_subtitles", {
-        videoPath,
-        subtitlePath: watchSubtitlePath,
-      });
-      setWatchSubtitlePath(syncedPath);
-      await watchSubtitles.load(videoPath, syncedPath, null);
+      const synced = await invoke<{ path: string; summary: string }>(
+        "sync_watch_subtitles",
+        { videoPath, subtitlePath: watchSubtitlePath },
+      );
+      setWatchSubtitlePath(synced.path);
+      await watchSubtitles.load(videoPath, synced.path, null);
+      // alass's own report of what it shifted. Shown rather than swallowed: a sync can
+      // succeed and still be wrong, and this is the only thing that says by how much.
       setWatchSyncResult({
         ok: true,
-        message: `Subtitles realigned — saved as ${fileNameFromPath(syncedPath)} and loaded.`,
+        message: `Saved as ${fileNameFromPath(synced.path)} and loaded.${
+          synced.summary ? ` ${synced.summary}` : ""
+        }`,
       });
     } catch (caught) {
       setWatchSyncResult({

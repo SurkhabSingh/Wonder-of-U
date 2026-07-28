@@ -370,6 +370,14 @@ pub(crate) async fn set_watch_subtitle_delay(delay_ms: i64) -> Result<(), String
         .map_err(|error| error.to_string())?
 }
 
+/// Where the synced file landed, and what alass reported doing to get there.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SubtitleSyncResult {
+    path: String,
+    summary: String,
+}
+
 /// Realigns a subtitle file against the video's audio with alass, returning the new path.
 ///
 /// For the harder fault, where the drift varies across the episode and no single offset
@@ -379,7 +387,7 @@ pub(crate) async fn sync_watch_subtitles(
     app: AppHandle,
     video_path: String,
     subtitle_path: String,
-) -> Result<String, String> {
+) -> Result<SubtitleSyncResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let settings = {
             let persisted_state = app.state::<SharedPersistedState>();
@@ -389,14 +397,17 @@ pub(crate) async fn sync_watch_subtitles(
                 .map_err(|_| "Could not read the app settings.".to_string())?;
             persisted.settings.clone()
         };
-        let synced =
+        let outcome =
             sync_subtitles_with_alass(&settings, Path::new(&video_path), Path::new(&subtitle_path))?;
-        let synced = synced.display().to_string();
+        let synced = outcome.output_path.display().to_string();
         // Hand the corrected file straight to the player. Reporting success while mpv keeps
         // showing the old subtitles would be the worst outcome: the user would trust a fix
         // they are not actually watching.
         add_watch_subtitle_file(&synced)?;
-        Ok(synced)
+        Ok(SubtitleSyncResult {
+            path: synced,
+            summary: outcome.summary,
+        })
     })
     .await
     .map_err(|error| error.to_string())?

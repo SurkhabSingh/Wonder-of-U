@@ -60,12 +60,33 @@ fn managed_alass_path(settings: &AppSettings) -> Option<PathBuf> {
         .find(|candidate| managed_binary_is_present(candidate))
 }
 
+/// What alass reported doing, alongside where it wrote.
+///
+/// The summary is surfaced rather than swallowed because a sync can succeed and still be
+/// wrong, and "shifted block of 3 subtitles by -0:00:05.000" is the difference between a
+/// user who can see what happened and one staring at subtitles that are still off.
+pub(crate) struct SyncOutcome {
+    pub(crate) output_path: PathBuf,
+    pub(crate) summary: String,
+}
+
+/// Pulls the human-readable lines out of alass's output, dropping its progress bar.
+fn summarize_alass_output(stdout: &str, stderr: &str) -> String {
+    let lines = stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(str::trim)
+        .filter(|line| line.starts_with("shifted block") || line.starts_with("warn:"))
+        .collect::<Vec<_>>();
+    lines.join(" · ")
+}
+
 /// Aligns `subtitle_path` to `video_path`, returning where the corrected file was written.
 pub(crate) fn sync_subtitles_with_alass(
     settings: &AppSettings,
     video_path: &Path,
     subtitle_path: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<SyncOutcome, String> {
     if !video_path.exists() {
         return Err(format!("The video is no longer at {}", video_path.display()));
     }
@@ -121,12 +142,34 @@ pub(crate) fn sync_subtitles_with_alass(
         return Err("alass finished without writing a synced file — the video may have no speech to align against.".into());
     }
 
-    Ok(output_path)
+    let summary = summarize_alass_output(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    Ok(SyncOutcome {
+        output_path,
+        summary,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_summary_keeps_the_shifts_and_drops_the_progress_bar() {
+        let stdout = "synchronizing 'a.srt' to reference file 'v.mkv'...
+             1 / 3 [====>----] 33.33 % 61728.40/s 0s
+             shifted block of 3 subtitles with length 0:00:35.000 by -0:00:05.000
+";
+        let stderr = "warn: some subtitles now have negative timings
+";
+        let summary = summarize_alass_output(stdout, stderr);
+        assert!(summary.contains("shifted block of 3 subtitles"));
+        assert!(summary.contains("warn: some subtitles"));
+        assert!(!summary.contains("%"));
+        assert!(!summary.contains("synchronizing"));
+    }
 
     #[test]
     fn the_synced_file_sits_beside_the_original() {

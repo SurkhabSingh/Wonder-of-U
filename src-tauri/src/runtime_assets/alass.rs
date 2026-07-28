@@ -118,14 +118,32 @@ pub(crate) fn detect_local_alass(settings: &AppSettings) -> AlassDetection {
 /// **video**, because alass aligns against voice activity in the real audio — which is also
 /// why it can fix drift that varies across an episode, where a constant `sub-delay` cannot.
 ///
+/// **`--split-penalty` is deliberately left at alass's default.** Raising it to 1000 makes
+/// every line shift by one offset, which is *exact* for a uniformly desynced file — but it
+/// was measured to be catastrophic on the case alass actually exists for. Against a
+/// reference desynced by a VARYING amount (+2s / +6s / +11s):
+///   penalty 1000: 20.1s, 39.1s, 64.1s   (wrong by tens of seconds)
+///   penalty 7:     5.0s, 20.0s, 40.1s   (near exact)
+/// Tuning for the easy case would have broken the hard one, so the default stands.
+///
 /// Kept pure so the ordering is pinned by a test rather than by whoever edits it next.
 pub(crate) fn alass_args(video: &str, incorrect_subtitles: &str, output: &str) -> Vec<String> {
     vec![
-        // Without this, a subtitle that should start before zero is silently clamped to the
-        // start of the file, which stacks several cues on top of each other. Letting the
-        // negative timestamp through and rejecting it later is more honest than a file that
-        // looks synchronised and is not.
-        "--allow-negative-timestamps".into(),
+        // The one flag that matters, and the reason the first version of this synced badly.
+        //
+        // By default alass tries to detect a framerate difference between the reference and
+        // the subtitles and rescales accordingly. That is meaningful for frame-based formats
+        // and actively harmful for the time-based ones this app deals in (.srt/.ass/.vtt),
+        // where it invents a ratio — 25/23.976 was observed on material where nothing of the
+        // sort applied — and stretches the timings. Because it is a SCALE error the damage
+        // grows with the timestamp, so subtitles look nearly right at the start of an episode
+        // and drift steadily worse.
+        //
+        // Measured against a reference with real speech at 5s / 20s / 40s, uniformly
+        // desynced by +5s:
+        //   with guessing:    +49ms, +64ms, +84ms   (drifting)
+        //   without guessing: +85ms, +85ms, +85ms   (constant, correctable)
+        "--disable-fps-guessing".into(),
         video.to_string(),
         incorrect_subtitles.to_string(),
         output.to_string(),
@@ -175,11 +193,21 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "--allow-negative-timestamps",
+                "--disable-fps-guessing",
                 "video.mkv",
                 "wrong.srt",
                 "fixed.srt"
             ]
         );
+    }
+
+    /// Framerate guessing rescales the timings, so its error compounds with the timestamp —
+    /// the difference between "slightly late" and "unusable by the end of the episode".
+    /// It stays off; this fails if anyone drops the flag.
+    #[test]
+    fn framerate_guessing_is_always_disabled() {
+        assert!(alass_args("a.mkv", "b.srt", "c.srt")
+            .iter()
+            .any(|arg| arg == "--disable-fps-guessing"));
     }
 }
