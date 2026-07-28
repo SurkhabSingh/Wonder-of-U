@@ -486,8 +486,16 @@ input::placeholder {
   width: 100%;
   height: 100%;
   display: grid;
+  /* Rows size to their content. This is the single biggest cause of "the spacing is all
+     over the place": a grid with a definite height and no `align-content` defaults to
+     STRETCH, so every surplus pixel of window height was divided among the rows. Sections
+     grew to fill the page, which meant the same screen was spaced differently at different
+     window sizes, and an emptier page looked more generously spaced than a full one. The
+     Watch page looked worst because it has the fewest sections and so the most surplus to
+     absorb — a one-line note rendered as a 105px slab. */
+  align-content: start;
   margin: 0 auto;
-  padding: 14px 18px;
+  padding: var(--space-lg) var(--space-xl);
   overflow: hidden;
 }
 
@@ -1374,14 +1382,13 @@ input::placeholder {
 }
 
 .path-copy,
+/* Was two separate `.microcopy` rules with hardcoded 11px and 10px. Merged, and moved
+   onto the type scale and the spacing scale. */
 .microcopy {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.microcopy {
-  margin-top: 10px;
+  margin-top: var(--space-sm);
   margin-bottom: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }
 
 .path-copy {
@@ -1480,12 +1487,23 @@ input::placeholder {
 /* Neutral note surface — a flat informational block that does NOT carry the
    status-card (current/available/error) semantic. */
 .info-note {
-  margin-block: var(--space-5);
+  margin-block: var(--space-md);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-md) var(--space-lg);
   font-size: var(--text-sm);
+}
+
+/* The box hugs its text. Without this the paragraph keeps its own margins — a browser
+   default above and below for a plain <p>, or `.microcopy`'s top margin — and stacks them
+   on the box's padding, which is why a single line of guidance rendered as a tall slab. */
+.info-note > p {
+  margin-block: 0;
+}
+
+.info-note > p + p {
+  margin-top: var(--space-sm);
 }
 
 .info-note > strong {
