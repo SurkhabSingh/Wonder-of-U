@@ -232,6 +232,8 @@ export type FfmpegDetection = {
   status: string;
   executablePath: string | null;
   managed: boolean;
+  /// What the installed binary reports for itself, or null when nothing is installed.
+  version: string | null;
   message: string;
 };
 
@@ -239,6 +241,8 @@ export type YtdlpDetection = {
   status: string;
   executablePath: string | null;
   managed: boolean;
+  /// What the installed binary reports for itself, or null when nothing is installed.
+  version: string | null;
   message: string;
 };
 
@@ -246,6 +250,8 @@ export type YtdlpDetection = {
 export type AlassDetection = {
   status: string;
   executablePath: string | null;
+  /// What the installed binary reports for itself, or null when nothing is installed.
+  version: string | null;
   message: string;
 };
 
@@ -450,12 +456,17 @@ export type AppPage =
 
 // The stacked sections inside the single Settings page. Setup-checklist rows and
 // post-download navigation deep-link to one of these, scrolling it into view.
+/// A deep-link target on the settings page. Some are whole sections, some are groups
+/// inside one — the scroll handler opens whichever disclosure encloses the target, so the
+/// two kinds are interchangeable here.
 export type SettingsSection =
   | "preferences"
+  | "translation"
+  | "scanner"
+  | "jimaku"
   | "whisper"
-  | "storage"
-  | "anki"
-  | "scanner";
+  | "downloads"
+  | "anki";
 
 export type RecordingFilter =
   | "all"

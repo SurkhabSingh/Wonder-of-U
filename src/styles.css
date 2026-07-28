@@ -1411,10 +1411,6 @@ input::placeholder {
   word-break: break-word;
 }
 
-.download-section {
-  margin-top: var(--space-md);
-}
-
 .recording-actions button {
   min-height: 30px;
   padding: 5px 9px;
@@ -1425,7 +1421,6 @@ input::placeholder {
   color: var(--error) !important;
 }
 
-.installed-card,
 .update-card,
 .download-card {
   margin-block: var(--space-md);
@@ -1440,7 +1435,6 @@ input::placeholder {
   margin-top: var(--space-md);
 }
 
-.installed-row,
 .model-summary {
   display: flex;
   justify-content: space-between;
@@ -1463,11 +1457,6 @@ input::placeholder {
   font-size: var(--text-sm);
 }
 
-.installed-row .action-row {
-  flex: 0 0 auto;
-}
-
-.installed-card > strong,
 .update-card > strong {
   color: var(--text-strong);
 }
@@ -2834,7 +2823,7 @@ input::placeholder {
   display: grid;
   gap: var(--space-md);
   /* One owner for the rhythm. Six classes in here still carry vertical margins written for
-     a parent that had no `gap` — `.microcopy`, `.disclosure`, `.download-section`,
+     a parent that had no `gap` — `.microcopy`, `.disclosure`,
      `.model-summary`, `.info-note`, `.download-card` — and both applied, so measured gaps
      came out at 20-24px against the 12 this asks for. The margins stay on those classes
      because they are used outside settings too; they just stop counting in here. */
@@ -2883,6 +2872,86 @@ input::placeholder {
 
 .settings-group > * {
   margin-block: 0;
+}
+
+/* A group can be a deep-link target, so it needs the same breathing room above it that a
+   section gets when scrolled to. */
+.settings-group {
+  scroll-margin-top: var(--space-lg);
+}
+
+/* The rows of the Downloads section. Hairlines between them, no card each: they are items
+   in one list, and a card apiece was what made three of these read as three unrelated
+   places rather than one. */
+.download-list {
+  display: grid;
+}
+
+.download-row + .download-row {
+  border-top: 1px solid var(--border);
+}
+
+.download-row {
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md) 0;
+}
+
+.download-row:first-child {
+  padding-top: 0;
+}
+
+.download-row:last-child {
+  padding-bottom: 0;
+}
+
+.download-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.download-row-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.download-row-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.download-row-tool,
+.download-row-version {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+
+/* Tabular so a row of dotted version numbers does not jitter between renders. */
+.download-row-version {
+  font-variant-numeric: tabular-nums;
+}
+
+.download-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* An action that belongs to the field above it rather than to the section. */
+.field-inline-action {
+  justify-self: start;
+  min-height: 0;
+  padding: 0;
+  font-size: var(--text-xs);
+  text-align: left;
 }
 
 /* The right-hand end of a status box: a check, an install, or the note that says neither

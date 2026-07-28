@@ -11,7 +11,6 @@ import type {
   WhisperAssetUpdateResult,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
-import { ScannerSettingsPage } from "./ScannerSettingsPage";
 import { AnkiMappingSettingsPage } from "./AnkiMappingSettingsPage";
 import { PreferencesSettingsPage } from "./PreferencesSettingsPage";
 import type {
@@ -19,8 +18,7 @@ import type {
   BrowseFileField,
   SettingsUpdate,
 } from "./settingsTypes";
-import { StorageSettingsPage } from "./StorageSettingsPage";
-import { TranslationSettingsPage } from "./TranslationSettingsPage";
+import { DownloadsSettingsPage } from "./DownloadsSettingsPage";
 import { WhisperSettingsPage } from "./WhisperSettingsPage";
 
 export function SettingsPages({
@@ -108,17 +106,20 @@ export function SettingsPages({
       return;
     }
     const target = document.getElementById(`settings-${scrollTarget}`);
-    // Sections collapse when they have nothing that needs doing, so a deep link can land
-    // on a heading with its answer folded away. Opening it by clicking the summary rather
-    // than by setting `open` keeps each disclosure's own state in step — the same path a
-    // reader would take.
-    target
-      ?.querySelectorAll<HTMLElement>(
-        // Section disclosures only. Whisper nests a further `<details>` for its advanced
-        // controls, and a deep link should not fling that open as well.
-        ".settings-disclosure:not([open]) > .settings-disclosure-summary",
-      )
-      .forEach((summary) => summary.click());
+    // A target is either a whole section or a group inside one, and either way what has to
+    // open is the disclosure enclosing it — `closest` for a group, `querySelector` for a
+    // section, which is its own ancestor of nothing. Opening it by clicking the summary
+    // rather than by setting `open` keeps the disclosure's own state in step, the same path
+    // a reader would take. Whisper nests a further `<details>` for advanced controls; only
+    // the enclosing section disclosure is touched, never that one.
+    const disclosure =
+      target?.closest<HTMLElement>(".settings-disclosure") ??
+      target?.querySelector<HTMLElement>(".settings-disclosure");
+    if (disclosure instanceof HTMLDetailsElement && !disclosure.open) {
+      disclosure
+        .querySelector<HTMLElement>(":scope > .settings-disclosure-summary")
+        ?.click();
+    }
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
     onScrollTargetHandled();
   }, [activePage, scrollTarget, onScrollTargetHandled]);
@@ -130,7 +131,7 @@ export function SettingsPages({
   return (
     <div className="settings-scroll">
       <article className="panel settings-surface">
-        <section id="settings-preferences" className="settings-section">
+        <section className="settings-section">
           <PreferencesSettingsPage
             autosaveMessage={autosaveMessage}
             autosaveState={autosaveState}
@@ -168,15 +169,8 @@ export function SettingsPages({
           />
         </section>
 
-        <section id="settings-translation" className="settings-section">
-          <TranslationSettingsPage
-            onUpdateSettings={onUpdateSettings}
-            settingsDraft={settingsDraft}
-          />
-        </section>
-
-        <section id="settings-storage" className="settings-section">
-          <StorageSettingsPage
+        <section id="settings-downloads" className="settings-section">
+          <DownloadsSettingsPage
             bootstrap={bootstrap}
             busyAction={busyAction}
             downloadIsActive={downloadIsActive}
@@ -201,12 +195,6 @@ export function SettingsPages({
           />
         </section>
 
-        <section id="settings-scanner" className="settings-section">
-          <ScannerSettingsPage
-            settingsDraft={settingsDraft}
-            onUpdateSettings={onUpdateSettings}
-          />
-        </section>
       </article>
     </div>
   );

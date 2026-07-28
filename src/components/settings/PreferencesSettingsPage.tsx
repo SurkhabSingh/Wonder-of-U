@@ -9,6 +9,9 @@ import type {
 import { ThemedSelect } from "../ui/ThemedSelect";
 import type { BrowseDirectoryField, SettingsUpdate } from "./settingsTypes";
 import { SettingsDisclosure } from "./SettingsDisclosure";
+import { SettingsGroup } from "./SettingsGroup";
+import { ScannerSettingsGroups } from "./ScannerSettingsPage";
+import { TranslationSettingsGroup } from "./TranslationSettingsPage";
 
 export function PreferencesSettingsPage({
   autosaveMessage,
@@ -28,14 +31,14 @@ export function PreferencesSettingsPage({
   const confirm = useConfirm();
 
   return (
-    <SettingsDisclosure title="App Preferences" defaultOpen={false}>
-
+    <SettingsDisclosure title="App preferences" defaultOpen={false}>
       {autosaveState === "error" ? (
         <p className="autosave-error" role="alert">
           {autosaveMessage}
         </p>
       ) : null}
 
+      <SettingsGroup id="preferences" title="General">
       <div className="settings-grid">
         <label className="field">
           <span>Appearance</span>
@@ -235,6 +238,19 @@ export function PreferencesSettingsPage({
           </p>
         ) : null}
       </div>
+      </SettingsGroup>
+
+      {/* Feature settings, not app chrome — but they were sections of their own, which put
+          "which deck to mine into" at the same level as "what theme to use". */}
+      <TranslationSettingsGroup
+        onUpdateSettings={onUpdateSettings}
+        settingsDraft={settingsDraft}
+      />
+
+      <ScannerSettingsGroups
+        onUpdateSettings={onUpdateSettings}
+        settingsDraft={settingsDraft}
+      />
     </SettingsDisclosure>
   );
 }

@@ -92,7 +92,7 @@ export function useSetupActions({
       setBusyAction("downloadFfmpeg");
       const nextBootstrap = await invoke<AppBootstrap>("download_recommended_ffmpeg");
       applyBootstrap(nextBootstrap);
-      openSettingsSection("storage");
+      openSettingsSection("downloads");
     } catch (error) {
       setLoadError(errorMessage(error, "FFmpeg could not be prepared."));
     } finally {
@@ -105,7 +105,7 @@ export function useSetupActions({
       setBusyAction("downloadYtdlp");
       const nextBootstrap = await invoke<AppBootstrap>("download_recommended_ytdlp");
       applyBootstrap(nextBootstrap);
-      openSettingsSection("storage");
+      openSettingsSection("downloads");
     } catch (error) {
       setLoadError(errorMessage(error, "yt-dlp could not be prepared."));
     } finally {
@@ -118,7 +118,7 @@ export function useSetupActions({
       setBusyAction("downloadAlass");
       const nextBootstrap = await invoke<AppBootstrap>("download_recommended_alass");
       applyBootstrap(nextBootstrap);
-      openSettingsSection("storage");
+      openSettingsSection("downloads");
     } catch (error) {
       setLoadError(errorMessage(error, "alass could not be prepared."));
     } finally {

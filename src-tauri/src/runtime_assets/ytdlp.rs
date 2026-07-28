@@ -9,6 +9,7 @@ use std::os::windows::process::CommandExt;
 use crate::app_types::{AppSettings, YtdlpDetection};
 
 use super::path_probe::PathProbeCache;
+use super::versions::{probe_version, VersionCache};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -80,6 +81,11 @@ pub(crate) fn verify_ytdlp_binary(executable_path: &Path) -> Result<(), String> 
     Err(if stderr.is_empty() { stdout } else { stderr })
 }
 
+/// See `FFMPEG_VERSION` — the same trust window, for the same reason. This is the one probe
+/// whose cost is already documented: `installed_ytdlp_version` is kept out of the update path
+/// precisely because spawning frozen-Python yt-dlp costs about a second.
+static YTDLP_VERSION: VersionCache = VersionCache::new();
+
 pub(crate) fn detect_local_ytdlp(settings: &AppSettings) -> YtdlpDetection {
     let asset_directory = PathBuf::from(&settings.asset_directory);
     // Managed binary: trust its presence (see `managed_binary_is_present`) — no spawn.
@@ -91,6 +97,7 @@ pub(crate) fn detect_local_ytdlp(settings: &AppSettings) -> YtdlpDetection {
             status: "ready".into(),
             executable_path: Some(managed_path.display().to_string()),
             managed: true,
+            version: YTDLP_VERSION.probe(|| probe_version(&managed_path, "--version")),
             message: "App-managed yt-dlp is ready. You can import audio from YouTube.".into(),
         };
     }
@@ -104,6 +111,7 @@ pub(crate) fn detect_local_ytdlp(settings: &AppSettings) -> YtdlpDetection {
             status: "ready".into(),
             executable_path: Some("yt-dlp".into()),
             managed: false,
+            version: YTDLP_VERSION.probe(|| probe_version(&path_candidate, "--version")),
             message: "System yt-dlp is available. You can import audio from YouTube.".into(),
         };
     }

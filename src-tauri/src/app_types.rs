@@ -653,6 +653,9 @@ pub(crate) struct FfmpegDetection {
     pub(crate) status: String,
     pub(crate) executable_path: Option<String>,
     pub(crate) managed: bool,
+    /// What the installed binary reports for itself. `None` when nothing is installed, or
+    /// when it answered in a shape we do not recognise — see `version_from_banner`.
+    pub(crate) version: Option<String>,
     pub(crate) message: String,
 }
 
@@ -662,6 +665,7 @@ impl Default for FfmpegDetection {
             status: "notFound".into(),
             executable_path: None,
             managed: false,
+            version: None,
             message: "Not set up yet. Download it to convert transcribed recordings to MP3."
                 .into(),
         }
@@ -673,6 +677,9 @@ impl Default for FfmpegDetection {
 pub(crate) struct AlassDetection {
     pub(crate) status: String,
     pub(crate) executable_path: Option<String>,
+    /// What the installed binary reports for itself. `None` when nothing is installed, or
+    /// when it answered in a shape we do not recognise — see `version_from_banner`.
+    pub(crate) version: Option<String>,
     pub(crate) message: String,
 }
 
@@ -681,6 +688,7 @@ impl Default for AlassDetection {
         Self {
             status: "notFound".into(),
             executable_path: None,
+            version: None,
             message: "Not set up yet. Download it to align out-of-sync subtitles automatically.".into(),
         }
     }
@@ -692,6 +700,9 @@ pub(crate) struct YtdlpDetection {
     pub(crate) status: String,
     pub(crate) executable_path: Option<String>,
     pub(crate) managed: bool,
+    /// What the installed binary reports for itself. `None` when nothing is installed, or
+    /// when it answered in a shape we do not recognise — see `version_from_banner`.
+    pub(crate) version: Option<String>,
     pub(crate) message: String,
 }
 
@@ -701,6 +712,7 @@ impl Default for YtdlpDetection {
             status: "notFound".into(),
             executable_path: None,
             managed: false,
+            version: None,
             message: "Not set up yet. Download it to import audio from YouTube."
                 .into(),
         }

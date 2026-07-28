@@ -3,6 +3,7 @@ mod ffmpeg;
 mod mpv;
 mod path_probe;
 mod updates;
+mod versions;
 mod whisper;
 mod ytdlp;
 

@@ -68,7 +68,7 @@ export function AnkiMappingSettingsPage({
 
   return (
     <SettingsDisclosure
-      title="Card Mapping"
+      title="Card mapping"
       defaultOpen={displayedAnkiCatalog.status !== "ready"}
       tone={
         displayedAnkiCatalog.status === "ready"
@@ -112,24 +112,6 @@ export function AnkiMappingSettingsPage({
           disabled={busyAction === "loadAnki"}
         >
           Reconnect
-        </button>
-      </div>
-
-      <div className="info-note is-row">
-        <p className="microcopy">
-          No matching note type? Create one that plays the audio first and reveals the
-          screenshot, transcript and translation after &mdash; the fields below then map
-          themselves. If you already have it, this updates it and keeps your styling.
-        </p>
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => void handleCreateNoteType()}
-          disabled={
-            busyAction === "loadAnki" || displayedAnkiCatalog.status !== "ready"
-          }
-        >
-          Create or update
         </button>
       </div>
 
@@ -221,6 +203,19 @@ export function AnkiMappingSettingsPage({
               }
             }}
           />
+          {/* Beside the control it acts on. This was a full-width bar above every field,
+              which put a note-type action before the reader had seen a note type. */}
+          <button
+            type="button"
+            className="ghost field-inline-action"
+            onClick={() => void handleCreateNoteType()}
+            disabled={
+              busyAction === "loadAnki" || displayedAnkiCatalog.status !== "ready"
+            }
+            title="Creates a listening note type that plays the audio first and reveals the screenshot, transcript and translation after, then maps the fields below. If you already have it, this updates it and keeps your styling."
+          >
+            No match? Create or update it
+          </button>
         </label>
 
         <AnkiFieldSelect

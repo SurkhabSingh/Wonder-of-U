@@ -11,7 +11,7 @@ import {
 } from "../../constants";
 import type { AppSettings } from "../../types";
 import type { SettingsUpdate } from "./settingsTypes";
-import { SettingsDisclosure } from "./SettingsDisclosure";
+import { SettingsGroup } from "./SettingsGroup";
 
 /// Surfaces a hand-edited value that is not one of the presets, rather than silently
 /// showing the wrong entry. Same idiom as the clip-padding and deck pickers.
@@ -25,7 +25,7 @@ function withCurrent(
     : [{ value: current, label: label(current) }, ...options];
 }
 
-export function ScannerSettingsPage({
+export function ScannerSettingsGroups({
   settingsDraft,
   onUpdateSettings,
 }: {
@@ -36,10 +36,7 @@ export function ScannerSettingsPage({
 
   return (
     <>
-      <SettingsDisclosure
-        title="Dictionary &amp; Reading"
-        defaultOpen={false}
-      >
+      <SettingsGroup id="scanner" title="Dictionary and reading">
         <div className="info-note">
           <p className="microcopy">
             Hold a key and hover a word to see its dictionary entry &mdash; in the subtitle
@@ -204,12 +201,9 @@ export function ScannerSettingsPage({
         </label>
       </div>
 
-      </SettingsDisclosure>
+      </SettingsGroup>
 
-      <SettingsDisclosure
-        title="Jimaku"
-        defaultOpen={false}
-      >
+      <SettingsGroup id="jimaku" title="Jimaku">
         <div className="info-note">
           <p className="microcopy">
             Search Jimaku for Japanese subtitles from the Watch page and save them beside
@@ -238,7 +232,7 @@ export function ScannerSettingsPage({
           />
         </label>
       </div>
-      </SettingsDisclosure>
+      </SettingsGroup>
     </>
   );
 }

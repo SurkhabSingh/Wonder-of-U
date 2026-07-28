@@ -109,7 +109,7 @@ export function createSetupChecklist({
     {
       id: "anki",
       target: "anki",
-      label: "Anki Mapping",
+      label: "Card mapping",
       description: ankiConfigured
         ? "Note fields mapped"
         : "Map your Anki note fields",
@@ -119,7 +119,7 @@ export function createSetupChecklist({
     },
     {
       id: "storage",
-      target: "storage",
+      target: "downloads",
       label: "MP3 Compression",
       description: ffmpegReady
         ? "FFmpeg ready"
@@ -129,7 +129,7 @@ export function createSetupChecklist({
     },
     {
       id: "ytdlp",
-      target: "storage",
+      target: "downloads",
       label: "YouTube Import",
       description: ytdlpReady
         ? "yt-dlp ready"

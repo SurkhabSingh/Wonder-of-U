@@ -27,6 +27,7 @@ use std::{
 
 use crate::app_types::{AlassDetection, AppSettings};
 
+use super::versions::{probe_version, VersionCache};
 use super::ytdlp::managed_binary_is_present;
 
 #[cfg(target_os = "windows")]
@@ -96,6 +97,9 @@ pub(crate) fn verify_alass_binary(executable_path: &Path) -> Result<(), String> 
 /// Managed-only, unlike yt-dlp: there is no conventional system install of alass to probe
 /// for on Windows, and spawning a guess on every snapshot emit would cost what the yt-dlp
 /// probe cache exists to avoid.
+/// See `FFMPEG_VERSION` — same reasoning, same trust window.
+static ALASS_VERSION: VersionCache = VersionCache::new();
+
 pub(crate) fn detect_local_alass(settings: &AppSettings) -> AlassDetection {
     let asset_directory = PathBuf::from(&settings.asset_directory);
     if let Some(path) = collect_managed_alass_candidates(&asset_directory)
@@ -105,6 +109,7 @@ pub(crate) fn detect_local_alass(settings: &AppSettings) -> AlassDetection {
         return AlassDetection {
             status: "ready".into(),
             executable_path: Some(path.display().to_string()),
+            version: ALASS_VERSION.probe(|| probe_version(&path, "--version")),
             message: "alass is ready. Out-of-sync subtitles can be aligned automatically."
                 .into(),
         };

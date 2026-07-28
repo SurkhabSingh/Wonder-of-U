@@ -390,23 +390,28 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     message:
       "Add or download whisper-cli and a Whisper model to enable offline transcription.",
   },
+  // These mirror the `Default` impls in app_types.rs. They show for the moment before the
+  // backend answers, so a stale copy here is a visible flash of different wording.
   ffmpegDetection: {
     status: "notFound",
     executablePath: null,
     managed: false,
-    message: "Install app-managed FFmpeg to compress transcribed WAV recordings into MP3.",
+    version: null,
+    message: "Not set up yet. Download it to convert transcribed recordings to MP3.",
   },
   ytdlpDetection: {
     status: "notFound",
     executablePath: null,
     managed: false,
-    message: "Install app-managed yt-dlp to import audio from YouTube and other sites.",
+    version: null,
+    message: "Not set up yet. Download it to import audio from YouTube.",
   },
   alassDetection: {
     status: "notFound",
     executablePath: null,
+    version: null,
     message:
-      "alass is not installed. Download it to align out-of-sync subtitles automatically.",
+      "Not set up yet. Download it to align out-of-sync subtitles automatically.",
   },
   modelDownload: {
     kind: null,
