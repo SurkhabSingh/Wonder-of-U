@@ -58,7 +58,18 @@
    * look obviously wrong in review.
    *
    * The numbered aliases that bridged the change are gone; all 214 call sites are on the
-   * named steps, so an off-ladder value now has nowhere to hide. */
+   * named steps, so an off-ladder value now has nowhere to hide.
+   *
+   * WHAT THE LADDER GOVERNS: distance BETWEEN things — gaps, container padding, the margin
+   * under a heading. It does not govern the padding that gives a CONTROL its size. A button
+   * reading `padding: 7px 13px` is not a violation; that pair is chosen to land the button
+   * on its 36px height, and rounding it to the nearest step would resize every button in
+   * the app to fix a number nobody sees. The same goes for a slider thumb's negative
+   * margin, which centres it on its track and is arithmetic, not taste.
+   *
+   * `lookupPopup.css` is exempt entirely. It reproduces the dictionary popup from the Anki
+   * add-on, and the point is that the popup looks the same in both places; snapping it to
+   * our ladder would make the app's copy visibly diverge from the one in Anki. */
   --space-0: 0;
   --space-xs: 4px;
   --space-sm: 8px;
