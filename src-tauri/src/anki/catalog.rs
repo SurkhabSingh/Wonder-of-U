@@ -66,7 +66,7 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
 
     Ok(AnkiCatalog {
         status: "ready".into(),
-        message: "AnkiConnect is ready.".into(),
+        message: "Connected to Anki.".into(),
         version,
         decks,
         note_types,

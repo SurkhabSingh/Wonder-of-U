@@ -17,7 +17,7 @@ export type RecordingFilterTab = {
 
 export function createWorkflowPages(recordingCount: number): PageNavigationItem[] {
   return [
-    { id: "home", label: "Home", description: "Your work at a glance" },
+    { id: "home", label: "Home", description: "" },
     {
       id: "recordings",
       label: "Library",
@@ -27,7 +27,7 @@ export function createWorkflowPages(recordingCount: number): PageNavigationItem[
     {
       id: "watch",
       label: "Watch",
-      description: "Play a video and mine as you go",
+      description: "",
     },
   ];
 }
@@ -178,7 +178,7 @@ export function createSetupEntry(
   return {
     id: "setup",
     label: "Setup",
-    description: summary.allDone ? "Setup complete" : "",
+    description: "",
     count: summary.allDone ? undefined : `${summary.done}/${summary.total}`,
   };
 }

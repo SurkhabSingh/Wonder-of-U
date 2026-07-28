@@ -31,6 +31,7 @@ export function WhisperStatusSettingsPage({
     <SettingsDisclosure
       title="Whisper"
       defaultOpen={bootstrap.whisperDetection.status !== "ready"}
+      tone={bootstrap.whisperDetection.status === "ready" ? "ready" : "attention"}
       status={
         <span
           className={`status-chip status-chip-${whisperStatusTone(

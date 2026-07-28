@@ -40,6 +40,7 @@ export function CapabilitySection({
       help={help}
       // Something you still have to set up opens itself; something that works stays shut.
       defaultOpen={!ready}
+      tone={ready ? "ready" : "attention"}
       status={
         <span
           className={`status-chip status-chip-${ready ? "success" : "warning"}`}

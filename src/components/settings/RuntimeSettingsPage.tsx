@@ -53,6 +53,14 @@ export function RuntimeSettingsPage({
     <SettingsDisclosure
       title="Whisper CLI"
       defaultOpen={!runtimeInstalled}
+      tone={runtimeInstalled ? "ready" : "attention"}
+      status={
+        <span
+          className={`status-chip status-chip-${runtimeInstalled ? "success" : "warning"}`}
+        >
+          {runtimeInstalled ? "Ready" : "Missing"}
+        </span>
+      }
       help="Paste a path if you already have a transcription runtime installed elsewhere, or let the app download and keep the recommended one up to date."
     >
 

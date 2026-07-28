@@ -19,6 +19,7 @@ export function SettingsDisclosure({
   title,
   help,
   status,
+  tone = "neutral",
   defaultOpen,
   children,
 }: {
@@ -29,6 +30,9 @@ export function SettingsDisclosure({
   /// The chip on the right. Must stay readable while collapsed: the point of collapsing is
   /// that you can still see whether anything is wrong.
   status?: ReactNode;
+  /// Colours the rail down the card's edge, so "is anything wrong" is answerable from the
+  /// shape of the page instead of by reading every chip.
+  tone?: "neutral" | "ready" | "attention" | "error";
   defaultOpen: boolean;
   children: ReactNode;
 }) {
@@ -39,6 +43,7 @@ export function SettingsDisclosure({
   return (
     <details
       className="settings-disclosure"
+      data-tone={tone}
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >

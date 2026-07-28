@@ -70,6 +70,13 @@ export function AnkiMappingSettingsPage({
     <SettingsDisclosure
       title="Card Mapping"
       defaultOpen={displayedAnkiCatalog.status !== "ready"}
+      tone={
+        displayedAnkiCatalog.status === "ready"
+          ? "ready"
+          : displayedAnkiCatalog.status === "offline"
+            ? "error"
+            : "attention"
+      }
       help="Which deck and note type mined cards go to, and which of its fields each part of the card is written into."
       status={
         <span
@@ -85,21 +92,10 @@ export function AnkiMappingSettingsPage({
         </span>
       }
     >
-      <div className="action-row inline-actions">
-        <button
-          type="button"
-          className="secondary"
-          onClick={() =>
-            void onRefreshAnkiCatalog(undefined, { notifySuccess: true })
-          }
-          disabled={busyAction === "loadAnki"}
-        >
-          Reconnect to Anki
-        </button>
-      </div>
-
+      {/* State and the one thing you would do about it, on the same line. The button used
+          to float above this card with nothing to attach it to. */}
       <div
-        className={`update-card ${
+        className={`update-card is-row ${
           displayedAnkiCatalog.status === "ready"
             ? "current"
             : displayedAnkiCatalog.status === "offline"
@@ -108,22 +104,23 @@ export function AnkiMappingSettingsPage({
         }`}
       >
         <strong>{displayedAnkiCatalog.message}</strong>
-        {displayedAnkiCatalog.version !== null ? (
-          <p className="microcopy">
-            AnkiConnect version {displayedAnkiCatalog.version}
-          </p>
-        ) : null}
+        <button
+          type="button"
+          className="secondary"
+          onClick={() =>
+            void onRefreshAnkiCatalog(undefined, { notifySuccess: true })
+          }
+          disabled={busyAction === "loadAnki"}
+        >
+          Reconnect
+        </button>
       </div>
 
-      <div className="info-note">
+      <div className="info-note is-row">
         <p className="microcopy">
-          No matching note type? Create the app&rsquo;s &ldquo;Wonder of U
-          Listening&rdquo; note type in one click &mdash; a listening card that plays the
-          audio on the front and reveals the screenshot, transcript, translation, and
-          source on the back &mdash; and the fields below map automatically. If you already
-          have it, this brings it up to date instead: readings render as furigana and stay
-          hidden until you hover. Your own styling is kept &mdash; the rules are appended,
-          never overwritten.
+          No matching note type? Create one that plays the audio first and reveals the
+          screenshot, transcript and translation after &mdash; the fields below then map
+          themselves. If you already have it, this updates it and keeps your styling.
         </p>
         <button
           type="button"
@@ -133,7 +130,7 @@ export function AnkiMappingSettingsPage({
             busyAction === "loadAnki" || displayedAnkiCatalog.status !== "ready"
           }
         >
-          Create or update the Wonder of U Listening note type
+          Create or update
         </button>
       </div>
 

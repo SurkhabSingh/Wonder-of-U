@@ -54,6 +54,14 @@ export function ModelSettingsPage({
     <SettingsDisclosure
       title="Whisper Model"
       defaultOpen={!modelInstalled}
+      tone={modelInstalled ? "ready" : "attention"}
+      status={
+        <span
+          className={`status-chip status-chip-${modelInstalled ? "success" : "warning"}`}
+        >
+          {modelInstalled ? "Ready" : "Missing"}
+        </span>
+      }
       help="Choose a model file yourself, or let the app download the recommended multilingual one into your asset folder."
     >
 

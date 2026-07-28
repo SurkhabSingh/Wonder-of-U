@@ -551,10 +551,12 @@ input::placeholder {
   scroll-margin-top: var(--space-lg);
 }
 
-.settings-section + .settings-section {
-  margin-top: var(--space-lg);
-  padding-top: var(--space-lg);
-  border-top: 1px solid var(--border);
+/* Sections and the disclosures inside them share one rhythm, set by the containers'
+   `gap`, so a section holding three disclosures spaces them exactly like a section
+   holding one. */
+.settings-surface,
+.settings-section {
+  gap: var(--space-md);
 }
 
 /* The Whisper section stacks its status strip, CLI, and model controls. */
@@ -1502,6 +1504,21 @@ input::placeholder {
    on the box's padding, which is why a single line of guidance rendered as a tall slab. */
 .info-note > p {
   margin-block: 0;
+}
+
+/* A statement and the single action that answers it, side by side. Stacked, the button
+   read as unrelated to the sentence above it and the pair took twice the height. */
+.update-card.is-row,
+.info-note.is-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.update-card.is-row > button,
+.info-note.is-row > button {
+  flex: 0 0 auto;
 }
 
 .info-note > p + p {
@@ -2706,8 +2723,50 @@ input::placeholder {
   transition: clip-path 90ms linear;
 }
 
+/* Each section is a card. The previous treatment was a hairline under every row, which
+   read as flat and doubled up where a section wrapper's border met a disclosure's own.
+   A card separates by its edge, so there is one line instead of two and no rule has to
+   know what comes after it. */
 .settings-disclosure {
-  border-bottom: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+/* Status as colour, carried down the edge of the card.
+   Reading the page used to mean reading every chip; the rail makes "is anything wrong"
+   answerable from the shape of the page rather than its text, and it puts the green back
+   that the plain hairlines took away. */
+.settings-disclosure::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: var(--border);
+}
+
+.settings-disclosure[data-tone="ready"]::before {
+  background: var(--success);
+}
+
+.settings-disclosure[data-tone="attention"]::before {
+  background: var(--warning);
+}
+
+.settings-disclosure[data-tone="error"]::before {
+  background: var(--error);
+}
+
+/* A card that wants something is worth noticing before its rail is read. */
+.settings-disclosure[data-tone="attention"] {
+  border-color: color-mix(in srgb, var(--warning) 26%, var(--border));
+}
+
+.settings-disclosure[data-tone="error"] {
+  border-color: color-mix(in srgb, var(--error) 30%, var(--border));
 }
 
 /* The whole row is the control, so it gets the affordances of one. */
@@ -2715,7 +2774,7 @@ input::placeholder {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: var(--space-md) 0;
+  padding: var(--space-md) var(--space-lg);
   cursor: pointer;
   list-style: none;
 }
@@ -2730,10 +2789,13 @@ input::placeholder {
   color: var(--text-strong);
 }
 
+.settings-disclosure-summary:hover {
+  background: var(--surface-active);
+}
+
 .settings-disclosure-summary:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
+  outline-offset: -2px;
 }
 
 .settings-disclosure-summary h2 {
@@ -2771,7 +2833,16 @@ input::placeholder {
 .settings-disclosure-body {
   display: grid;
   gap: var(--space-md);
-  padding-bottom: var(--space-lg);
+  padding: 0 var(--space-lg) var(--space-lg);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-lg);
+}
+
+/* A nested grid is a block of controls, not one control: it takes the whole row rather
+   than sitting in the left column with half the width its contents need. */
+.settings-grid > .toggle-grid,
+.settings-grid > .settings-grid {
+  grid-column: 1 / -1;
 }
 
 /* A heading with its explanation badge beside it. The badge holds what the section is
