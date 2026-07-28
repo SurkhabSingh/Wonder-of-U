@@ -4,6 +4,7 @@ import { formatDuration, fileNameFromPath } from "../../lib/format";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { SubtitleListPane } from "./SubtitleListPane";
 import { ScannableText } from "../scanner/ScannableText";
+import { SubtitleOffsetField } from "./SubtitleOffsetField";
 import type { RecordingSegment, ScannerSettings, WatchSnapshot } from "../../types";
 
 // How the scan gesture reads in the user's own configuration.
@@ -299,40 +300,10 @@ export function WatchPage({
           writes nothing, and undoes itself. Automatic alignment is for the case an offset
           cannot express — drift that varies across the episode. */}
       <div className="panel-actions watch-sync">
-        <span className="watch-sync-label">Subtitle timing</span>
-        <div className="watch-sync-nudge">
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => onSetSubtitleDelay(snapshot.subtitleDelayMs - 100)}
-            title="Show subtitles 100 ms earlier"
-            aria-label="Show subtitles 100 milliseconds earlier"
-          >
-            &minus;100 ms
-          </button>
-          <span className="watch-sync-value">
-            {snapshot.subtitleDelayMs > 0 ? "+" : ""}
-            {snapshot.subtitleDelayMs} ms
-          </span>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => onSetSubtitleDelay(snapshot.subtitleDelayMs + 100)}
-            title="Show subtitles 100 ms later"
-            aria-label="Show subtitles 100 milliseconds later"
-          >
-            +100 ms
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => onSetSubtitleDelay(0)}
-            disabled={snapshot.subtitleDelayMs === 0}
-            title="Clear the offset"
-          >
-            Reset
-          </button>
-        </div>
+        <SubtitleOffsetField
+          delayMs={snapshot.subtitleDelayMs}
+          onCommit={onSetSubtitleDelay}
+        />
 
         <button
           type="button"

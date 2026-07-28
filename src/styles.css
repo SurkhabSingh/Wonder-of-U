@@ -3443,28 +3443,50 @@ input::placeholder {
 
 /* Subtitle timing: the offset nudge and automatic alignment, on one row. */
 .watch-sync {
-  align-items: center;
-  gap: var(--space-4);
+  align-items: flex-end;
+  gap: var(--space-5);
   flex-wrap: wrap;
 }
 
-.watch-sync-label {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  white-space: nowrap;
+/* One label, one typeable field. Two nudge buttons were a worse answer to the same
+   question: they cannot express an arbitrary offset, and reading the current value meant
+   reading it off a third element. */
+.watch-offset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
-.watch-sync-nudge {
-  display: flex;
+.watch-offset > span:first-child {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.watch-offset-input {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-/* Tabular figures so the value does not jitter as the offset changes. */
-.watch-sync-value {
-  min-width: 6ch;
+.watch-offset-input input {
+  width: 8ch;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
   color: var(--text);
-  font-size: var(--text-xs);
+  /* Tabular figures so the number does not jitter as mpv reports it back. */
   font-variant-numeric: tabular-nums;
-  text-align: center;
+  text-align: right;
+}
+
+.watch-offset-input input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.watch-offset-unit {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }

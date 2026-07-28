@@ -144,6 +144,16 @@ pub(crate) fn alass_args(video: &str, incorrect_subtitles: &str, output: &str) -
         //   with guessing:    +49ms, +64ms, +84ms   (drifting)
         //   without guessing: +85ms, +85ms, +85ms   (constant, correctable)
         "--disable-fps-guessing".into(),
+        // alass trades accuracy for speed by default. Measured on a reference with real
+        // speech, uniformly desynced by +5s:
+        //   default:  85ms residual on a 60s clip, exact on a 24-minute one
+        //   `-O 0`:   exact on both, and on the varying-drift case it also corrected the
+        //             last cue that the default left 85ms out
+        // The cost was unmeasurable here — 4.2s either way on 24 minutes — but that
+        // material is 24 identical repetitions and so unusually easy. If a real episode
+        // ever syncs slowly, this is the knob that bought the accuracy.
+        "--speed-optimization".into(),
+        "0".into(),
         video.to_string(),
         incorrect_subtitles.to_string(),
         output.to_string(),
@@ -194,6 +204,8 @@ mod tests {
             args,
             vec![
                 "--disable-fps-guessing",
+                "--speed-optimization",
+                "0",
                 "video.mkv",
                 "wrong.srt",
                 "fixed.srt"
