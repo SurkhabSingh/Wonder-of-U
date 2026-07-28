@@ -146,7 +146,6 @@ export function useAppViewState({
       ...(bootstrap.whisperDetection.cliManaged ? [activeRuntimeVersion] : []),
     ]),
   ).sort();
-  const manualRuntimeOverride = settingsDraft.whisper.cliPath.trim().length > 0;
   const runtimeInstalled = bootstrap.whisperDetection.cliReady;
   const modelInstalled = bootstrap.whisperDetection.modelReady;
   const resolvedCliPath =
@@ -207,7 +206,6 @@ export function useAppViewState({
     hotkeyTooltip,
     installedRuntimeVersions,
     isRecording,
-    manualRuntimeOverride,
     modelInstalled,
     resolvedCliPath,
     resolvedModelPath,

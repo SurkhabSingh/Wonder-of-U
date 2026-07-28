@@ -34,8 +34,8 @@ export function createWorkflowPages(recordingCount: number): PageNavigationItem[
 
 export type SetupChecklistStep = {
   id: string;
-  // The Settings section this row deep-links to. Multiple rows (CLI, model,
-  // status) point at the single "whisper" section.
+  // The Settings section this row deep-links to. The runtime and model rows both point at
+  // the single "whisper" section, which holds a group for each.
   target: SettingsSection;
   label: string;
   description: string;
@@ -87,7 +87,7 @@ export function createSetupChecklist({
     {
       id: "runtime",
       target: "whisper",
-      label: "Whisper CLI",
+      label: "Whisper runtime",
       description: cliReady
         ? "Runtime installed"
         : "Install the Whisper runtime",
@@ -98,7 +98,7 @@ export function createSetupChecklist({
     {
       id: "model",
       target: "whisper",
-      label: "Whisper Model",
+      label: "Whisper model",
       description: modelReady
         ? "Model downloaded"
         : "Download a transcription model",
@@ -116,17 +116,6 @@ export function createSetupChecklist({
       done: ankiConfigured,
       required: true,
       value: ankiConfigured ? ankiSummary ?? null : null,
-    },
-    {
-      id: "whisper",
-      target: "whisper",
-      label: "Whisper Status",
-      description:
-        cliReady && modelReady
-          ? "Ready to transcribe"
-          : "Waiting on the CLI and model",
-      done: cliReady && modelReady,
-      required: false,
     },
     {
       id: "storage",

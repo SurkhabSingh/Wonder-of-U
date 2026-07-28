@@ -2833,9 +2833,70 @@ input::placeholder {
 .settings-disclosure-body {
   display: grid;
   gap: var(--space-md);
+  /* One owner for the rhythm. Six classes in here still carry vertical margins written for
+     a parent that had no `gap` — `.microcopy`, `.disclosure`, `.download-section`,
+     `.model-summary`, `.info-note`, `.download-card` — and both applied, so measured gaps
+     came out at 20-24px against the 12 this asks for. The margins stay on those classes
+     because they are used outside settings too; they just stop counting in here. */
   padding: 0 var(--space-lg) var(--space-lg);
   border-top: 1px solid var(--border);
   padding-top: var(--space-lg);
+}
+
+.settings-disclosure-body > * {
+  margin-block: 0;
+}
+
+/* The tool a section manages, named after the heading it belongs to. Muted, because the
+   heading is what the section is FOR and this is only what does it. */
+.settings-disclosure-tool {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-mid);
+}
+
+/* Two downloads under one heading. Runtime and model are separate things with their own
+   versions, paths and checks, so they keep their own labels and their own status inside the
+   section rather than being poured into one list of controls. */
+.settings-group {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.settings-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.settings-group-header h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-group-header .status-chip {
+  margin-inline-start: auto;
+}
+
+.settings-group > * {
+  margin-block: 0;
+}
+
+/* The right-hand end of a status box: a check, an install, or the note that says neither
+   is on offer. */
+.capability-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.capability-actions > .microcopy {
+  margin: 0;
+  white-space: nowrap;
 }
 
 /* A nested grid is a block of controls, not one control: it takes the whole row rather

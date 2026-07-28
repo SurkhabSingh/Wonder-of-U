@@ -17,6 +17,7 @@ import { TooltipBadge } from "../ui/Tooltip";
 // section for free.
 export function SettingsDisclosure({
   title,
+  toolName,
   help,
   status,
   tone = "neutral",
@@ -24,6 +25,10 @@ export function SettingsDisclosure({
   children,
 }: {
   title: string;
+  /// What actually does the work, named beside the heading. The download and progress text
+  /// already say these names, so leaving them out of the heading was what made sections
+  /// managing the same kind of thing look unrelated to each other.
+  toolName?: string;
   /// What the section is for. Reference material — read once, then never again, which is
   /// why it is behind a badge while status stays on the summary.
   help?: string;
@@ -50,6 +55,9 @@ export function SettingsDisclosure({
       <summary className="settings-disclosure-summary">
         <span className="settings-disclosure-marker" aria-hidden="true" />
         <h2>{title}</h2>
+        {toolName ? (
+          <span className="settings-disclosure-tool">{toolName}</span>
+        ) : null}
         {/* Both of these swallow their own clicks. A summary toggles on any click inside
             it, so reading the hint or the status would otherwise fold the section away. */}
         {help ? (

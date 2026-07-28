@@ -3,7 +3,6 @@ import type {
   BusyAction,
   WhisperAssetUpdateResult,
 } from "../../types";
-import { UpdateResultCard } from "../ui/UpdateResultCard";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 import { CapabilitySection } from "./CapabilitySection";
 
@@ -32,28 +31,39 @@ export function StorageSettingsPage({
 }) {
   const ytdlpReady = bootstrap.ytdlpDetection.status === "ready";
   const alassReady = bootstrap.alassDetection.status === "ready";
-  // Re-downloading the recommended yt-dlp overwrites the binary in place, so the
-  // download action doubles as the install for an update the check turned up.
+  const ffmpegReady = bootstrap.ffmpegDetection.status === "ready";
+  // Re-downloading the recommended yt-dlp overwrites the binary in place, so the download
+  // action doubles as the install for an update the check turned up.
   const ytdlpUpdateVersion =
     ytdlpUpdateResult?.status === "available"
       ? ytdlpUpdateResult.latestVersion
       : null;
-  const ffmpegReady = bootstrap.ffmpegDetection.status === "ready";
+
+  const progress = (kind: "ffmpeg" | "ytdlp" | "alass") => (
+    <DownloadProgressCard
+      snapshot={bootstrap.modelDownload}
+      kind={kind}
+      downloadIsActive={downloadIsActive}
+      onTogglePause={() => void onToggleDownloadPause()}
+      onCancel={() => void onCancelDownload()}
+    />
+  );
+
   return (
     <>
       <CapabilitySection
         title="MP3 Compression"
+        toolName="FFmpeg"
         ready={ffmpegReady}
         callToAction={bootstrap.ffmpegDetection.message}
-        help={
+        description={
           "Recordings are kept as WAV while they are transcribed. Once a recording has a " +
-          "transcript you can convert it to MP3 from the Library, one at a time or in bulk, " +
-          "and cards already pushed to Anki keep working. The action appears once you turn " +
-          "on manual MP3 conversion in App Preferences."
+          "transcript you can convert it to MP3 from the Library, and cards already pushed " +
+          "to Anki keep working. Turn on manual MP3 conversion in App Preferences to see " +
+          "the action."
         }
-      >
-        {ffmpegReady ? null : (
-          <div className="action-row inline-actions">
+        action={
+          ffmpegReady ? null : (
             <button
               type="button"
               onClick={() => void onDownloadRecommendedFfmpeg()}
@@ -61,36 +71,37 @@ export function StorageSettingsPage({
             >
               Download
             </button>
-          </div>
-        )}
-        <DownloadProgressCard
-          snapshot={bootstrap.modelDownload}
-          kind="ffmpeg"
-          downloadIsActive={downloadIsActive}
-          onTogglePause={() => void onToggleDownloadPause()}
-          onCancel={() => void onCancelDownload()}
-        />
+          )
+        }
+      >
+        {progress("ffmpeg")}
       </CapabilitySection>
 
       <CapabilitySection
         title="YouTube Import"
+        toolName="yt-dlp"
         ready={ytdlpReady}
         callToAction={bootstrap.ytdlpDetection.message}
-        help={
+        description={
           "Paste a YouTube link on the Home page and its audio lands in your Library, ready " +
           "to transcribe like any other recording."
         }
-      >
-        <div className="action-row inline-actions">
-          {ytdlpReady ? (
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => void onCheckYtdlpUpdate()}
-              disabled={busyAction === "checkYtdlpUpdate"}
-            >
-              Check for updates
-            </button>
+        onCheck={ytdlpReady ? () => void onCheckYtdlpUpdate() : undefined}
+        checkBusy={busyAction === "checkYtdlpUpdate"}
+        checkResult={ytdlpUpdateResult}
+        action={
+          ytdlpReady ? (
+            // Only once a check has actually found something newer. The install and the
+            // result that justifies it used to sit two sections apart.
+            ytdlpUpdateVersion ? (
+              <button
+                type="button"
+                onClick={() => void onDownloadRecommendedYtdlp()}
+                disabled={downloadIsActive || busyAction === "downloadYtdlp"}
+              >
+                Update to {ytdlpUpdateVersion}
+              </button>
+            ) : null
           ) : (
             <button
               type="button"
@@ -99,61 +110,39 @@ export function StorageSettingsPage({
             >
               Download
             </button>
-          )}
-        </div>
-        <UpdateResultCard result={ytdlpUpdateResult} />
-        {/* The install for an update the check turned up. This and the progress bar below
-            used to render at the very bottom of the page, under Subtitle Sync, so the
-            result of checking appeared here and the button to act on it appeared two
-            sections away. */}
-        {ytdlpReady && ytdlpUpdateVersion ? (
-          <div className="action-row compact-actions">
-            <button
-              type="button"
-              onClick={() => void onDownloadRecommendedYtdlp()}
-              disabled={downloadIsActive || busyAction === "downloadYtdlp"}
-            >
-              Update to {ytdlpUpdateVersion}
-            </button>
-          </div>
-        ) : null}
-        <DownloadProgressCard
-          snapshot={bootstrap.modelDownload}
-          kind="ytdlp"
-          downloadIsActive={downloadIsActive}
-          onTogglePause={() => void onToggleDownloadPause()}
-          onCancel={() => void onCancelDownload()}
-        />
+          )
+        }
+      >
+        {progress("ytdlp")}
       </CapabilitySection>
 
+      {/* No check: the download URL is pinned to one tested release on purpose — see the
+          comment on ALASS_RELEASE_DOWNLOAD_URL — so a newer version upstream would be
+          something we could report and not act on. */}
       <CapabilitySection
         title="Subtitle Sync"
+        toolName="alass"
         ready={alassReady}
         missingLabel="Optional"
         callToAction={bootstrap.alassDetection.message}
-        help={
+        description={
           "Realigns a subtitle file against the video, for when the timing drifts as the " +
           "episode goes on. If your subtitles are simply late or early throughout, the " +
           "offset on the Watch page fixes that on its own."
         }
+        action={
+          alassReady ? null : (
+            <button
+              type="button"
+              onClick={() => void onDownloadRecommendedAlass()}
+              disabled={downloadIsActive || busyAction === "downloadAlass"}
+            >
+              Download
+            </button>
+          )
+        }
       >
-        <div className="action-row inline-actions">
-          <button
-            type="button"
-            className={alassReady ? "secondary" : undefined}
-            onClick={() => void onDownloadRecommendedAlass()}
-            disabled={downloadIsActive || busyAction === "downloadAlass"}
-          >
-            {alassReady ? "Re-download" : "Download"}
-          </button>
-        </div>
-        <DownloadProgressCard
-          snapshot={bootstrap.modelDownload}
-          kind="alass"
-          downloadIsActive={downloadIsActive}
-          onTogglePause={() => void onToggleDownloadPause()}
-          onCancel={() => void onCancelDownload()}
-        />
+        {progress("alass")}
       </CapabilitySection>
     </>
   );

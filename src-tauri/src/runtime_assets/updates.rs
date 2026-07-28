@@ -166,8 +166,11 @@ pub(crate) fn check_ytdlp_update_inner<R: Runtime>(
         .ok_or_else(|| "Could not read the latest yt-dlp release tag.".to_string())?;
 
     let (status, message) = match installed_version.as_deref() {
+        // NOT "installed" — that is the runtime's word for "the newest version is already
+        // downloaded, just not selected", and it is styled as success. Reporting a missing
+        // binary with it painted "yt-dlp is not installed yet" green.
         None => (
-            "installed".to_string(),
+            "available".to_string(),
             format!("yt-dlp is not installed yet. The latest release is {latest_tag}."),
         ),
         Some(current) if current == latest_tag => (

@@ -275,7 +275,6 @@ function App() {
     hotkeyTooltip,
     installedRuntimeVersions,
     isRecording,
-    manualRuntimeOverride,
     modelInstalled,
     recorderBusy,
     resolvedCliPath,
@@ -858,7 +857,6 @@ function App() {
             displayedAnkiCatalog={displayedAnkiCatalog}
             activeRuntimeVersion={activeRuntimeVersion}
             installedRuntimeVersions={installedRuntimeVersions}
-            manualRuntimeOverride={manualRuntimeOverride}
             runtimeUpdateResult={runtimeUpdateResult}
             runtimeUpdateVersion={runtimeUpdateVersion}
             modelUpdateResult={modelUpdateResult}

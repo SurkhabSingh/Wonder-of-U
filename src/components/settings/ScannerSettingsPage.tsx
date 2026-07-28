@@ -39,8 +39,14 @@ export function ScannerSettingsPage({
       <SettingsDisclosure
         title="Dictionary &amp; Reading"
         defaultOpen={false}
-        help="Hold a key and hover a word to see its dictionary entry, in the subtitle list and over the video when the overlay is on. Anki needs to be open."
       >
+        <div className="info-note">
+          <p className="microcopy">
+            Hold a key and hover a word to see its dictionary entry &mdash; in the subtitle
+            list, and over the video when the overlay is on.{" "}
+            <strong>Anki needs to be open.</strong>
+          </p>
+        </div>
 
       <div className="settings-grid">
         <label className="field">
@@ -203,8 +209,13 @@ export function ScannerSettingsPage({
       <SettingsDisclosure
         title="Jimaku"
         defaultOpen={false}
-        help="Search Jimaku for Japanese subtitles from the Watch page and save them beside your video. Get a key from jimaku.cc/account."
       >
+        <div className="info-note">
+          <p className="microcopy">
+            Search Jimaku for Japanese subtitles from the Watch page and save them beside
+            your video. Get a key from <strong>jimaku.cc/account</strong>.
+          </p>
+        </div>
 
       <div className="settings-grid">
         <label className="field field-wide">

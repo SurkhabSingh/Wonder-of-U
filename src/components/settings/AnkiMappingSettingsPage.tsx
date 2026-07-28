@@ -77,7 +77,6 @@ export function AnkiMappingSettingsPage({
             ? "error"
             : "attention"
       }
-      help="Which deck and note type mined cards go to, and which of its fields each part of the card is written into."
       status={
         <span
           className={`status-chip status-chip-${

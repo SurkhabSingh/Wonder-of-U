@@ -13,9 +13,7 @@ import type {
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
 import { ScannerSettingsPage } from "./ScannerSettingsPage";
 import { AnkiMappingSettingsPage } from "./AnkiMappingSettingsPage";
-import { ModelSettingsPage } from "./ModelSettingsPage";
 import { PreferencesSettingsPage } from "./PreferencesSettingsPage";
-import { RuntimeSettingsPage } from "./RuntimeSettingsPage";
 import type {
   BrowseDirectoryField,
   BrowseFileField,
@@ -23,7 +21,7 @@ import type {
 } from "./settingsTypes";
 import { StorageSettingsPage } from "./StorageSettingsPage";
 import { TranslationSettingsPage } from "./TranslationSettingsPage";
-import { WhisperStatusSettingsPage } from "./WhisperStatusSettingsPage";
+import { WhisperSettingsPage } from "./WhisperSettingsPage";
 
 export function SettingsPages({
   activePage,
@@ -37,7 +35,6 @@ export function SettingsPages({
   displayedAnkiCatalog,
   activeRuntimeVersion,
   installedRuntimeVersions,
-  manualRuntimeOverride,
   runtimeUpdateResult,
   runtimeUpdateVersion,
   modelUpdateResult,
@@ -75,7 +72,6 @@ export function SettingsPages({
   displayedAnkiCatalog: AnkiCatalog;
   activeRuntimeVersion: string;
   installedRuntimeVersions: string[];
-  manualRuntimeOverride: boolean;
   runtimeUpdateResult: WhisperAssetUpdateResult | null;
   runtimeUpdateVersion: string | null;
   modelUpdateResult: WhisperAssetUpdateResult | null;
@@ -118,8 +114,8 @@ export function SettingsPages({
     // reader would take.
     target
       ?.querySelectorAll<HTMLElement>(
-        // Section disclosures only. Two pages nest a further `<details>` for their
-        // advanced controls, and a deep link should not fling those open as well.
+        // Section disclosures only. Whisper nests a further `<details>` for its advanced
+        // controls, and a deep link should not fling that open as well.
         ".settings-disclosure:not([open]) > .settings-disclosure-summary",
       )
       .forEach((summary) => summary.click());
@@ -145,49 +141,29 @@ export function SettingsPages({
           />
         </section>
 
-        <section
-          id="settings-whisper"
-          className="settings-section whisper-section"
-        >
-          <WhisperStatusSettingsPage
-            activeRuntimeVersion={activeRuntimeVersion}
-            bootstrap={bootstrap}
-            manualRuntimeOverride={manualRuntimeOverride}
-            settingsDraft={settingsDraft}
-          />
-          <RuntimeSettingsPage
+        <section id="settings-whisper" className="settings-section">
+          <WhisperSettingsPage
             activeRuntimeVersion={activeRuntimeVersion}
             bootstrap={bootstrap}
             busyAction={busyAction}
             downloadIsActive={downloadIsActive}
             installedRuntimeVersions={installedRuntimeVersions}
-            manualRuntimeOverride={manualRuntimeOverride}
-            onBrowseFile={onBrowseFile}
-            onCancelDownload={onCancelDownload}
-            onCheckRuntimeUpdate={onCheckRuntimeUpdate}
-            onDownloadRecommendedRuntime={onDownloadRecommendedRuntime}
-            onDownloadRuntimeVersion={onDownloadRuntimeVersion}
-            onToggleDownloadPause={onToggleDownloadPause}
-            onUpdateSettings={onUpdateSettings}
-            resolvedCliPath={resolvedCliPath}
-            runtimeInstalled={runtimeInstalled}
-            runtimeUpdateResult={runtimeUpdateResult}
-            runtimeUpdateVersion={runtimeUpdateVersion}
-            settingsDraft={settingsDraft}
-          />
-          <ModelSettingsPage
-            bootstrap={bootstrap}
-            busyAction={busyAction}
-            downloadIsActive={downloadIsActive}
             modelInstalled={modelInstalled}
             modelUpdateResult={modelUpdateResult}
             onBrowseFile={onBrowseFile}
             onCancelDownload={onCancelDownload}
             onCheckModelUpdate={onCheckModelUpdate}
+            onCheckRuntimeUpdate={onCheckRuntimeUpdate}
             onDownloadRecommendedModel={onDownloadRecommendedModel}
+            onDownloadRecommendedRuntime={onDownloadRecommendedRuntime}
+            onDownloadRuntimeVersion={onDownloadRuntimeVersion}
             onToggleDownloadPause={onToggleDownloadPause}
             onUpdateSettings={onUpdateSettings}
+            resolvedCliPath={resolvedCliPath}
             resolvedModelPath={resolvedModelPath}
+            runtimeInstalled={runtimeInstalled}
+            runtimeUpdateResult={runtimeUpdateResult}
+            runtimeUpdateVersion={runtimeUpdateVersion}
             settingsDraft={settingsDraft}
           />
         </section>
