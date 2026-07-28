@@ -57,8 +57,8 @@
    * steps are far enough apart to be a real choice, which is what makes an off-ladder value
    * look obviously wrong in review.
    *
-   * Migration note: the numbered aliases below exist so this change moves nothing by more
-   * than 2px. They are deprecated and removed once the call sites are converted. */
+   * The numbered aliases that bridged the change are gone; all 214 call sites are on the
+   * named steps, so an off-ladder value now has nowhere to hide. */
   --space-0: 0;
   --space-xs: 4px;
   --space-sm: 8px;
@@ -66,18 +66,6 @@
   --space-lg: 16px;
   --space-xl: 24px;
   --space-2xl: 32px;
-
-  /* DEPRECATED — the old two-pixel ladder, mapped to the nearest new step so nothing shifts
-   * by more than 2px while call sites are converted. Do not use these in new code. */
-  --space-1: var(--space-xs);
-  --space-2: var(--space-xs);
-  --space-3: var(--space-sm);
-  --space-4: var(--space-sm);
-  --space-5: var(--space-md);
-  --space-6: var(--space-md);
-  --space-7: var(--space-lg);
-  --space-8: var(--space-lg);
-  --space-9: var(--space-lg);
 
   /* Corner radii */
   --radius-sm: 6px;
