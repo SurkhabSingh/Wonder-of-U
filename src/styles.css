@@ -3016,17 +3016,21 @@ input::placeholder {
 /* The queued/active/finished rows. Flat list, no shadows — each row is a status
    glyph, a truncating title, and a right-aligned chip (or the live download
    card for the one active row). */
+/* Columns on the list, borrowed per row — see `.transcription-queue-list`, which was
+   cloned from this and carried the same misalignment. */
 .home-youtube-queue {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--space-2);
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: var(--space-sm);
 }
 
 .home-youtube-queue-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
@@ -3120,23 +3124,35 @@ input::placeholder {
   font-size: var(--text-2xs);
 }
 
+/* The columns live on the LIST, and each row borrows them with `subgrid`.
+   Every row used to be its own independent grid, so a trailing `auto` track sized itself
+   to that one row's content: a status chip sat at a different x depending on how long its
+   own word was and on whether that row happened to carry a remove button. Rows that share
+   a track cannot disagree about it. */
 .transcription-queue-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--space-2);
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: var(--space-sm);
 }
 
 .transcription-queue-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);
+}
+
+.transcription-queue-item > .status-chip,
+.home-youtube-queue-item > .status-chip {
+  justify-self: end;
 }
 
 .transcription-queue-glyph {
