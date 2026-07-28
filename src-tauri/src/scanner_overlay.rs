@@ -35,7 +35,8 @@ use tauri::{
 use crate::app_types::SharedPersistedState;
 #[cfg(target_os = "windows")]
 use crate::watch::window::{
-    escape_is_held, mpv_is_foreground, video_window_rect, ScanModifier, VideoWindowRect,
+    escape_is_held, foreground_window, video_window_rect, window_process_id, ScanModifier,
+    VideoWindowRect,
 };
 use crate::watch::watch_session_pid;
 
@@ -265,10 +266,7 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
             hide_overlay(&app);
             continue;
         };
-        // Only draw while mpv is the window in front. The overlay is always-on-top and
-        // follows mpv's rectangle, so without this it would keep painting a subtitle line
-        // over whatever the user alt-tabbed to.
-        if !mpv_is_foreground(pid) {
+        if !overlay_should_draw(&app, pid) {
             hide_overlay(&app);
             continue;
         }
@@ -279,6 +277,36 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
         track_once(&app, rect, modifier.is_held(), escape_is_held());
         }
     });
+}
+
+/// Whether the overlay has any business being on screen right now.
+///
+/// It is always-on-top and follows mpv's rectangle, which says nothing about whether mpv is
+/// in FRONT — without a check, alt-tabbing away leaves a subtitle line floating over
+/// whatever the user switched to.
+///
+/// But "mpv is not in front" is not the same as "the user switched away". Clicking the
+/// overlay counts as the second and not the first: `WS_EX_NOACTIVATE` stops the top-level
+/// window activating, and the webview host underneath it activates anyway, so a click on a
+/// definition — or on a source tab — read as an app switch and tore the whole overlay down
+/// mid-read. Hence the second arm.
+#[cfg(target_os = "windows")]
+fn overlay_should_draw<R: Runtime>(app: &AppHandle<R>, mpv_pid: u32) -> bool {
+    let foreground = foreground_window();
+    if foreground.is_null() {
+        return false;
+    }
+    if window_process_id(foreground) == mpv_pid {
+        return true;
+    }
+    app.get_webview_window(SCANNER_WINDOW_LABEL)
+        .and_then(|window| window.hwnd().ok())
+        .is_some_and(|handle| {
+            std::ptr::eq(
+                handle.0 as *const std::ffi::c_void,
+                foreground as *const std::ffi::c_void,
+            )
+        })
 }
 
 /// Sets click-through and records it in the same breath.

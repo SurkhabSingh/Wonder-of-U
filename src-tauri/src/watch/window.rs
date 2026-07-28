@@ -177,24 +177,20 @@ pub(crate) fn video_window_rect(pid: u32) -> Option<VideoWindowRect> {
     })
 }
 
-/// Whether mpv is the window the user is actually looking at.
-///
-/// The overlay is always-on-top and follows mpv's rectangle, which says nothing about
-/// whether mpv is in FRONT. Without this check, alt-tabbing to another app leaves a
-/// subtitle line floating over it — the overlay is doing exactly what it was told, in a
-/// place it has no business being.
-///
-/// Compared by process rather than by handle because mpv owns several top-level windows and
-/// the foreground one is not guaranteed to be the same handle we track. The overlay itself
-/// can never be the foreground window: it carries `WS_EX_NOACTIVATE`.
-pub(crate) fn mpv_is_foreground(pid: u32) -> bool {
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground.is_null() {
-        return false;
+/// The window the user is currently working in, or null if the desktop has no foreground
+/// window (it briefly does not, during app switches).
+pub(crate) fn foreground_window() -> HWND {
+    unsafe { GetForegroundWindow() }
+}
+
+/// The process that owns `window`, or 0.
+pub(crate) fn window_process_id(window: HWND) -> u32 {
+    if window.is_null() {
+        return 0;
     }
     let mut owner = 0u32;
-    unsafe { GetWindowThreadProcessId(foreground, &mut owner) };
-    owner == pid
+    unsafe { GetWindowThreadProcessId(window, &mut owner) };
+    owner
 }
 
 /// Whether Escape is down.
@@ -266,10 +262,13 @@ mod tests {
     }
 
     #[test]
-    fn a_dead_process_is_never_the_foreground_one() {
-        // Guards the overlay's show/hide rule: an unknown pid must read as "not in front",
-        // never as "in front", or the overlay would sit over other apps.
-        assert!(!mpv_is_foreground(u32::MAX));
+    fn a_dead_process_never_owns_the_foreground_window() {
+        // Guards the overlay's show/hide rule: an unknown process must never read as the one
+        // in front, or the overlay would sit over other apps.
+        assert_ne!(window_process_id(foreground_window()), u32::MAX);
+        // A null handle is what the desktop reports mid-switch; it must not resolve to a
+        // real process either.
+        assert_eq!(window_process_id(std::ptr::null_mut()), 0);
     }
 
     #[test]

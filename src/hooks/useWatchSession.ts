@@ -35,6 +35,26 @@ export function useWatchSession() {
   const [mineResult, setMineResult] = useState<{ ok: boolean; message: string } | null>(
     null,
   );
+
+  // The mine result is a notice, not a status: it reports what one keypress did and then
+  // has nothing left to say. Left on screen it reads as a live condition — "This sentence
+  // is already mined" sitting under a video the user has long since moved on from looks
+  // like a warning about the line playing now. Failures get longer, because they are worth
+  // reading and a user who missed one has no other way to find out what went wrong.
+  useEffect(() => {
+    if (!mineResult) {
+      return;
+    }
+    const timer = window.setTimeout(
+      () => {
+        if (mountedRef.current) {
+          setMineResult(null);
+        }
+      },
+      mineResult.ok ? 4000 : 8000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [mineResult]);
   const mountedRef = useRef(true);
   // Read by the interval without re-subscribing it on every snapshot change.
   const connectedRef = useRef(false);
