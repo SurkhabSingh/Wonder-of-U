@@ -217,6 +217,16 @@ pub(crate) async fn start_watch_session(
             Path::new(&video_path),
             subtitle_path.as_deref().map(Path::new),
         )?;
+
+        // Re-apply the overlay setting to the player that just started.
+        //
+        // "mpv's subtitles are off exactly when ours are on" is an invariant of the SESSION,
+        // not of the toggle that last changed it: mpv is a fresh process with its own
+        // defaults every time, and the setting outlives it. Leaving this to the frontend's
+        // toggle handler meant a user who had the overlay switched on from a previous
+        // session saw mpv's own subtitles until they toggled it off and on again.
+        set_scanner_overlay_enabled(&app, settings.scanner.overlay_enabled)?;
+
         watch_snapshot_inner()
     })
     .await
