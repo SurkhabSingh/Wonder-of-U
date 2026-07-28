@@ -371,8 +371,8 @@ pub(crate) async fn set_scanner_overlay(app: AppHandle, enabled: bool) -> Result
 /// Needed because click-through is a property of the whole window: without this, releasing
 /// the scan modifier would make the popup unclickable the instant it appeared.
 #[tauri::command]
-pub(crate) fn set_scanner_popup(open: bool) {
-    set_scanner_popup_open(open);
+pub(crate) fn set_scanner_popup(app: AppHandle, open: bool) {
+    set_scanner_popup_open(&app, open);
 }
 
 /// Jumps the player to a position — what clicking a line in the subtitle list does.

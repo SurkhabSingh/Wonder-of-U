@@ -78,15 +78,15 @@ static TRACKER_RUNNING: AtomicBool = AtomicBool::new(false);
 /// True while a dictionary popup is open.
 ///
 /// The overlay has to stay interactive for as long as there is a popup to read, or the
-/// default "leave it open on release" would produce a popup nobody can scroll or click:
-/// the moment the modifier came up, the window would go click-through underneath it.
+/// default "leave it open on release" would produce a popup nobody can scroll or click.
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
-/// Mirrors the window's current click-through state so it is only ever set on a change.
-/// Only ever written through [`apply_interactive`] — see the note there.
-static INTERACTIVE: AtomicBool = AtomicBool::new(false);
+/// Sampled by the tracker, because a window that never takes focus never sees a key event.
+static MODIFIER_HELD: AtomicBool = AtomicBool::new(false);
+static ESCAPE_HELD: AtomicBool = AtomicBool::new(false);
 
-/// The last state pushed, so the tracker only emits on change rather than 60 times a second.
-static LAST_STATE: Mutex<Option<ScannerState>> = Mutex::new(None);
+/// What was last actually done to the window. **The only record of applied state**, and
+/// written exclusively inside [`reconcile`], immediately beside the call it describes.
+static APPLIED: Mutex<Applied> = Mutex::new(Applied::new());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +121,79 @@ impl ScannerState {
     }
 }
 
+/// Everything the overlay's appearance is derived from — inputs only. Nothing here records
+/// what has already been applied.
+#[derive(Clone, Copy)]
+struct Inputs {
+    enabled: bool,
+    popup_open: bool,
+    modifier_held: bool,
+    escape_held: bool,
+    /// Where the video is, or `None` when there is nowhere legitimate to draw: no session,
+    /// mpv not in front, or no placeable window.
+    placement: Option<VideoWindowRect>,
+}
+
+/// What those inputs mean for the window. Derived on demand, never stored as a source of
+/// truth.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Desired {
+    visible: bool,
+    interactive: bool,
+}
+
+impl Inputs {
+    fn desired(self) -> Desired {
+        let visible = self.enabled && self.placement.is_some();
+        Desired {
+            visible,
+            // Interactivity is DERIVED from visibility rather than tracked beside it. An
+            // invisible window that still takes the mouse is precisely how clicks meant for
+            // mpv were swallowed, and computing it here means no future caller can put the
+            // two back out of step.
+            interactive: visible && (self.modifier_held || self.popup_open),
+        }
+    }
+
+    /// What the overlay bundle needs. `tracking: false` is its cue to drop a popup anchored
+    /// to a line it can no longer show.
+    fn frontend_state(self) -> ScannerState {
+        match self.placement {
+            Some(rect) if self.enabled => ScannerState {
+                tracking: true,
+                scanning: self.modifier_held,
+                escape_pressed: self.escape_held,
+                width: rect.width,
+                height: rect.height,
+                dpi: rect.dpi,
+            },
+            _ => ScannerState::hidden(),
+        }
+    }
+}
+
+/// The applied side of the world, so each effect is issued only when it actually changes.
+struct Applied {
+    visible: bool,
+    interactive: bool,
+    origin: Option<(i32, i32)>,
+    size: Option<(i32, i32)>,
+    emitted: Option<ScannerState>,
+}
+
+impl Applied {
+    const fn new() -> Self {
+        Self {
+            // Matches how the window is built: hidden and click-through.
+            visible: false,
+            interactive: false,
+            origin: None,
+            size: None,
+            emitted: None,
+        }
+    }
+}
+
 /// Turns the overlay on or off, switching mpv's own subtitles the other way.
 ///
 /// The two are opposites on purpose: two subtitle layers drawn at once would double every
@@ -128,8 +201,9 @@ impl ScannerState {
 /// recoverable, and refusing to open the scanner over it would be worse.
 /// Told by the overlay when a popup opens or closes, so the tracker can keep the window
 /// taking the mouse for as long as there is something to interact with.
-pub(crate) fn set_scanner_popup_open(open: bool) {
+pub(crate) fn set_scanner_popup_open<R: Runtime>(app: &AppHandle<R>, open: bool) {
     POPUP_OPEN.store(open, Ordering::Relaxed);
+    reconcile(app);
 }
 
 pub(crate) fn set_scanner_overlay_enabled<R: Runtime>(
@@ -152,19 +226,13 @@ pub(crate) fn set_scanner_overlay_enabled<R: Runtime>(
 
     if enabled {
         start_tracker(app);
-    } else if let Some(window) = app.get_webview_window(SCANNER_WINDOW_LABEL) {
+    } else {
+        // A popup cannot outlive the overlay that hosts it.
         POPUP_OPEN.store(false, Ordering::Relaxed);
-        let _ = window.hide();
-        // Leave it click-through so a stranded window can never eat a click.
-        #[cfg(target_os = "windows")]
-        apply_interactive(&window, false);
-        if let Ok(mut last) = LAST_STATE.lock() {
-            *last = None;
-        }
-        // Same reason as `hide_overlay`: tell the frontend, or a popup opened before the
-        // toggle survives in its state and reappears the next time the overlay is shown.
-        let _ = app.emit_to(SCANNER_WINDOW_LABEL, SCANNER_STATE_EVENT, ScannerState::hidden());
     }
+    // One call handles hiding, click-through and telling the frontend — the three things
+    // that used to be done by hand here and drift apart.
+    reconcile(app);
     Ok(())
 }
 
@@ -262,19 +330,9 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
         if ticks.is_multiple_of(MODIFIER_REFRESH_TICKS) {
             modifier = ScanModifier::from_setting(&configured_modifier(&app));
         }
-        let Some(pid) = watch_session_pid() else {
-            hide_overlay(&app);
-            continue;
-        };
-        if !overlay_should_draw(&app, pid) {
-            hide_overlay(&app);
-            continue;
-        }
-        let Some(rect) = video_window_rect(pid) else {
-            hide_overlay(&app);
-            continue;
-        };
-        track_once(&app, rect, modifier.is_held(), escape_is_held());
+        MODIFIER_HELD.store(modifier.is_held(), Ordering::Relaxed);
+        ESCAPE_HELD.store(escape_is_held(), Ordering::Relaxed);
+        reconcile(&app);
         }
     });
 }
@@ -309,120 +367,89 @@ fn overlay_should_draw<R: Runtime>(app: &AppHandle<R>, mpv_pid: u32) -> bool {
         })
 }
 
-/// Sets click-through and records it in the same breath.
-///
-/// `INTERACTIVE` is a mirror of the window's real state and is only consulted to avoid
-/// redundant calls, which makes any path that changes the window WITHOUT updating the
-/// mirror silently poisonous: the two drift, the next comparison sees "no change", and the
-/// window is left in whatever state the drift produced. That is not hypothetical — hiding
-/// the overlay used to make it click-through directly, so alt-tabbing away and back left
-/// the mirror claiming "interactive" while the window ignored the mouse, and the popup's
-/// close button stopped working. Every caller goes through here now.
+/// Reads every input the overlay's appearance depends on, in one place.
 #[cfg(target_os = "windows")]
-fn apply_interactive<R: Runtime>(window: &WebviewWindow<R>, interactive: bool) -> bool {
-    if INTERACTIVE.swap(interactive, Ordering::Relaxed) == interactive {
-        return false;
-    }
-    let _ = window.set_ignore_cursor_events(!interactive);
-    true
-}
-
-/// Takes the overlay off screen — mpv is not in front, has no placeable window, or is gone.
-///
-/// Also tells the frontend, which is what lets it drop a popup that is anchored to a line
-/// the user can no longer see. Without that the popup survives the round trip and comes
-/// back attached to stale text.
-#[cfg(target_os = "windows")]
-fn hide_overlay<R: Runtime>(app: &AppHandle<R>) {
-    let mut last = match LAST_STATE.lock() {
-        Ok(last) => last,
-        Err(_) => return,
-    };
-    if last.is_none() {
-        return;
-    }
-    *last = None;
-    drop(last);
-    if let Some(window) = app.get_webview_window(SCANNER_WINDOW_LABEL) {
-        let _ = window.hide();
-        apply_interactive(&window, false);
-        let _ = app.emit_to(
-            SCANNER_WINDOW_LABEL,
-            SCANNER_STATE_EVENT,
-            ScannerState::hidden(),
-        );
+fn sample_inputs<R: Runtime>(app: &AppHandle<R>) -> Inputs {
+    let enabled = ENABLED.load(Ordering::Relaxed);
+    let placement = enabled
+        .then(watch_session_pid)
+        .flatten()
+        .filter(|pid| overlay_should_draw(app, *pid))
+        .and_then(video_window_rect);
+    Inputs {
+        enabled,
+        popup_open: POPUP_OPEN.load(Ordering::Relaxed),
+        modifier_held: MODIFIER_HELD.load(Ordering::Relaxed),
+        escape_held: ESCAPE_HELD.load(Ordering::Relaxed),
+        placement,
     }
 }
 
+/// Brings the window in line with the inputs. **The only place any of this is applied.**
+///
+/// The module used to carry the same knowledge in several places — a visibility flag, a
+/// click-through mirror, a last-emitted snapshot — each updated by hand at every call site.
+/// Six bugs came out of that, all the same shape: one path changed the window without
+/// updating a mirror, the next comparison saw "no change", and the window stayed wrong.
+/// Two of them were introduced by the fix for a third.
+///
+/// So inputs and effects are separated. `Inputs` is sampled fresh, `Desired` is derived from
+/// it, and `Applied` records only what was actually issued — written here, next to the call
+/// it describes, and nowhere else. Adding a new reason to show or hide the overlay now means
+/// adding a field to `Inputs`; it cannot mean forgetting to update a mirror.
 #[cfg(target_os = "windows")]
-fn track_once<R: Runtime>(
-    app: &AppHandle<R>,
-    rect: VideoWindowRect,
-    scanning: bool,
-    escape_pressed: bool,
-) {
-    let state = ScannerState {
-        tracking: true,
-        scanning,
-        escape_pressed,
-        width: rect.width,
-        height: rect.height,
-        dpi: rect.dpi,
-    };
-
+fn reconcile<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window(SCANNER_WINDOW_LABEL) else {
         return;
     };
+    let inputs = sample_inputs(app);
+    let desired = inputs.desired();
+    let state = inputs.frontend_state();
 
-    let geometry_changed = {
-        let Ok(last) = LAST_STATE.lock() else {
-            return;
-        };
-        match last.as_ref() {
-            None => true,
-            Some(previous) => {
-                previous.width != state.width
-                    || previous.height != state.height
-                    || previous.dpi != state.dpi
-            }
+    let Ok(mut applied) = APPLIED.lock() else {
+        return;
+    };
+
+    // Geometry before visibility, so the window is never painted at a stale position. Both
+    // are compared rather than set every tick: this runs 60 times a second and the window
+    // usually has not moved.
+    if let Some(rect) = inputs.placement {
+        let origin = (rect.left, rect.top);
+        if applied.origin != Some(origin) {
+            let _ = window.set_position(PhysicalPosition::new(rect.left, rect.top));
+            applied.origin = Some(origin);
         }
-    };
-
-    // Position every tick regardless: the rectangle's ORIGIN is not part of the compared
-    // state, so a window dragged without resizing still has to be followed.
-    let _ = window.set_position(PhysicalPosition::new(rect.left, rect.top));
-    if geometry_changed {
-        let _ = window.set_size(PhysicalSize::new(rect.width, rect.height));
-        let _ = window.show();
+        let size = (rect.width, rect.height);
+        if applied.size != Some(size) {
+            let _ = window.set_size(PhysicalSize::new(rect.width, rect.height));
+            applied.size = Some(size);
+        }
     }
 
-    // Interactive while the modifier is down OR while a popup is open. The first is what
-    // lets a word be hovered; the second is what lets the resulting entry be read.
-    let interactive = scanning || POPUP_OPEN.load(Ordering::Relaxed);
-    let scanning_changed = {
-        let Ok(last) = LAST_STATE.lock() else {
-            return;
-        };
-        last.as_ref().map(|previous| previous.scanning) != Some(scanning)
-    };
-    let escape_changed = {
-        let Ok(last) = LAST_STATE.lock() else {
-            return;
-        };
-        last.as_ref().map(|previous| previous.escape_pressed) != Some(escape_pressed)
-    };
-    // The whole interaction, in one call: while it is on the overlay takes the pointer;
-    // the instant it goes off mpv gets every click back, including its OSC controls.
-    let interactive_changed = apply_interactive(&window, interactive);
-
-    let changed = geometry_changed || scanning_changed || interactive_changed || escape_changed;
-    if let Ok(mut last) = LAST_STATE.lock() {
-        *last = Some(state);
+    // Click-through before visibility on the way out, so the window can never be left
+    // taking the mouse after it disappears.
+    if applied.interactive != desired.interactive {
+        let _ = window.set_ignore_cursor_events(!desired.interactive);
+        applied.interactive = desired.interactive;
     }
-    if changed {
-        // Emitted only on change — 60 unchanged events a second would wake the webview for
-        // nothing. Never emitted while a lock is held: `update_shell_snapshot` deadlocks
-        // that way, as the recording indicator's note warns.
+
+    if applied.visible != desired.visible {
+        let _ = if desired.visible {
+            window.show()
+        } else {
+            window.hide()
+        };
+        applied.visible = desired.visible;
+    }
+
+    let should_emit = applied.emitted != Some(state);
+    if should_emit {
+        applied.emitted = Some(state);
+    }
+    // Never emit while holding a lock: an emit re-enters app state, and this module's
+    // sibling overlay documents that as a deadlock.
+    drop(applied);
+    if should_emit {
         let _ = app.emit_to(SCANNER_WINDOW_LABEL, SCANNER_STATE_EVENT, state);
     }
 }
@@ -430,6 +457,86 @@ fn track_once<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    fn placed() -> Option<VideoWindowRect> {
+        Some(VideoWindowRect {
+            left: 100,
+            top: 50,
+            width: 1280,
+            height: 720,
+            dpi: 96,
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn inputs(enabled: bool, popup_open: bool, modifier_held: bool) -> Inputs {
+        Inputs {
+            enabled,
+            popup_open,
+            modifier_held,
+            escape_held: false,
+            placement: placed(),
+        }
+    }
+
+    /// The invariant the whole module exists to hold. An invisible window that still takes
+    /// the mouse is how clicks meant for mpv were swallowed, twice, and it is now impossible
+    /// to express rather than merely avoided.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_invisible_overlay_is_never_interactive() {
+        for popup_open in [false, true] {
+            for modifier_held in [false, true] {
+                // Switched off...
+                let off = inputs(false, popup_open, modifier_held).desired();
+                assert!(!off.visible);
+                assert!(!off.interactive);
+
+                // ...and nowhere to draw, which is mpv gone, minimised, or not in front.
+                let nowhere = Inputs {
+                    placement: None,
+                    ..inputs(true, popup_open, modifier_held)
+                }
+                .desired();
+                assert!(!nowhere.visible);
+                assert!(!nowhere.interactive);
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_overlay_takes_the_mouse_only_while_scanning_or_reading() {
+        // Drawn but passive: every click belongs to mpv, including its own controls.
+        let idle = inputs(true, false, false).desired();
+        assert!(idle.visible);
+        assert!(!idle.interactive);
+
+        // Holding the modifier is what lets a word be hovered...
+        assert!(inputs(true, false, true).desired().interactive);
+        // ...and an open popup is what lets the entry be read after it is released.
+        assert!(inputs(true, true, false).desired().interactive);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_frontend_is_told_to_stand_down_whenever_the_overlay_is_not_drawn() {
+        // `tracking: false` is the overlay bundle's cue to drop a popup anchored to a line
+        // it can no longer show — the fix for a popup that survived an alt-tab.
+        assert!(!inputs(false, true, true).frontend_state().tracking);
+        assert!(!Inputs {
+            placement: None,
+            ..inputs(true, true, true)
+        }
+        .frontend_state()
+        .tracking);
+
+        let live = inputs(true, false, true).frontend_state();
+        assert!(live.tracking);
+        assert!(live.scanning);
+        assert_eq!(live.width, 1280);
+    }
 
     #[test]
     fn the_overlay_starts_disabled() {
