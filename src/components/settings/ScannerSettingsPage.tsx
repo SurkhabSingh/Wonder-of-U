@@ -11,6 +11,7 @@ import {
 } from "../../constants";
 import type { AppSettings } from "../../types";
 import type { SettingsUpdate } from "./settingsTypes";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 /// Surfaces a hand-edited value that is not one of the presets, rather than silently
 /// showing the wrong entry. Same idiom as the clip-padding and deck pickers.
@@ -35,19 +36,11 @@ export function ScannerSettingsPage({
 
   return (
     <>
-      <header className="panel-header">
-        <div>
-          <h2>Dictionary &amp; Reading</h2>
-        </div>
-      </header>
-
-      <div className="info-note">
-        <p className="microcopy">
-          Hold a key and hover a word to see its dictionary entry &mdash; in the subtitle
-          list, and over the video when the overlay is on.{" "}
-          <strong>Anki needs to be open.</strong>
-        </p>
-      </div>
+      <SettingsDisclosure
+        title="Dictionary &amp; Reading"
+        defaultOpen={false}
+        help="Hold a key and hover a word to see its dictionary entry, in the subtitle list and over the video when the overlay is on. Anki needs to be open."
+      >
 
       <div className="settings-grid">
         <label className="field">
@@ -205,18 +198,13 @@ export function ScannerSettingsPage({
         </label>
       </div>
 
-      <header className="panel-header">
-        <div>
-          <h2>Jimaku</h2>
-        </div>
-      </header>
+      </SettingsDisclosure>
 
-      <div className="info-note">
-        <p className="microcopy">
-          Search Jimaku for Japanese subtitles from the Watch page and save them beside
-          your video. Get a key from <strong>jimaku.cc/account</strong>.
-        </p>
-      </div>
+      <SettingsDisclosure
+        title="Jimaku"
+        defaultOpen={false}
+        help="Search Jimaku for Japanese subtitles from the Watch page and save them beside your video. Get a key from jimaku.cc/account."
+      >
 
       <div className="settings-grid">
         <label className="field field-wide">
@@ -239,6 +227,7 @@ export function ScannerSettingsPage({
           />
         </label>
       </div>
+      </SettingsDisclosure>
     </>
   );
 }

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { TooltipBadge } from "../ui/Tooltip";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 // A capability the app manages for you: what it lets you do, whether it is available
 // right now, and the action that changes that.
@@ -11,9 +11,8 @@ import { TooltipBadge } from "../ui/Tooltip";
 // nothing needs doing.
 //
 // So the card is inverted: it appears only when the capability is NOT available, where it
-// earns its space by telling you what to do about it. The explanation of what the
-// capability is for moves into a badge beside the heading, because it is reference
-// material — read once, then never again — while status has to stay visible.
+// earns its space by telling you what to do about it. The section is collapsed in that
+// same spirit — a capability that works needs no more than its heading and its chip.
 export function CapabilitySection({
   title,
   help,
@@ -32,23 +31,23 @@ export function CapabilitySection({
   missingLabel?: string;
   /// Shown only when unavailable. Should say what to do, not what is wrong.
   callToAction: string;
-  /// The action row, and anything with its own progress or result of its own.
+  /// The action row, and anything with progress or a result of its own.
   children?: ReactNode;
 }) {
   return (
-    <>
-      <header className="panel-header">
-        <div className="section-heading">
-          <h2>{title}</h2>
-          <TooltipBadge label="?" description={help} />
-        </div>
+    <SettingsDisclosure
+      title={title}
+      help={help}
+      // Something you still have to set up opens itself; something that works stays shut.
+      defaultOpen={!ready}
+      status={
         <span
           className={`status-chip status-chip-${ready ? "success" : "warning"}`}
         >
           {ready ? readyLabel : missingLabel}
         </span>
-      </header>
-
+      }
+    >
       {ready ? null : (
         <div className="update-card available">
           <strong>{callToAction}</strong>
@@ -56,6 +55,6 @@ export function CapabilitySection({
       )}
 
       {children}
-    </>
+    </SettingsDisclosure>
   );
 }

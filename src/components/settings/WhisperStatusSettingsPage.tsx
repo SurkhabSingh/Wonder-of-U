@@ -1,5 +1,6 @@
 import { whisperStatusLabel } from "../../lib/helpers";
 import type { AppBootstrap, AppSettings } from "../../types";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 function whisperStatusTone(status: string): "success" | "warning" | "error" {
   if (status === "ready") {
@@ -27,20 +28,19 @@ export function WhisperStatusSettingsPage({
     : activeRuntimeVersion;
 
   return (
-    <>
-      <header className="panel-header">
-        <div>
-          <h2>Whisper</h2>
-        </div>
+    <SettingsDisclosure
+      title="Whisper"
+      defaultOpen={bootstrap.whisperDetection.status !== "ready"}
+      status={
         <span
           className={`status-chip status-chip-${whisperStatusTone(
             bootstrap.whisperDetection.status,
           )}`}
-          title={bootstrap.whisperDetection.message}
         >
           {whisperStatusLabel(bootstrap.whisperDetection.status)}
         </span>
-      </header>
+      }
+    >
 
       <div className="meta-list compact-meta-list">
         <div title={bootstrap.whisperDetection.executablePath || "Not installed"}>
@@ -60,6 +60,6 @@ export function WhisperStatusSettingsPage({
           <strong>{settingsDraft.whisper.language}</strong>
         </div>
       </div>
-    </>
+    </SettingsDisclosure>
   );
 }

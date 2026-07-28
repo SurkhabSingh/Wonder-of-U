@@ -8,6 +8,7 @@ import type {
 } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import type { BrowseDirectoryField, SettingsUpdate } from "./settingsTypes";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 export function PreferencesSettingsPage({
   autosaveMessage,
@@ -27,12 +28,7 @@ export function PreferencesSettingsPage({
   const confirm = useConfirm();
 
   return (
-    <>
-      <header className="panel-header">
-        <div>
-          <h2>App Preferences</h2>
-        </div>
-      </header>
+    <SettingsDisclosure title="App Preferences" defaultOpen={false}>
 
       {autosaveState === "error" ? (
         <p className="autosave-error" role="alert">
@@ -239,6 +235,6 @@ export function PreferencesSettingsPage({
           </p>
         ) : null}
       </div>
-    </>
+    </SettingsDisclosure>
   );
 }

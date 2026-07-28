@@ -111,9 +111,19 @@ export function SettingsPages({
     if (activePage !== "settings" || scrollTarget === null) {
       return;
     }
-    document
-      .getElementById(`settings-${scrollTarget}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = document.getElementById(`settings-${scrollTarget}`);
+    // Sections collapse when they have nothing that needs doing, so a deep link can land
+    // on a heading with its answer folded away. Opening it by clicking the summary rather
+    // than by setting `open` keeps each disclosure's own state in step — the same path a
+    // reader would take.
+    target
+      ?.querySelectorAll<HTMLElement>(
+        // Section disclosures only. Two pages nest a further `<details>` for their
+        // advanced controls, and a deep link should not fling those open as well.
+        ".settings-disclosure:not([open]) > .settings-disclosure-summary",
+      )
+      .forEach((summary) => summary.click());
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
     onScrollTargetHandled();
   }, [activePage, scrollTarget, onScrollTargetHandled]);
 

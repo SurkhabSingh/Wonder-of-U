@@ -11,6 +11,7 @@ import type {
 } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import type { SettingsUpdate } from "./settingsTypes";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 // Must match the extension's provider ids (KNOWN_TRANSLATION_PROVIDERS). The
 // desktop app sends the chosen id with every translation job; the extension
@@ -82,12 +83,7 @@ export function TranslationSettingsPage({
   }
 
   return (
-    <>
-      <header className="panel-header">
-        <div>
-          <h2>Translation</h2>
-        </div>
-      </header>
+    <SettingsDisclosure title="Translation" defaultOpen={false}>
 
       <div className="settings-grid">
         <label className="field">
@@ -144,6 +140,6 @@ export function TranslationSettingsPage({
           Support mode while translating.
         </p>
       </div>
-    </>
+    </SettingsDisclosure>
   );
 }

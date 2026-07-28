@@ -10,6 +10,7 @@ import { TooltipBadge } from "../ui/Tooltip";
 import { AnkiFieldSelect } from "./AnkiFieldSelect";
 import type { SettingsUpdate } from "./settingsTypes";
 import { invoke } from "@tauri-apps/api/core";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 export function AnkiMappingSettingsPage({
   busyAction,
@@ -66,36 +67,36 @@ export function AnkiMappingSettingsPage({
   };
 
   return (
-    <>
-      <header className="panel-header">
-        <div>
-          <h2>Card Mapping</h2>
-        </div>
-        <div className="panel-actions">
-          <span
-            className={`status-chip status-chip-${
-              displayedAnkiCatalog.status === "ready"
-                ? "success"
-                : displayedAnkiCatalog.status === "offline"
-                  ? "error"
-                  : "warning"
-            }`}
-            title={displayedAnkiCatalog.message}
-          >
-            {displayedAnkiCatalog.status === "ready" ? "Ready" : "Saved"}
-          </span>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() =>
-              void onRefreshAnkiCatalog(undefined, { notifySuccess: true })
-            }
-            disabled={busyAction === "loadAnki"}
-          >
-            Refresh Anki
-          </button>
-        </div>
-      </header>
+    <SettingsDisclosure
+      title="Card Mapping"
+      defaultOpen={displayedAnkiCatalog.status !== "ready"}
+      help="Which deck and note type mined cards go to, and which of its fields each part of the card is written into."
+      status={
+        <span
+          className={`status-chip status-chip-${
+            displayedAnkiCatalog.status === "ready"
+              ? "success"
+              : displayedAnkiCatalog.status === "offline"
+                ? "error"
+                : "warning"
+          }`}
+        >
+          {displayedAnkiCatalog.status === "ready" ? "Ready" : "Saved"}
+        </span>
+      }
+    >
+      <div className="action-row inline-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() =>
+            void onRefreshAnkiCatalog(undefined, { notifySuccess: true })
+          }
+          disabled={busyAction === "loadAnki"}
+        >
+          Reconnect to Anki
+        </button>
+      </div>
 
       <div
         className={`update-card ${
@@ -363,6 +364,6 @@ export function AnkiMappingSettingsPage({
       <div className="info-note">
         <strong>Cards play the audio first, then show the sentence.</strong>
       </div>
-    </>
+    </SettingsDisclosure>
   );
 }

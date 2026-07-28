@@ -10,6 +10,7 @@ import { TooltipBadge } from "../ui/Tooltip";
 import { UpdateResultCard } from "../ui/UpdateResultCard";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 import type { BrowseFileField, SettingsUpdate } from "./settingsTypes";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 export function ModelSettingsPage({
   bootstrap,
@@ -50,14 +51,11 @@ export function ModelSettingsPage({
   const manualModelOverride = settingsDraft.whisper.modelPath.trim().length > 0;
 
   return (
-    <div className="settings-subsection">
-      <header className="panel-header">
-        <h3>Whisper Model</h3>
-        <TooltipBadge
-          label="?"
-          description="Choose a model file manually, or let the app download the recommended multilingual model into your selected asset folder."
-        />
-      </header>
+    <SettingsDisclosure
+      title="Whisper Model"
+      defaultOpen={!modelInstalled}
+      help="Choose a model file yourself, or let the app download the recommended multilingual one into your asset folder."
+    >
 
       <div className="settings-grid">
         <label className="field">
@@ -301,6 +299,6 @@ export function ModelSettingsPage({
         />
       </div>
 
-    </div>
+    </SettingsDisclosure>
   );
 }

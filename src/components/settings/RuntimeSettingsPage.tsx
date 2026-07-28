@@ -5,10 +5,10 @@ import type {
   WhisperAssetUpdateResult,
 } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
-import { TooltipBadge } from "../ui/Tooltip";
 import { UpdateResultCard } from "../ui/UpdateResultCard";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 import type { BrowseFileField, SettingsUpdate } from "./settingsTypes";
+import { SettingsDisclosure } from "./SettingsDisclosure";
 
 export function RuntimeSettingsPage({
   activeRuntimeVersion,
@@ -50,14 +50,11 @@ export function RuntimeSettingsPage({
   settingsDraft: AppSettings;
 }) {
   return (
-    <div className="settings-subsection">
-      <header className="panel-header">
-        <h3>Whisper CLI</h3>
-        <TooltipBadge
-          label="?"
-          description="Paste a path if whisper-cli is already installed somewhere else, or let the app download and manage the recommended Windows runtime."
-        />
-      </header>
+    <SettingsDisclosure
+      title="Whisper CLI"
+      defaultOpen={!runtimeInstalled}
+      help="Paste a path if you already have a transcription runtime installed elsewhere, or let the app download and keep the recommended one up to date."
+    >
 
       {manualRuntimeOverride ? (
         <div
@@ -188,6 +185,6 @@ export function RuntimeSettingsPage({
           onCancel={() => void onCancelDownload()}
         />
       </div>
-    </div>
+    </SettingsDisclosure>
   );
 }
