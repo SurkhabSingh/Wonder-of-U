@@ -69,16 +69,10 @@ fn push_single_recording_to_anki<R: Runtime>(
         return Err("Map an Anki field for the transcript before pushing recordings.".into());
     }
 
+    // Same rule as the viewer and the translate path — see `transcript_source_for`.
     let transcript_variant = recording.transcript_for_language(transcription_language);
-    let transcript_path = transcript_variant
-        .map(|transcript| transcript.file_path.as_str())
-        .or_else(|| {
-            recording
-                .transcripts
-                .is_empty()
-                .then_some(recording.transcript_path.as_deref())
-                .flatten()
-        })
+    let (transcript_path, _) = recording
+        .transcript_source_for(transcription_language)
         .ok_or_else(|| {
             format!("This recording has not been transcribed for {transcription_language} yet.")
         })?;

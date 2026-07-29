@@ -527,6 +527,33 @@ impl RecentRecording {
         self.transcript_for_language(language).is_some()
     }
 
+    /// The transcript to READ for `language`, and the language it is actually in.
+    ///
+    /// One answer to "which transcript?", because there were three and they disagreed. A
+    /// recording can hold several variants; `transcript_path` is merely the one transcribed
+    /// most recently, which is why re-translate once sent a Czech transcript for a recording
+    /// being read in Japanese, and why a push once wrote English into the sentence field
+    /// while the viewer showed Japanese. The configured language decides, everywhere.
+    ///
+    /// Falls back to `transcript_path` only when there are no variants at all — recordings
+    /// made before variants existed have the one file and no list.
+    pub(crate) fn transcript_source_for(&self, language: &str) -> Option<(&str, String)> {
+        if let Some(variant) = self.transcript_for_language(language) {
+            return Some((variant.file_path.as_str(), variant.language.clone()));
+        }
+        if self.transcripts.is_empty() {
+            if let Some(path) = self.transcript_path.as_deref() {
+                return Some((
+                    path,
+                    self.transcript_language
+                        .clone()
+                        .unwrap_or_else(|| "auto".to_string()),
+                ));
+            }
+        }
+        None
+    }
+
     pub(crate) fn anki_push_for_target(
         &self,
         language: &str,

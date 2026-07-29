@@ -243,7 +243,14 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
 
     // The translate-after-transcription path never forces a re-translate; `force`
     // is only for the manual re-translate command.
-    let item = translate_single_recording(app, bridge, recording, false, &target);
+    let item = translate_single_recording(
+        app,
+        bridge,
+        recording,
+        false,
+        &target,
+        &configured_transcription_language(app),
+    );
 
     match item.status.as_str() {
         "success" => Some("Translated.".to_string()),
@@ -285,12 +292,26 @@ fn translation_matches_target(translation_path: Option<&str>, target_language: &
         .unwrap_or(false)
 }
 
+/// The transcription language from Settings — the single answer to "which transcript?",
+/// shared by the viewer, a push, and a translate. Falls back to auto-detection rather than
+/// to a specific language, so an unset value never silently means English.
+fn configured_transcription_language<R: Runtime>(app: &AppHandle<R>) -> String {
+    app.state::<SharedPersistedState>()
+        .0
+        .lock()
+        .map(|persisted| persisted.settings.whisper.language.clone())
+        .unwrap_or_else(|_| "auto".to_string())
+}
+
 fn translate_single_recording<R: Runtime>(
     app: &AppHandle<R>,
     bridge: &TranslationBridge,
     recording: RecentRecording,
     force: bool,
     target: &TranslationTarget,
+    // Which transcript to translate FROM — the configured transcription language, the same
+    // one the viewer displays and a push sends.
+    source_language: &str,
 ) -> RecordingActionItem {
     // `force` re-translates even recordings that already have a translation in the
     // target language, deterministically overwriting {stem}.translation.{lang}.txt.
@@ -312,9 +333,18 @@ fn translate_single_recording<R: Runtime>(
         return failed_translation_item(&recording, translation_unavailable_reason(bridge));
     }
 
-    let transcript_path = match recording.transcript_path.clone() {
-        Some(path) => path,
-        None => return failed_translation_item(&recording, "No transcript available to translate."),
+    // The variant for the CONFIGURED language, not whichever was transcribed last. Reading
+    // `transcript_path` meant re-translate sent whatever the most recent pass produced —
+    // a Czech transcript for a recording being read in Japanese — while the viewer showed
+    // something else entirely.
+    let (transcript_path, source_lang) = match recording.transcript_source_for(&source_language) {
+        Some((path, language)) => (path.to_string(), language),
+        None => {
+            return failed_translation_item(
+                &recording,
+                format!("This recording has no {source_language} transcript to translate."),
+            )
+        }
     };
 
     let source_text = match fs::read_to_string(&transcript_path) {
@@ -327,11 +357,6 @@ fn translate_single_recording<R: Runtime>(
     if source_text.trim().is_empty() {
         return failed_translation_item(&recording, "The transcript is empty.");
     }
-
-    let source_lang = recording
-        .transcript_language
-        .clone()
-        .unwrap_or_else(|| "auto".to_string());
     let job_id = match bridge.submit(
         source_text,
         source_lang,
@@ -605,6 +630,7 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
     }
 
     let target = TranslationTarget::configured(app);
+    let source_language = configured_transcription_language(app);
     let mut items = Vec::new();
     for recording in recordings {
         // Each job blocks for up to TRANSLATION_TIMEOUT, so a batch that loses the
@@ -619,7 +645,12 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
         }
 
         items.push(translate_single_recording(
-            app, bridge, recording, force, &target,
+            app,
+            bridge,
+            recording,
+            force,
+            &target,
+            &source_language,
         ));
     }
 
