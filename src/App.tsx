@@ -786,6 +786,7 @@ function App() {
             viewingRecording ? (
               <TranscriptViewerPage
                 recording={viewingRecording}
+                transcriptionLanguage={settingsDraft.whisper.language}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
                   enqueueTranscriptions([viewingRecording.filePath], force)

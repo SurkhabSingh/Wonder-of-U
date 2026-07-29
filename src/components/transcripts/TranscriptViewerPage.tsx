@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import { useRecordingTexts } from "../../hooks/useRecordingTexts";
 import {
@@ -127,6 +128,11 @@ function splitSegmentAt(
   return [...segments.slice(0, index), first, second, ...segments.slice(index + 1)];
 }
 
+/// Returned when a translation exists but its lines do not correspond to the transcript's,
+/// so no line can be attached. Distinct from `null`, which means there is no translation at
+/// all — the first is worth telling the reader about, the second is not.
+const MISALIGNED_TRANSLATION = Symbol("misaligned-translation");
+
 // The translation that already exists for a mined sentence: the positionally
 // paired line the viewer shows beside it. Returns null (mine the text alone,
 // never generate a fresh translation) when there is no translation document, or
@@ -137,7 +143,7 @@ function pairedTranslationFor(
   segment: RecordingSegment,
   transcript: RecordingTextDocument | null,
   translation: RecordingTextDocument | null,
-): string | null {
+): string | null | typeof MISALIGNED_TRANSLATION {
   if (!translation || translation.missing) {
     return null;
   }
@@ -150,7 +156,16 @@ function pairedTranslationFor(
   ) {
     return null;
   }
-  const line = splitTranscriptSegments(translation.text)[index]?.trim();
+  // The pairing is positional, so it is only meaningful when the two sides have the same
+  // number of lines. A whole-document translation re-segments freely — one Japanese line
+  // can come back as three English ones — and then row i on one side is simply not the
+  // counterpart of row i on the other. Attaching it anyway put a confidently wrong sentence
+  // on the card, which is worse than attaching none: nothing on the card says it is wrong.
+  const lines = splitTranscriptSegments(translation.text);
+  if (lines.length !== transcript?.segments.length) {
+    return MISALIGNED_TRANSLATION;
+  }
+  const line = lines[index]?.trim();
   return line && line.length > 0 ? line : null;
 }
 
@@ -295,6 +310,7 @@ export function TranscriptViewerPage({
   liveSegments,
   onCancelTranscription,
   lastTranscriptionOutcome,
+  transcriptionLanguage,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -336,6 +352,12 @@ export function TranscriptViewerPage({
   // Stop the running transcription. Undefined when this recording is not the one
   // being transcribed, which is also when the progress block is not rendered.
   onCancelTranscription: (() => void) | undefined;
+  /// The transcription language from Settings. A recording can hold several transcript
+  /// variants, and this is what decides which one is "the" transcript — the same setting a
+  /// push reads, so what is on screen is what a push sends. The viewer used to open
+  /// whichever variant happened to be first in the list, which is how the two came to
+  /// disagree without either being obviously wrong.
+  transcriptionLanguage: string;
   // Set when the most recent transcription of this recording ended badly, so the viewer
   // can say which of "you cancelled it", "it failed" and "there is no transcript" the
   // empty screen actually means. Null when the last run succeeded or none has run.
@@ -412,14 +434,20 @@ export function TranscriptViewerPage({
     if (transcripts.length === 0) {
       return null;
     }
-    if (activeLanguage) {
-      const match = transcripts.find((doc) => doc.language === activeLanguage);
+    // What the reader picked wins; otherwise the Settings language, which is what a push
+    // reads. Only when the recording has no variant for it does this fall back to the first
+    // one, so "there is nothing in your language" still shows something rather than nothing.
+    for (const preferred of [activeLanguage, transcriptionLanguage]) {
+      if (!preferred) {
+        continue;
+      }
+      const match = transcripts.find((doc) => doc.language === preferred);
       if (match) {
         return match;
       }
     }
     return transcripts[0];
-  }, [transcripts, activeLanguage]);
+  }, [transcripts, activeLanguage, transcriptionLanguage]);
 
   const activeTranslation = translations[0] ?? null;
 
@@ -488,12 +516,21 @@ export function TranscriptViewerPage({
       return;
     }
     setMiningKey(key);
-    const translation = pairedTranslationFor(
+    const paired = pairedTranslationFor(
       index,
       segment,
       activeTranscript,
       activeTranslation,
     );
+    if (paired === MISALIGNED_TRANSLATION) {
+      // Said before the card is made, not after: the reader is about to get a card without
+      // the translation they can see on screen, and the reason is not guessable from the
+      // card itself.
+      toast.warning(
+        "This line is mined without a translation — the translation has a different number of lines, so no single line matches it.",
+      );
+    }
+    const translation = paired === MISALIGNED_TRANSLATION ? null : paired;
     void onMineSegment(segment.text, segment.startMs, segment.endMs, translation)
       .then((mined) => {
         if (mined) {
