@@ -10,6 +10,10 @@ export function useMinedSentences() {
   const [minedSentences, setMinedSentences] = useState<Set<string>>(
     () => new Set(),
   );
+  // A mapping that points at a deck, note type or field Anki no longer has. Distinct from
+  // "offline" and "nothing configured yet", which are both quiet on purpose — this one the
+  // user can fix, and without it the only symptom is marks that never appear.
+  const [minedWarning, setMinedWarning] = useState<string | null>(null);
   const inFlightRef = useRef(false);
   // A refresh asked for while another was running. Dropping it outright would lose
   // the update for good — there is no poll to retry it — so the request is remembered
@@ -32,6 +36,9 @@ export function useMinedSentences() {
         // closed, and quietly claim every sentence was unmined.
         if (result.status === "ready") {
           setMinedSentences(new Set(result.sentences));
+          setMinedWarning(null);
+        } else if (result.status === "stale") {
+          setMinedWarning(result.message);
         } else if (import.meta.env.DEV) {
           console.debug("load_mined_sentences:", result.status, result.message);
         }
@@ -51,6 +58,7 @@ export function useMinedSentences() {
 
   return {
     minedSentences,
+    minedWarning,
     refreshMinedSentences,
   };
 }

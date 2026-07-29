@@ -169,7 +169,8 @@ function App() {
     showSuccess,
     showWarning,
   });
-  const { minedSentences, refreshMinedSentences } = useMinedSentences();
+  const { minedSentences, minedWarning, refreshMinedSentences } =
+    useMinedSentences();
   const watch = useWatchSession();
   const watchSubtitles = useWatchSubtitles();
   // Rows mined in this watch session, and the per-mine padding overrides. "" means
@@ -392,6 +393,21 @@ function App() {
 
   // A finished mic recording is now saved untranscribed and hands itself off for
   // transcription through this event, so auto-transcribe-after-recording runs on
+  // A stale Anki mapping is said out loud, once per distinct problem. Everything else this
+  // read can report — Anki closed, nothing mapped yet — stays quiet by design; those are
+  // states the user is already in on purpose. This one looks identical from the outside
+  // (no marks appear) and is the only one they can act on.
+  const reportedMinedWarningRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (minedWarning && reportedMinedWarningRef.current !== minedWarning) {
+      reportedMinedWarningRef.current = minedWarning;
+      showWarning(minedWarning);
+    }
+    if (!minedWarning) {
+      reportedMinedWarningRef.current = null;
+    }
+  }, [minedWarning]);
+
   // Read by the mined-line listener below, which must not re-subscribe every time the cue
   // list changes — an event arriving during that gap would be lost.
   const cuesRef = useRef(watchSubtitles.cues);

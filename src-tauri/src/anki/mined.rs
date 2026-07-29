@@ -378,7 +378,7 @@ pub(crate) fn load_mined_sentences_inner<R: Runtime>(
                 .unwrap_or(false);
             if !known {
                 return Ok(MinedSentences {
-                    status: "unmapped".into(),
+                    status: "stale".into(),
                     message: format!(
                         "The note type \"{note_type}\" has no field called \"{field}\" any more,                          so mined sentences cannot be matched. Re-map the sentence field in Settings."
                     ),
@@ -388,7 +388,7 @@ pub(crate) fn load_mined_sentences_inner<R: Runtime>(
         }
         Err(error) => {
             return Ok(MinedSentences {
-                status: "unmapped".into(),
+                status: "stale".into(),
                 message: format!(
                     "The note type \"{note_type}\" is no longer in Anki, so mined sentences                      cannot be matched. Choose one in Settings. ({error})"
                 ),
