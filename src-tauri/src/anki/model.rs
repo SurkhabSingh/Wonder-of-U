@@ -4,8 +4,8 @@ use super::client::{
 
 /// The app's OWN note type — a listening card, deliberately distinct from the Anki
 /// Lookup add-on's vocabulary card. The add-on's card is word→meaning (the word on the
-/// front); this one is audio→text for listening practice: only the audio plays on the
-/// front, and the sentence, translation, and source are revealed on the back. The two
+/// front); this one is media→text for listening practice: the clip and the audio play on
+/// the front, and the sentence, translation, and source are revealed on the back. The two
 /// serve opposite workflows, so they are separate note types with separate names and
 /// never collide on creation (the earlier "byte-identical shared type" coupling is
 /// intentionally severed).
@@ -29,10 +29,19 @@ const FIELD_NAMES: [&str; 9] = [
     "Time",
 ];
 
-/// Card front: the audio alone, so the reviewer listens and recalls the rest. `{{#Audio}}`
-/// guards it so a note that somehow lacks audio still generates a card rather than
-/// erroring.
+/// Card front: the clip or the still, the audio, and nothing that gives the answer away.
+///
+/// The media belongs here rather than on the back. What is being tested is the SENTENCE —
+/// whether you can follow the line — and the picture is the context you would have had
+/// watching it, not the answer. Subtitles are rendered by the player and never burned into
+/// the clip, so showing it gives nothing away.
+///
+/// A clip replaces the still when both exist: they are the same moment, and one of them is
+/// moving. Every block is `{{#Field}}`-guarded so a note missing any of them still
+/// generates a card rather than erroring.
 const FRONT_TEMPLATE: &str = r#"<div class="wu-card wu-front">
+  {{#Video}}<div class="wu-video">{{Video}}</div>{{/Video}}
+  {{^Video}}{{#Image}}<div class="wu-image">{{Image}}</div>{{/Image}}{{/Video}}
   {{#Audio}}<div class="wu-audio">{{Audio}}</div>{{/Audio}}
   <div class="wu-hint">Listen and recall</div>
 </div>"#;
@@ -275,16 +284,17 @@ fn update_existing_note_type() -> Result<(), String> {
             };
             let mut next = serde_json::Map::new();
             for (side, html) in sides {
+                let _ = side;
                 let html = html.as_str().unwrap_or_default();
                 // Only an unfiltered {{Sentence}} needs rewriting; a template already
                 // using the filter (or a hand-edited one) is left exactly as it is.
                 let mut updated = html.replace("{{Sentence}}", "{{furigana:Sentence}}");
                 // Adding the field is only half of it — a field no template renders shows
-                // nothing, and Anki only plays media it can see. The back side gets a block
-                // for anything it does not already mention.
-                if side.eq_ignore_ascii_case("Back") {
-                    updated = ensure_media_blocks(&updated);
-                }
+                // nothing, and Anki only plays media it can see. BOTH sides get a block for
+                // anything they do not already mention: the front is where the clip and the
+                // still belong, and the back keeps them so they can be replayed while
+                // reading the sentence.
+                updated = ensure_media_blocks(&updated);
                 next.insert(side.clone(), serde_json::Value::String(updated));
             }
             patched.insert(name.clone(), serde_json::Value::Object(next));
@@ -307,8 +317,20 @@ fn update_existing_note_type() -> Result<(), String> {
         .get("css")
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    if !current_css.contains(FURIGANA_CSS_MARKER) {
-        let merged = format!("{current_css}\n{FURIGANA_CSS}");
+    // Appended, never overwritten: `updateModelStyling` replaces the whole stylesheet, so
+    // writing `CARD_CSS` over a note type the user has customised would discard their work.
+    // Accumulated rather than written one block at a time, so adding a third later cannot
+    // overwrite the second.
+    let mut merged = current_css.to_string();
+    if !merged.contains(FURIGANA_CSS_MARKER) {
+        merged.push('\n');
+        merged.push_str(FURIGANA_CSS);
+    }
+    if !merged.contains(MEDIA_CSS_MARKER) {
+        merged.push('\n');
+        merged.push_str(MEDIA_CSS);
+    }
+    if merged != current_css {
         anki_connect_request(
             "updateModelStyling",
             serde_json::json!({
@@ -353,7 +375,28 @@ pub(crate) fn create_recommended_note_type_inner() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_media_blocks, BACK_TEMPLATE, FIELD_NAMES};
+    use super::{ensure_media_blocks, BACK_TEMPLATE, FIELD_NAMES, FRONT_TEMPLATE};
+
+    #[test]
+    fn the_front_shows_the_media_and_never_the_answer() {
+        // The clip and the still are context, not the answer — they belong with the audio,
+        // before the reveal. The sentence, its reading and its translation must not.
+        assert!(FRONT_TEMPLATE.contains("{{Video}}"));
+        assert!(FRONT_TEMPLATE.contains("{{Image}}"));
+        assert!(FRONT_TEMPLATE.contains("{{Audio}}"));
+        for answer in ["Sentence", "Translation", "Reading"] {
+            assert!(
+                !FRONT_TEMPLATE.contains(&format!("{{{{{answer}}}}}")),
+                "{answer} would give the answer away on the front"
+            );
+        }
+    }
+
+    #[test]
+    fn the_apps_own_front_template_is_left_alone() {
+        // The updater runs over both sides now, so the front has to be a no-op too.
+        assert_eq!(ensure_media_blocks(FRONT_TEMPLATE), FRONT_TEMPLATE);
+    }
 
     #[test]
     fn the_apps_own_back_template_is_left_alone() {

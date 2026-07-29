@@ -517,8 +517,17 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             // unconstrained 720p clip renders at its native size — wider than the card,
             // pushed off to one side, with the whole card scrolling sideways.
             serde_json::Value::String(format!(
+                // `autoplay muted`, in that order of importance. Chromium — which is what
+                // Anki's webview is — refuses to autoplay a clip with sound before the user
+                // has interacted with the page, so an unmuted autoplay is the kind that
+                // silently does not happen. Muted is the kind that always does.
+                //
+                // Muting costs nothing here because the card plays the line's audio itself,
+                // cut from the same padded window, so the sound is already there. `controls`
+                // stays so unmuting is one click for anyone who wants the clip's own track.
                 concat!(
-                    "<video src=\"{}\" controls preload=\"metadata\" playsinline ",
+                    "<video src=\"{}\" autoplay muted loop controls playsinline ",
+                    "preload=\"auto\" ",
                     "style=\"max-width:100%;height:auto;display:block;margin:0 auto\">",
                     "</video>"
                 ),
