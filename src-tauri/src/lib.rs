@@ -68,6 +68,20 @@ pub fn run() {
             translation_bridge::start_bridge_server(app.handle().clone());
 
             emit_app_snapshot(app.handle());
+
+            // Version strings need the binaries run, and detection deliberately never does
+            // that — see `VersionCache`. Resolve them once here, off the main thread, then
+            // emit again so the settings page has them without anything having blocked.
+            let version_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let settings = match version_handle.state::<SharedPersistedState>().0.lock() {
+                    Ok(persisted) => persisted.settings.clone(),
+                    Err(_) => return,
+                };
+                runtime_assets::warm_asset_versions(&settings);
+                emit_app_snapshot(&version_handle);
+            });
+
             Ok(())
         })
         .on_page_load(move |webview, payload| {

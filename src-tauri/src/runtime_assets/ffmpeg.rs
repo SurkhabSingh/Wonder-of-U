@@ -10,7 +10,7 @@ use std::os::windows::process::CommandExt;
 use crate::app_types::{AppSettings, FfmpegDetection};
 
 use super::path_probe::PathProbeCache;
-use super::versions::{probe_version, VersionCache};
+use super::versions::VersionCache;
 use super::ytdlp::managed_binary_is_present;
 
 #[cfg(target_os = "windows")]
@@ -23,7 +23,7 @@ static PATH_FFMPEG_PROBE: PathProbeCache = PathProbeCache::new();
 /// The installed build string, behind the same trust window. Detection deliberately does
 /// not spawn a managed binary to confirm it exists; this spawns one to read its version, so
 /// it has to be cached or it reintroduces exactly the per-emit cost that cache prevents.
-static FFMPEG_VERSION: VersionCache = VersionCache::new();
+pub(super) static FFMPEG_VERSION: VersionCache = VersionCache::new("-version");
 
 fn managed_ffmpeg_root(asset_directory: &Path) -> PathBuf {
     asset_directory.join("ffmpeg-runtime")
@@ -113,7 +113,7 @@ pub(crate) fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
             status: "ready".into(),
             executable_path: Some(managed_path.display().to_string()),
             managed: true,
-            version: FFMPEG_VERSION.probe(|| probe_version(&managed_path, "-version")),
+            version: FFMPEG_VERSION.version_for(&managed_path),
             message:
                 "App-managed FFmpeg is ready. Transcribed WAV recordings can be manually converted to MP3."
                     .into(),
@@ -126,7 +126,7 @@ pub(crate) fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
             status: "ready".into(),
             executable_path: Some("ffmpeg".into()),
             managed: false,
-            version: FFMPEG_VERSION.probe(|| probe_version(&path_candidate, "-version")),
+            version: FFMPEG_VERSION.version_for(&path_candidate),
             message:
                 "System FFmpeg is available. Transcribed WAV recordings can be manually converted to MP3."
                     .into(),

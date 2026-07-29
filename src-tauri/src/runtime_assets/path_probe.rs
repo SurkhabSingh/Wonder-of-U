@@ -16,8 +16,8 @@ use std::{
 /// within the window, with no app restart and nothing to invalidate by hand.
 const PATH_PROBE_TRUST_WINDOW: Duration = Duration::from_secs(60);
 
-struct CachedProbe<T> {
-    value: T,
+struct CachedProbe {
+    available: bool,
     probed_at: Instant,
 }
 
@@ -25,15 +25,12 @@ struct CachedProbe<T> {
 /// on every call — those are cheap metadata checks — so `asset_directory` changes
 /// need no invalidation here: the managed branch answers before this cache is ever
 /// consulted, and this only ever memoizes the "no managed binary" outcome.
-pub(super) struct ProbeCache<T> {
-    state: Mutex<Option<CachedProbe<T>>>,
+pub(super) struct PathProbeCache {
+    state: Mutex<Option<CachedProbe>>,
     trust_window: Duration,
 }
 
-/// The original shape: caches whether one PATH binary runs.
-pub(super) type PathProbeCache = ProbeCache<bool>;
-
-impl<T: Clone> ProbeCache<T> {
+impl PathProbeCache {
     pub(super) const fn new() -> Self {
         Self::with_trust_window(PATH_PROBE_TRUST_WINDOW)
     }
@@ -45,18 +42,18 @@ impl<T: Clone> ProbeCache<T> {
         }
     }
 
-    fn fresh_result(&self) -> Option<T> {
+    fn fresh_result(&self) -> Option<bool> {
         let cached = self.state.lock().ok()?;
         cached
             .as_ref()
             .filter(|entry| entry.probed_at.elapsed() < self.trust_window)
-            .map(|entry| entry.value.clone())
+            .map(|entry| entry.available)
     }
 
-    fn store(&self, value: T) {
+    fn store(&self, available: bool) {
         if let Ok(mut cached) = self.state.lock() {
             *cached = Some(CachedProbe {
-                value,
+                available,
                 probed_at: Instant::now(),
             });
         }
@@ -67,26 +64,17 @@ impl<T: Clone> ProbeCache<T> {
     /// `probe` spawns a process, so it runs with the cache lock released — two callers
     /// racing a cold cache may both probe, and both then store the same answer. A
     /// poisoned lock degrades to probing every call rather than failing detection.
-    pub(super) fn probe<P>(&self, probe: P) -> T
-    where
-        P: FnOnce() -> T,
-    {
-        if let Some(value) = self.fresh_result() {
-            return value;
-        }
-
-        let value = probe();
-        self.store(value.clone());
-        value
-    }
-}
-
-impl ProbeCache<bool> {
     pub(super) fn binary_is_available<P>(&self, probe: P) -> bool
     where
         P: FnOnce() -> bool,
     {
-        self.probe(probe)
+        if let Some(available) = self.fresh_result() {
+            return available;
+        }
+
+        let available = probe();
+        self.store(available);
+        available
     }
 }
 

@@ -1,9 +1,12 @@
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Mutex,
+    time::SystemTime,
+};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-
-use super::path_probe::ProbeCache;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -48,9 +51,9 @@ pub(super) fn version_from_banner(stdout: &str) -> Option<String> {
 /// Runs `<binary> <flag>` and reads the version out of what it prints.
 ///
 /// Returns `None` for anything that did not run or did not print a version — the version is
-/// decoration beside a status the caller already knows, so a tool that answers in a shape we
-/// do not recognise shows no version rather than blocking detection or reporting a guess.
-pub(super) fn probe_version(executable_path: &Path, flag: &str) -> Option<String> {
+/// decoration beside a status the caller already knows, so a tool answering in a shape we do
+/// not recognise shows no version rather than blocking detection or reporting a guess.
+fn probe_version(executable_path: &Path, flag: &str) -> Option<String> {
     let mut command = Command::new(executable_path);
     #[cfg(target_os = "windows")]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -61,13 +64,107 @@ pub(super) fn probe_version(executable_path: &Path, flag: &str) -> Option<String
     version_from_banner(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// A cached version string for one binary.
+/// Which file a cached version describes.
 ///
-/// This exists for the reason spelled out on `PathProbeCache`: `detect_local_*` runs on
-/// every app-snapshot emit, and spawning a process there is what once stalled the import
-/// queue. A managed binary is trusted by presence and never spawned — showing its version
-/// would undo that — so the spawn goes behind the same trust window instead.
-pub(super) type VersionCache = ProbeCache<Option<String>>;
+/// Length and modified time rather than a hash: this is compared on every detection, and
+/// detection already stats these paths. A download replaces the binary, so both move.
+#[derive(Clone, PartialEq, Eq)]
+struct FileIdentity {
+    path: PathBuf,
+    length: u64,
+    modified: Option<SystemTime>,
+}
+
+impl FileIdentity {
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            path: path.to_path_buf(),
+            length: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct VersionState {
+    describes: Option<FileIdentity>,
+    version: Option<String>,
+    refreshing: bool,
+}
+
+/// The version one managed binary reports, resolved off the detection path.
+///
+/// **`version_for` never spawns a process.** `detect_local_*` runs on every app-snapshot
+/// emit, and emits fire on every download-progress tick — spawning there is what stalled the
+/// import queue before, and is why the managed branch of detection trusts a binary's mere
+/// presence instead of running it. Reading a version means running it, so the run happens on
+/// a background thread and detection only ever reads what that thread left behind.
+///
+/// The cache invalidates on the file itself rather than on a timer, so a download that
+/// replaces the binary is picked up because its length and modified time moved — no
+/// completion hook to forget at one of the five download sites.
+pub(super) struct VersionCache {
+    state: Mutex<VersionState>,
+    flag: &'static str,
+}
+
+impl VersionCache {
+    pub(super) const fn new(flag: &'static str) -> Self {
+        Self {
+            state: Mutex::new(VersionState {
+                describes: None,
+                version: None,
+                refreshing: false,
+            }),
+            flag,
+        }
+    }
+
+    /// The version, if one is already known for the file currently at `path`.
+    ///
+    /// Returns `None` and starts one background probe otherwise. `None` is the same answer
+    /// the UI gives for "not installed", so a version that has not resolved yet simply is
+    /// not shown — it never blocks, and never reports a version belonging to a binary that
+    /// has since been replaced.
+    pub(super) fn version_for(&'static self, path: &Path) -> Option<String> {
+        let identity = FileIdentity::read(path)?;
+        let mut state = self.state.lock().ok()?;
+        if state.describes.as_ref() == Some(&identity) {
+            return state.version.clone();
+        }
+        if state.refreshing {
+            return None;
+        }
+        state.refreshing = true;
+        drop(state);
+
+        let flag = self.flag;
+        std::thread::spawn(move || {
+            let version = probe_version(&identity.path, flag);
+            if let Ok(mut state) = self.state.lock() {
+                state.describes = Some(identity);
+                state.version = version;
+                state.refreshing = false;
+            }
+        });
+        None
+    }
+
+    /// Resolves the version now, blocking until it has. For the startup warm-up, which runs
+    /// on its own thread so the first snapshot already carries versions.
+    pub(super) fn warm(&'static self, path: &Path) {
+        let Some(identity) = FileIdentity::read(path) else {
+            return;
+        };
+        let version = probe_version(path, self.flag);
+        if let Ok(mut state) = self.state.lock() {
+            state.describes = Some(identity);
+            state.version = version;
+            state.refreshing = false;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -117,5 +214,24 @@ mod tests {
             version_from_banner("\n\n  ffmpeg version 6.0 Copyright").as_deref(),
             Some("6.0")
         );
+    }
+}
+
+/// Resolves every managed binary's version, blocking.
+///
+/// Call this on a background thread at startup so the first snapshot the settings page sees
+/// already carries versions. Afterwards the caches keep themselves current: each one notices
+/// when the file it described has been replaced.
+pub(crate) fn warm_asset_versions(settings: &crate::app_types::AppSettings) {
+    use super::{alass, ffmpeg, ytdlp};
+
+    if let Some(path) = ffmpeg::detect_local_ffmpeg(settings).executable_path {
+        ffmpeg::FFMPEG_VERSION.warm(std::path::Path::new(&path));
+    }
+    if let Some(path) = ytdlp::detect_local_ytdlp(settings).executable_path {
+        ytdlp::YTDLP_VERSION.warm(std::path::Path::new(&path));
+    }
+    if let Some(path) = alass::detect_local_alass(settings).executable_path {
+        alass::ALASS_VERSION.warm(std::path::Path::new(&path));
     }
 }

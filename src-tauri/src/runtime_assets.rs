@@ -16,6 +16,7 @@ pub(crate) use alass::{
     managed_alass_install_directory, verify_alass_binary,
 };
 pub(crate) use mpv::detect_local_mpv;
+pub(crate) use versions::warm_asset_versions;
 pub(crate) use updates::{
     check_whisper_model_update_inner, check_whisper_runtime_update_inner, check_ytdlp_update_inner,
 };
