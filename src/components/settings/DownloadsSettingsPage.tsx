@@ -75,7 +75,6 @@ export function DownloadsSettingsPage({
         <DownloadRow
           title="MP3 compression"
           toolName="FFmpeg"
-          version={ffmpeg.version}
           ready={ffmpegReady}
           description={
             ffmpegReady
@@ -101,7 +100,6 @@ export function DownloadsSettingsPage({
         <DownloadRow
           title="YouTube import"
           toolName="yt-dlp"
-          version={ytdlp.version}
           ready={ytdlpReady}
           note={ytdlpReady ? ytdlpUpdateResult?.message : null}
           description={
@@ -147,7 +145,6 @@ export function DownloadsSettingsPage({
         <DownloadRow
           title="Subtitle sync"
           toolName="alass"
-          version={alass.version}
           ready={alassReady}
           missingLabel="Optional"
           description={

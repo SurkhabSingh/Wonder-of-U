@@ -15,7 +15,6 @@ export function DownloadRow({
   title,
   toolName,
   description,
-  version,
   ready,
   readyLabel = "Ready",
   missingLabel = "Missing",
@@ -27,9 +26,6 @@ export function DownloadRow({
   /// The binary this row manages, muted beside the title.
   toolName: string;
   description: string;
-  /// What the installed copy reports for itself. Shown whenever it is known, not only after
-  /// a check — it is the thing worth knowing at a glance.
-  version?: string | null;
   ready: boolean;
   readyLabel?: string;
   /// "Missing" for something the app needs, "Optional" for something it can do without.
@@ -46,9 +42,6 @@ export function DownloadRow({
         <div className="download-row-text">
           <p className="download-row-title">
             {title} <span className="download-row-tool">{toolName}</span>
-            {version ? (
-              <span className="download-row-version">{version}</span>
-            ) : null}
           </p>
           <p className="microcopy">{note ?? description}</p>
         </div>

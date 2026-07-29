@@ -396,20 +396,17 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     status: "notFound",
     executablePath: null,
     managed: false,
-    version: null,
     message: "Not set up yet. Download it to convert transcribed recordings to MP3.",
   },
   ytdlpDetection: {
     status: "notFound",
     executablePath: null,
     managed: false,
-    version: null,
     message: "Not set up yet. Download it to import audio from YouTube.",
   },
   alassDetection: {
     status: "notFound",
     executablePath: null,
-    version: null,
     message:
       "Not set up yet. Download it to align out-of-sync subtitles automatically.",
   },

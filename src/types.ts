@@ -232,8 +232,6 @@ export type FfmpegDetection = {
   status: string;
   executablePath: string | null;
   managed: boolean;
-  /// What the installed binary reports for itself, or null when nothing is installed.
-  version: string | null;
   message: string;
 };
 
@@ -241,8 +239,6 @@ export type YtdlpDetection = {
   status: string;
   executablePath: string | null;
   managed: boolean;
-  /// What the installed binary reports for itself, or null when nothing is installed.
-  version: string | null;
   message: string;
 };
 
@@ -250,8 +246,6 @@ export type YtdlpDetection = {
 export type AlassDetection = {
   status: string;
   executablePath: string | null;
-  /// What the installed binary reports for itself, or null when nothing is installed.
-  version: string | null;
   message: string;
 };
 
