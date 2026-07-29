@@ -1,6 +1,6 @@
 use std::{path::Path, process::Command};
 
-use super::mine::hide_command_window;
+use super::mine::{hide_command_window, ClipPadding};
 
 /// The clip is capped at 720p, not left at the source resolution.
 ///
@@ -30,7 +30,19 @@ const CLIP_QUALITY: &str = "34";
 ///
 /// `-ss`/`-to` come before `-i`, matching the audio slicer: ffmpeg seeks by keyframe before
 /// it starts decoding, which is what keeps this fast on a long episode.
-pub(super) fn clip_ffmpeg_args(start_ms: u64, end_ms: u64, input: &str, output: &str) -> Vec<String> {
+pub(super) fn clip_ffmpeg_args(
+    start_ms: u64,
+    end_ms: u64,
+    padding: ClipPadding,
+    input: &str,
+    output: &str,
+) -> Vec<String> {
+    // Padding applied HERE, exactly as `slice_ffmpeg_args` does it, so the two builders take
+    // the same arguments and mean the same thing by them. They used to disagree — this one
+    // took a window the caller had already padded — and the cost of that asymmetry is a clip
+    // silently a quarter-second out of step with its own audio, which nothing would fail on.
+    let start = start_ms.saturating_sub(padding.before_ms);
+    let end = end_ms.saturating_add(padding.after_ms);
     vec![
         "-y".into(),
         "-nostdin".into(),
@@ -38,9 +50,9 @@ pub(super) fn clip_ffmpeg_args(start_ms: u64, end_ms: u64, input: &str, output: 
         "-loglevel".into(),
         "error".into(),
         "-ss".into(),
-        format!("{}.{:03}", start_ms / 1000, start_ms % 1000),
+        format!("{}.{:03}", start / 1000, start % 1000),
         "-to".into(),
-        format!("{}.{:03}", end_ms / 1000, end_ms % 1000),
+        format!("{}.{:03}", end / 1000, end % 1000),
         "-i".into(),
         input.into(),
         // First video and first audio stream. Without this an MKV with several audio tracks
@@ -98,6 +110,7 @@ pub(super) fn capture_clip(
     video_path: &Path,
     start_ms: u64,
     end_ms: u64,
+    padding: ClipPadding,
     output_path: &Path,
 ) -> Result<(), String> {
     if !video_path.exists() {
@@ -112,6 +125,7 @@ pub(super) fn capture_clip(
     command.args(clip_ffmpeg_args(
         start_ms,
         end_ms,
+        padding,
         &video_path.display().to_string(),
         &output_path.display().to_string(),
     ));
@@ -136,9 +150,15 @@ pub(super) fn capture_clip(
 #[cfg(test)]
 mod tests {
     use super::clip_ffmpeg_args;
+    use crate::anki::mine::ClipPadding;
+
+    const NO_PADDING: ClipPadding = ClipPadding {
+        before_ms: 0,
+        after_ms: 0,
+    };
 
     fn args() -> Vec<String> {
-        clip_ffmpeg_args(4_200, 7_500, "input.mkv", "clip.webm")
+        clip_ffmpeg_args(4_200, 7_500, NO_PADDING, "input.mkv", "clip.webm")
     }
 
     fn index_of(args: &[String], value: &str) -> usize {
@@ -198,9 +218,42 @@ mod tests {
 
     #[test]
     fn sub_second_offsets_keep_three_digits() {
-        let args = clip_ffmpeg_args(250, 1_005, "input.mkv", "clip.webm");
+        let args = clip_ffmpeg_args(250, 1_005, NO_PADDING, "input.mkv", "clip.webm");
         assert_eq!(args[index_of(&args, "-ss") + 1], "0.250");
         assert_eq!(args[index_of(&args, "-to") + 1], "1.005");
+    }
+
+    #[test]
+    fn the_window_is_padded_on_each_side_the_way_the_audio_slicer_pads_it() {
+        // The clip and the audio must cover the same span, or the card shows one thing and
+        // plays another. Both builders take the padding and apply it themselves.
+        let args = clip_ffmpeg_args(
+            4_200,
+            7_500,
+            ClipPadding {
+                before_ms: 200,
+                after_ms: 500,
+            },
+            "input.mkv",
+            "clip.webm",
+        );
+        assert_eq!(args[index_of(&args, "-ss") + 1], "4.000");
+        assert_eq!(args[index_of(&args, "-to") + 1], "8.000");
+    }
+
+    #[test]
+    fn padding_cannot_seek_before_the_start_of_the_file() {
+        let args = clip_ffmpeg_args(
+            100,
+            900,
+            ClipPadding {
+                before_ms: 250,
+                after_ms: 0,
+            },
+            "input.mkv",
+            "clip.webm",
+        );
+        assert_eq!(args[index_of(&args, "-ss") + 1], "0.000");
     }
 
     #[test]

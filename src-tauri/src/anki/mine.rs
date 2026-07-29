@@ -185,6 +185,24 @@ fn slice_segment_clip(
     Ok(clip)
 }
 
+/// Hands one scratch file to Anki and returns the name the card should reference it by.
+///
+/// Anki is given a PATH, not the bytes: it reads the file itself and copies it into its own
+/// media collection, so a 400 KB clip costs no more over the wire than a 30 KB still. The
+/// `TempMedia` is borrowed rather than consumed — it still owns the file, and still deletes
+/// it when the mine ends.
+fn store_media_with_anki(file: &TempMedia) -> Result<String, String> {
+    let media_file_name = anki_media_file_name(file.path());
+    anki_connect_request(
+        "storeMediaFile",
+        serde_json::json!({
+            "filename": media_file_name,
+            "path": file.path().display().to_string()
+        }),
+    )?;
+    Ok(media_file_name)
+}
+
 /// Everything a mine needs about where the sentence came from, with no notion of
 /// whether that was a library recording or a video being watched.
 ///
@@ -272,13 +290,7 @@ fn capture_line_video(
     }
 
     let clip = TempMedia::new(temp_media_path(&source.media_path, "clip", start_ms, ".webm")?);
-    capture_clip(
-        ffmpeg_path,
-        video_path,
-        start_ms.saturating_sub(padding.before_ms),
-        end_ms.saturating_add(padding.after_ms),
-        clip.path(),
-    )?;
+    capture_clip(ffmpeg_path, video_path, start_ms, end_ms, padding, clip.path())?;
     Ok(Some(clip))
 }
 
@@ -424,60 +436,28 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         );
     }
 
-    // Anki copies each file into its own media folder, so the originals stay scratch.
-    let clip_media_file_name = anki_media_file_name(clip.path());
-    if let Err(error) = anki_connect_request(
-        "storeMediaFile",
-        serde_json::json!({
-            "filename": clip_media_file_name,
-            "path": clip.path().display().to_string()
-        }),
-    ) {
-        return failed(format!("Anki could not store the audio clip. {error}"));
-    }
-
-    // The still and the clip go in the same way. A store failure here demotes the card to
-    // audio-only rather than losing it.
-    let screenshot_media_file_name = match &screenshot {
-        Some(shot) => {
-            let media_file_name = anki_media_file_name(shot.path());
-            match anki_connect_request(
-                "storeMediaFile",
-                serde_json::json!({
-                    "filename": media_file_name,
-                    "path": shot.path().display().to_string()
-                }),
-            ) {
-                Ok(_) => Some(media_file_name),
-                Err(error) => {
-                    screenshot_problem =
-                        Some(format!("Anki could not store the screenshot. {error}"));
-                    None
-                }
-            }
-        }
-        None => None,
+    // The audio is the one a card cannot do without, so a failure here fails the mine.
+    let clip_media_file_name = match store_media_with_anki(&clip) {
+        Ok(name) => name,
+        Err(error) => return failed(format!("Anki could not store the audio clip. {error}")),
     };
 
-    let video_media_file_name = match &video_clip {
-        Some(video) => {
-            let media_file_name = anki_media_file_name(video.path());
-            match anki_connect_request(
-                "storeMediaFile",
-                serde_json::json!({
-                    "filename": media_file_name,
-                    "path": video.path().display().to_string()
-                }),
-            ) {
-                Ok(_) => Some(media_file_name),
-                Err(error) => {
-                    video_problem = Some(format!("Anki could not store the video clip. {error}"));
-                    None
-                }
-            }
-        }
-        None => None,
-    };
+    // The still and the clip are optional: a store failure demotes the card rather than
+    // losing it, and says so in the result.
+    let screenshot_media_file_name = screenshot.as_ref().and_then(|shot| {
+        store_media_with_anki(shot)
+            .map_err(|error| {
+                screenshot_problem = Some(format!("Anki could not store the screenshot. {error}"));
+            })
+            .ok()
+    });
+    let video_media_file_name = video_clip.as_ref().and_then(|video| {
+        store_media_with_anki(video)
+            .map_err(|error| {
+                video_problem = Some(format!("Anki could not store the video clip. {error}"));
+            })
+            .ok()
+    });
 
     // 4 (cont.). Build the note fields from the mapping.
     let mut fields = serde_json::Map::new();
