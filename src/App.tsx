@@ -392,6 +392,36 @@ function App() {
 
   // A finished mic recording is now saved untranscribed and hands itself off for
   // transcription through this event, so auto-transcribe-after-recording runs on
+  // A watch line was mined — mark its row, whichever of the three ways started it.
+  //
+  // The subtitle row used to record this itself, which is why only that one showed the
+  // mark: the Mine button never recorded it, and the hotkey CANNOT, because it fires in
+  // Rust while mpv has focus and never reaches this window. The backend emits at the one
+  // point all three pass through, so the mark no longer depends on which control was used.
+  useEffect(() => {
+    const unlisten = listen<{ startMs: number; endMs: number; text: string }>(
+      "watch-line-mined",
+      ({ payload }) => {
+        if (!payload) {
+          return;
+        }
+        setWatchMinedKeys((previous) =>
+          new Set(previous).add(
+            segmentMineKey({
+              startMs: payload.startMs,
+              endMs: payload.endMs,
+              text: payload.text,
+            }),
+          ),
+        );
+        void refreshMinedSentences();
+      },
+    );
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [refreshMinedSentences]);
+
   // the same non-blocking queue as a manual transcribe instead of blocking the app
   // with the full-screen overlay. `force = false`; the queue dedupes by file path,
   // so a duplicate event is a harmless no-op.
@@ -690,14 +720,8 @@ function App() {
                     padBeforeMs === "" ? null : Number(padBeforeMs),
                     padAfterMs === "" ? null : Number(padAfterMs),
                   )
-                  .then((ok) => {
-                    if (ok) {
-                      setWatchMinedKeys((previous) =>
-                        new Set(previous).add(key),
-                      );
-                      void refreshMinedSentences();
-                    }
-                  })
+                  // The mark and the deck refresh come from the `watch-line-mined` event,
+                  // which every mining route emits — this one no longer records its own.
                   .finally(() =>
                     setWatchMiningKey((current) =>
                       current === key ? null : current,

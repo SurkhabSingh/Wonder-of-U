@@ -6,7 +6,7 @@ use std::{
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use super::{
     clip::capture_clip,
@@ -33,6 +33,9 @@ use crate::{
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Emitted after a watch line is mined, whichever of the three ways started it.
+pub(crate) const WATCH_LINE_MINED_EVENT: &str = "watch-line-mined";
 
 pub(crate) fn hide_command_window(command: &mut Command) {
     #[cfg(target_os = "windows")]
@@ -131,6 +134,17 @@ fn slice_segment_clip(
     end_ms: u64,
     padding: ClipPadding,
 ) -> Result<TempMedia, String> {
+    // Checked before ffmpeg runs so a moved or renamed source reads as what it is. mpv
+    // keeps playing a file that has been renamed underneath it — it holds the handle — so
+    // this is reachable while the video is still visibly on screen, and without this the
+    // user gets an ffmpeg stderr dump for a file they can see playing.
+    if !audio_path.exists() {
+        return Err(format!(
+            "The media is no longer at {}. It was moved or renamed after this session started.",
+            audio_path.display()
+        ));
+    }
+
     let clip = TempMedia::new(temp_media_path(audio_path, "seg", start_ms, ".mp3")?);
 
     let mut command = Command::new(ffmpeg_path);
@@ -488,13 +502,20 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         );
     }
     if let Some(media_file_name) = &video_media_file_name {
-        // `[sound:...]` rather than a `<video>` tag: Anki treats it as media it owns, which
-        // is what gets it played on AnkiDroid and AnkiMobile and counted by Check Media.
-        // Anki renders a video file behind that tag as a player, not an audio bar.
-        prepend_anki_field_value(
-            &mut fields,
-            &anki.fields.video,
-            format!("[sound:{media_file_name}]"),
+        // A `<video>` element, NOT `[sound:...]`. Anki hands a `[sound:]` video to its
+        // external player, which on the desktop means the clip opens in its own mpv window
+        // on top of the card. An element plays inside the card itself, on every client:
+        // Anki's own media check still finds the file through the `src`, so it is tracked
+        // and never swept as unused.
+        //
+        // `playsinline` is what stops iOS taking the clip fullscreen, and no `autoplay`
+        // because the back of the card already replays the audio — both at once is noise.
+        fields.insert(
+            anki.fields.video.clone(),
+            serde_json::Value::String(format!(
+                "<video src=\"{}\" controls preload=\"metadata\" playsinline></video>",
+                html_escape(media_file_name)
+            )),
         );
     }
     if !anki.fields.source_path.is_empty() {
@@ -692,6 +713,24 @@ pub(crate) fn mine_watched_line_inner<R: Runtime>(
     let (item, batch_status) =
         mine_media_to_anki(app, &video_path, &source, &text, start_ms, end_ms, None, padding);
     let message = item.message.clone();
+
+    // Tell the watch page which line was mined, so its row shows the mark.
+    //
+    // Emitted HERE rather than at each caller because there are three ways to mine a watch
+    // line — the subtitle row, the Mine button, and the global hotkey — and only the row
+    // used to record it. The hotkey cannot record it from the frontend at all: it fires in
+    // Rust while mpv has focus, and the app never hears about it. One event at the single
+    // point they all pass through is what stops the three drifting again.
+    if item.status == "success" || item.status == "skipped" {
+        let _ = app.emit(
+            WATCH_LINE_MINED_EVENT,
+            serde_json::json!({
+                "startMs": start_ms,
+                "endMs": end_ms,
+                "text": text,
+            }),
+        );
+    }
 
     update_shell_snapshot(app, |shell| {
         shell.status_text = message.clone();

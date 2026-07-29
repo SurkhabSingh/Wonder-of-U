@@ -94,6 +94,8 @@ const CARD_CSS: &str = r#".card {
    pushing the sentence off screen. */
 .wu-image { margin: 0 0 10px; }
 .wu-image img { max-width: 100%; max-height: 45vh; border-radius: 6px; }
+/* The mined clip. An inline <video>, so it plays in the card rather than opening in the
+   external player the way a [sound:] video does. */
 .wu-video { margin: 0 0 10px; }
 .wu-video video { max-width: 100%; max-height: 45vh; border-radius: 6px; }
 .wu-audio a { transform: scale(1.6); display: inline-block; }
