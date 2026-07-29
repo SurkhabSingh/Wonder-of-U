@@ -241,21 +241,23 @@ input::placeholder {
   padding-right: 34px !important;
 }
 
+/* No border and no fill: the dismiss is a glyph, not a control competing with the toast's
+   own message. It reads as a button from position and hover alone. */
 .app-toast [data-close-button] {
-  inset: var(--space-4) var(--space-4) auto auto !important;
+  inset: var(--space-sm) var(--space-sm) auto auto !important;
   width: 20px !important;
   height: 20px !important;
   display: grid !important;
   place-items: center !important;
-  border: 1px solid var(--border) !important;
+  border: 0 !important;
   border-radius: var(--radius-sm) !important;
-  background: var(--surface-raised) !important;
+  background: transparent !important;
   color: var(--text-muted) !important;
   transform: none !important;
 }
 
 .app-toast [data-close-button]:hover {
-  border-color: var(--border-strong) !important;
+  background: var(--surface-active) !important;
   color: var(--text-strong) !important;
 }
 

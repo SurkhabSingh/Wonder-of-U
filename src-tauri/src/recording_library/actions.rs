@@ -176,6 +176,22 @@ pub(crate) fn playback_path(recording: &RecentRecording) -> Result<PathBuf, Stri
     }
 }
 
+/// Why translation cannot run right now, phrased as whatever is actually wrong.
+///
+/// These are two different faults that used to share one sentence. If the bridge never
+/// claimed its port — another program holds 8791, or the previous instance had not released
+/// it yet — then there is nothing for the extension to connect TO, and telling the user to go
+/// fix the extension sends them to the one place the problem is not. The extension's own UI
+/// says "the app is not running", which is true from where it sits, so both halves pointed
+/// away from the app that failed.
+fn translation_unavailable_reason(bridge: &TranslationBridge) -> &'static str {
+    if bridge.is_listening() {
+        "The browser extension is not connected. Open it and select \"App Support\" mode, then try again."
+    } else {
+        "The app could not open its translation port (8791) — another program may be using it. Restart the app, and close anything else that might hold that port."
+    }
+}
+
 fn failed_translation_item(recording: &RecentRecording, message: impl Into<String>) -> RecordingActionItem {
     RecordingActionItem {
         file_path: recording.file_path.clone(),
@@ -293,10 +309,7 @@ fn translate_single_recording<R: Runtime>(
     // leaving the UI stuck on the busy overlay. The auto-translate path already
     // guards this way; the manual/re-translate path must too.
     if !bridge.is_connected() {
-        return failed_translation_item(
-            &recording,
-            "The browser extension is not connected. Open it in App Support mode, then try again.",
-        );
+        return failed_translation_item(&recording, translation_unavailable_reason(bridge));
     }
 
     let transcript_path = match recording.transcript_path.clone() {
@@ -572,7 +585,7 @@ pub(crate) fn translate_recordings_inner<R: Runtime>(
             .map(|recording| {
                 failed_translation_item(
                     &recording,
-                    "The browser extension is not connected. Open it and select \"App Support\" mode, then try again.",
+                    translation_unavailable_reason(bridge),
                 )
             })
             .collect::<Vec<_>>();

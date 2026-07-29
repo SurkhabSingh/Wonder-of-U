@@ -27,6 +27,15 @@ const WORKER_THREADS: usize = 4;
 /// slow round trip reads as a disconnection.
 const CONNECTION_TTL: Duration = Duration::from_secs(60);
 const MAX_LONG_POLL_SECONDS: u64 = 30;
+/// How long to keep trying to claim the port before giving up.
+///
+/// Windows does not release a listening socket the instant its process dies, so an app that
+/// is killed rather than closed — a crash, Task Manager, a rebuild — leaves the port held for
+/// a few seconds. Binding once meant the next launch lost the race and the bridge stayed dead
+/// for the entire session, with nothing on screen saying so. Retrying costs a few seconds in
+/// the rare case and fixes the common one.
+const BIND_ATTEMPTS: usize = 10;
+const BIND_RETRY_DELAY: Duration = Duration::from_millis(600);
 /// How long a claimed job may go unanswered before it is handed back out.
 ///
 /// The client gives the browser 120s to translate and then reports the failure
@@ -87,6 +96,8 @@ struct BridgeInner {
     attempts: HashMap<String, u32>,
     seq: u64,
     last_seen_at: Option<Instant>,
+    /// Whether the port was actually claimed. See `mark_listening`.
+    listening: bool,
 }
 
 /// Shared translation job broker. The `translate` command submits a job and
@@ -109,6 +120,20 @@ impl TranslationBridge {
         if let Ok(mut inner) = self.inner.lock() {
             inner.last_seen_at = Some(Instant::now());
         }
+    }
+
+    /// Records that the port was claimed. Until this happens there is no bridge at all, so
+    /// "the extension has not called" and "there was nothing for it to call" look identical
+    /// from the outside — and only one of them is the extension's fault.
+    pub(crate) fn mark_listening(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.listening = true;
+        }
+    }
+
+    /// False when the port could not be claimed at startup, so nothing is listening.
+    pub(crate) fn is_listening(&self) -> bool {
+        self.inner.lock().map(|inner| inner.listening).unwrap_or(false)
     }
 
     /// True when the extension has contacted the bridge recently.
@@ -304,18 +329,38 @@ impl TranslationBridge {
 /// unavailable until the port is free.
 pub(crate) fn start_bridge_server<R: Runtime>(app: AppHandle<R>) {
     thread::spawn(move || {
-        let server = match Server::http(("127.0.0.1", BRIDGE_PORT)) {
-            Ok(server) => Arc::new(server),
-            Err(error) => {
-                log_event(
-                    &app,
-                    "ERROR",
-                    "translation.bridge.bind_failed",
-                    serde_json::json!({ "port": BRIDGE_PORT, "error": error.to_string() }),
-                );
-                return;
+        let mut last_error = None;
+        let mut bound = None;
+        for attempt in 1..=BIND_ATTEMPTS {
+            match Server::http(("127.0.0.1", BRIDGE_PORT)) {
+                Ok(server) => {
+                    bound = Some(server);
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    if attempt < BIND_ATTEMPTS {
+                        thread::sleep(BIND_RETRY_DELAY);
+                    }
+                }
             }
+        }
+
+        let Some(server) = bound else {
+            log_event(
+                &app,
+                "ERROR",
+                "translation.bridge.bind_failed",
+                serde_json::json!({
+                    "port": BRIDGE_PORT,
+                    "attempts": BIND_ATTEMPTS,
+                    "error": last_error.unwrap_or_default(),
+                }),
+            );
+            return;
         };
+        let server = Arc::new(server);
+        app.state::<TranslationBridge>().mark_listening();
 
         log_event(
             &app,

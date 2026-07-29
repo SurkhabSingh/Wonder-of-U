@@ -59,6 +59,18 @@ pub(super) fn user_friendly_anki_error(error: &str, settings: &AnkiSettings) -> 
         );
     }
 
+    // "cannot create note because it is empty" means every field the app wrote was
+    // discarded, and there is only one way that happens: the names it wrote to are not on
+    // the note type. AnkiConnect drops unknown keys without a word, so the note arrives with
+    // nothing in it and Anki refuses it — an error about emptiness for a card the app filled
+    // in. Renaming the sentence field in Anki is all it takes.
+    if normalized.contains("empty") {
+        return format!(
+            "Anki rejected the card as empty, which means the '{}' field is not on the '{}' note type any more — everything written to it was discarded. Re-map the fields in Settings.",
+            settings.fields.transcription, settings.note_type
+        );
+    }
+
     if normalized.contains("field") {
         return "Anki rejected one of the mapped fields. Refresh Anki mapping and check that every selected field still exists on the note type.".into();
     }
