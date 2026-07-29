@@ -174,8 +174,44 @@ const FURIGANA_CSS: &str = r#"
 /// never appends them twice.
 const FURIGANA_CSS_MARKER: &str = ".wu-sentence ruby:hover rt";
 
-/// Brings an EXISTING note type up to date: the sentence through `{{furigana:}}`, and the
-/// hover rules appended to its styling.
+/// Adds the media blocks a back template is missing, leaving everything else alone.
+///
+/// Inserted directly after the card's opening tag when there is one, so the picture or clip
+/// leads the answer the way the app's own template does; otherwise prepended. A template
+/// that already mentions the field is untouched, which is what makes this idempotent and
+/// what keeps a hand-arranged layout hand-arranged.
+fn ensure_media_blocks(back_html: &str) -> String {
+    const BLOCKS: [(&str, &str); 2] = [
+        (
+            "{{Video}}",
+            "  {{#Video}}<div class=\"wu-video\">{{Video}}</div>{{/Video}}",
+        ),
+        (
+            "{{Image}}",
+            "  {{#Image}}<div class=\"wu-image\">{{Image}}</div>{{/Image}}",
+        ),
+    ];
+
+    let mut html = back_html.to_string();
+    for (reference, block) in BLOCKS {
+        if html.contains(reference) {
+            continue;
+        }
+        match html.find('>') {
+            // After the opening tag, so the block lands inside the card's own wrapper
+            // rather than outside it.
+            Some(position) if html.trim_start().starts_with('<') => {
+                html.insert_str(position + 1, &format!("\n{block}"));
+            }
+            _ => html.insert_str(0, &format!("{block}\n")),
+        }
+    }
+    html
+}
+
+/// Brings an EXISTING note type up to date: any field the app writes but the note type
+/// lacks, the blocks that render them, the sentence through `{{furigana:}}`, and the hover
+/// rules appended to its styling.
 ///
 /// Deliberately surgical rather than a wholesale overwrite. `updateModelStyling` replaces
 /// the entire stylesheet, so writing `CARD_CSS` over a note type the user has since
@@ -183,6 +219,34 @@ const FURIGANA_CSS_MARKER: &str = ".wu-sentence ruby:hover rt";
 /// read, patched only where needed, and written back — and both patches are idempotent,
 /// so clicking the button twice changes nothing the second time.
 fn update_existing_note_type() -> Result<(), String> {
+    // A field the app writes but the note type does not have is DATA SILENTLY LOST:
+    // AnkiConnect drops unknown keys from `addNote` without complaint, so the mine reports
+    // success and the picture or clip simply is not there. That is what happened to every
+    // note type created before `Image` was added — it kept its original field list forever,
+    // because this function only ever patched templates and styling.
+    //
+    // Fields are appended rather than reordered. `Sentence` must stay first (Anki keys
+    // duplicate detection on the first field), and appending cannot disturb that.
+    let existing_fields = json_string_array(anki_connect_request(
+        "modelFieldNames",
+        serde_json::json!({ "modelName": NOTE_TYPE_NAME }),
+    )?);
+    let mut next_index = existing_fields.len();
+    for field_name in FIELD_NAMES {
+        if existing_fields.iter().any(|existing| existing == field_name) {
+            continue;
+        }
+        anki_connect_request(
+            "modelFieldAdd",
+            serde_json::json!({
+                "modelName": NOTE_TYPE_NAME,
+                "fieldName": field_name,
+                "index": next_index,
+            }),
+        )?;
+        next_index += 1;
+    }
+
     let templates = anki_connect_request(
         "modelTemplates",
         serde_json::json!({ "modelName": NOTE_TYPE_NAME }),
@@ -199,7 +263,13 @@ fn update_existing_note_type() -> Result<(), String> {
                 let html = html.as_str().unwrap_or_default();
                 // Only an unfiltered {{Sentence}} needs rewriting; a template already
                 // using the filter (or a hand-edited one) is left exactly as it is.
-                let updated = html.replace("{{Sentence}}", "{{furigana:Sentence}}");
+                let mut updated = html.replace("{{Sentence}}", "{{furigana:Sentence}}");
+                // Adding the field is only half of it — a field no template renders shows
+                // nothing, and Anki only plays media it can see. The back side gets a block
+                // for anything it does not already mention.
+                if side.eq_ignore_ascii_case("Back") {
+                    updated = ensure_media_blocks(&updated);
+                }
                 next.insert(side.clone(), serde_json::Value::String(updated));
             }
             patched.insert(name.clone(), serde_json::Value::Object(next));
@@ -264,4 +334,72 @@ pub(crate) fn create_recommended_note_type_inner() -> Result<String, String> {
     )?;
 
     Ok(NOTE_TYPE_NAME.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_media_blocks, BACK_TEMPLATE, FIELD_NAMES};
+
+    #[test]
+    fn the_apps_own_back_template_is_left_alone() {
+        // It already renders both, so re-running the updater must be a no-op — otherwise
+        // pressing "Create or update" twice would stack duplicate blocks.
+        assert_eq!(ensure_media_blocks(BACK_TEMPLATE), BACK_TEMPLATE);
+    }
+
+    #[test]
+    fn a_template_predating_the_media_fields_gains_both() {
+        // Exactly the shape shipped before Image existed: the field list and the template
+        // both stop at audio and sentence.
+        let old = "<div class=\"wu-card wu-back\">\n  {{Audio}}\n  {{Sentence}}\n</div>";
+        let updated = ensure_media_blocks(old);
+        assert!(updated.contains("{{#Video}}"));
+        assert!(updated.contains("{{#Image}}"));
+        // Everything that was there stays there.
+        assert!(updated.contains("{{Audio}}"));
+        assert!(updated.contains("{{Sentence}}"));
+    }
+
+    #[test]
+    fn blocks_land_inside_the_cards_own_wrapper_not_before_it() {
+        let old = "<div class=\"wu-card wu-back\">\n  {{Audio}}\n</div>";
+        let updated = ensure_media_blocks(old);
+        assert!(
+            updated.starts_with("<div class=\"wu-card wu-back\">"),
+            "the wrapper must still open the template: {updated}"
+        );
+    }
+
+    #[test]
+    fn a_template_that_already_shows_one_only_gains_the_other() {
+        let half = "<div>\n  {{#Image}}{{Image}}{{/Image}}\n  {{Audio}}\n</div>";
+        let updated = ensure_media_blocks(half);
+        assert_eq!(
+            updated.matches("{{Image}}").count(),
+            half.matches("{{Image}}").count(),
+            "an existing Image block must not be duplicated"
+        );
+        assert!(updated.contains("{{#Video}}"));
+    }
+
+    #[test]
+    fn a_template_with_no_markup_at_all_still_gets_the_blocks() {
+        let updated = ensure_media_blocks("{{Audio}}");
+        assert!(updated.contains("{{#Video}}"));
+        assert!(updated.contains("{{#Image}}"));
+        assert!(updated.contains("{{Audio}}"));
+    }
+
+    #[test]
+    fn every_field_the_miner_writes_is_declared_on_the_note_type() {
+        // The miner inserts by mapped field name, and AnkiConnect drops a key the note type
+        // does not have WITHOUT reporting it — which is how screenshots went missing for
+        // anyone whose note type predated the Image field.
+        for required in ["Sentence", "Audio", "Image", "Video", "Translation"] {
+            assert!(
+                FIELD_NAMES.contains(&required),
+                "{required} is written by the miner but missing from the note type"
+            );
+        }
+    }
 }
