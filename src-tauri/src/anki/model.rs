@@ -176,6 +176,19 @@ const FURIGANA_CSS: &str = r#"
 /// never appends them twice.
 const FURIGANA_CSS_MARKER: &str = ".wu-sentence ruby:hover rt";
 
+/// The picture and clip rules, kept apart from `CARD_CSS` for the same reason the furigana
+/// ones are: `CARD_CSS` is only ever written when the note type is CREATED, so a note type
+/// that already existed never received a single rule about media — which is how a mined clip
+/// ended up rendering at its native size and pushing the card sideways.
+const MEDIA_CSS: &str = r#"
+/* Wonder of U media — a mined still or clip, bounded so the card stays readable. */
+.wu-image { margin: 0 0 10px; }
+.wu-image img { max-width: 100%; max-height: 45vh; border-radius: 6px; }
+.wu-video { margin: 0 0 10px; }
+.wu-video video { max-width: 100%; max-height: 45vh; border-radius: 6px; }"#;
+
+const MEDIA_CSS_MARKER: &str = ".wu-video video";
+
 /// Adds the media blocks a back template is missing, leaving everything else alone.
 ///
 /// Inserted directly after the card's opening tag when there is one, so the picture or clip

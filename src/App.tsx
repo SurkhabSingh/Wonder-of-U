@@ -392,6 +392,11 @@ function App() {
 
   // A finished mic recording is now saved untranscribed and hands itself off for
   // transcription through this event, so auto-transcribe-after-recording runs on
+  // Read by the mined-line listener below, which must not re-subscribe every time the cue
+  // list changes — an event arriving during that gap would be lost.
+  const cuesRef = useRef(watchSubtitles.cues);
+  cuesRef.current = watchSubtitles.cues;
+
   // A watch line was mined — mark its row, whichever of the three ways started it.
   //
   // The subtitle row used to record this itself, which is why only that one showed the
@@ -405,13 +410,26 @@ function App() {
         if (!payload) {
           return;
         }
+        // Matched by TIME, not by rebuilding the row's key from the payload. mpv reports
+        // the line it is currently showing, and neither its bounds nor its text have to
+        // agree exactly with the cue our own parser produced — a millisecond of rounding,
+        // or ASS line-break markup stripped differently, is enough to miss. The row to
+        // mark is simply the one covering the moment that was mined.
+        const midpoint =
+          payload.startMs + (payload.endMs - payload.startMs) / 2;
+        const cue = cuesRef.current.find(
+          (candidate) =>
+            midpoint >= candidate.startMs && midpoint < candidate.endMs,
+        );
         setWatchMinedKeys((previous) =>
           new Set(previous).add(
-            segmentMineKey({
-              startMs: payload.startMs,
-              endMs: payload.endMs,
-              text: payload.text,
-            }),
+            cue
+              ? segmentMineKey(cue)
+              : segmentMineKey({
+                  startMs: payload.startMs,
+                  endMs: payload.endMs,
+                  text: payload.text,
+                }),
           ),
         );
         void refreshMinedSentences();

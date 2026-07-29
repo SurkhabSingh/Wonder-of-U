@@ -512,8 +512,16 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         // because the back of the card already replays the audio — both at once is noise.
         fields.insert(
             anki.fields.video.clone(),
+            // Sized on the element itself rather than left to the note type's stylesheet.
+            // A card can be any note type, including one this app has never styled, and an
+            // unconstrained 720p clip renders at its native size — wider than the card,
+            // pushed off to one side, with the whole card scrolling sideways.
             serde_json::Value::String(format!(
-                "<video src=\"{}\" controls preload=\"metadata\" playsinline></video>",
+                concat!(
+                    "<video src=\"{}\" controls preload=\"metadata\" playsinline ",
+                    "style=\"max-width:100%;height:auto;display:block;margin:0 auto\">",
+                    "</video>"
+                ),
                 html_escape(media_file_name)
             )),
         );
