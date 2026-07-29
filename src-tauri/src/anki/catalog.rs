@@ -55,13 +55,23 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
     decks.sort();
     note_types.sort();
 
-    let fields = if selected_note_type.is_empty() {
-        Vec::new()
-    } else {
+    // Only ask for the fields of a note type Anki has just said it HAS.
+    //
+    // `modelFieldNames` errors on a name it does not know, and that error used to take the
+    // whole catalog down with it — so renaming or deleting the configured note type in Anki
+    // emptied the deck AND note-type lists on this page, and the only control that could
+    // have fixed it was the note-type picker that had just gone blank. The recovery path
+    // was the thing that broke.
+    //
+    // Checked against the list rather than wrapped in a fallback: a lookup that cannot be
+    // asked for a name that does not exist has no failure to handle.
+    let fields = if note_types.iter().any(|name| name == &selected_note_type) {
         json_string_array(anki_connect_request(
             "modelFieldNames",
             serde_json::json!({ "modelName": selected_note_type }),
         )?)
+    } else {
+        Vec::new()
     };
 
     Ok(AnkiCatalog {
