@@ -144,6 +144,19 @@ export function TranslationSettingsPage({
           set a DeepL API key in the extension. Keep the extension open in App
           Support mode while translating.
         </p>
+
+        {/* Said here rather than discovered while mining. Whether a mined card can carry
+            its own translation line is decided by this control, and nothing later in the
+            flow explains why one card got a translation and the next did not. */}
+        <div className="info-note">
+          <p className="microcopy">
+            <strong>Mining one line at a time:</strong> a mined card gets its own
+            translation only when the service returns one line for each line sent.
+            DeepL with an API key does. Google Translate translates the transcript
+            as a whole, so lines can be merged or split — when they no longer line
+            up, the card is mined without a translation and says so.
+          </p>
+        </div>
       </div>
     </>
   );
