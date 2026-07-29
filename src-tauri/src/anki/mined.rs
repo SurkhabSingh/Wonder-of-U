@@ -288,8 +288,14 @@ fn collect_mined_sentences(deck: &str, note_type: &str, field: &str) -> Result<V
     let mut sentences = Vec::with_capacity(note_ids.len());
     for batch in note_ids.chunks(NOTES_INFO_BATCH) {
         let notes = anki_connect_request("notesInfo", serde_json::json!({ "notes": batch }))?;
+        // A batch that does not come back as an array is a read that did not happen, and
+        // skipping it would quietly shrink the answer: sentences genuinely in the deck would
+        // come back unmarked, and the count would still be reported as a fact. Same shape as
+        // the Jimaku `unwrap_or_default` — a failure wearing an empty result's clothes.
         let Some(notes) = notes.as_array() else {
-            continue;
+            return Err(
+                "Anki's note list could not be read — its API may have changed.".to_string(),
+            );
         };
         for note in notes {
             let value = note
@@ -346,6 +352,49 @@ pub(crate) fn load_mined_sentences_inner<R: Runtime>(
             message: anki_offline_message(&error),
             sentences: Vec::new(),
         });
+    }
+
+    // Confirm the mapping still points at something real before trusting a count.
+    //
+    // Every note is read through `fields[field]`, so a field name Anki does not have
+    // yields an empty string for EVERY note — and the result is a confident "0 mined
+    // sentences found", which reads as "you have mined nothing" rather than "I could not
+    // look". `note:` behaves the same way: a deleted note type matches nothing and errors
+    // on nobody. Renaming a field in Anki is all it takes to get here, since the mapping
+    // stores the name.
+    match anki_connect_request(
+        "modelFieldNames",
+        serde_json::json!({ "modelName": note_type }),
+    ) {
+        Ok(value) => {
+            let known = value
+                .as_array()
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .any(|name| name == field)
+                })
+                .unwrap_or(false);
+            if !known {
+                return Ok(MinedSentences {
+                    status: "unmapped".into(),
+                    message: format!(
+                        "The note type \"{note_type}\" has no field called \"{field}\" any more,                          so mined sentences cannot be matched. Re-map the sentence field in Settings."
+                    ),
+                    sentences: Vec::new(),
+                });
+            }
+        }
+        Err(error) => {
+            return Ok(MinedSentences {
+                status: "unmapped".into(),
+                message: format!(
+                    "The note type \"{note_type}\" is no longer in Anki, so mined sentences                      cannot be matched. Choose one in Settings. ({error})"
+                ),
+                sentences: Vec::new(),
+            });
+        }
     }
 
     match collect_mined_sentences(&deck, &note_type, &field) {

@@ -227,84 +227,96 @@ export function useTranscriptionQueue({
     runningRef.current = true;
 
     void (async () => {
-      while (mountedRef.current) {
-        const next = itemsRef.current.find((item) => item.status === "queued");
-        if (!next) {
-          break;
+      // `finally`, not a trailing assignment. `runningRef` is what stops a second
+      // processor starting, so anything that escapes this loop without clearing it leaves
+      // the queue permanently "already running" — every later item sits at Queued forever,
+      // with nothing on screen to say why. The loop body is not all inside the inner
+      // try/catch (`applyBootstrap` is not), so that escape is reachable.
+      try {
+        while (mountedRef.current) {
+          const next = itemsRef.current.find(
+            (item) => item.status === "queued",
+          );
+          if (!next) {
+            break;
+          }
+
+          const force = forceByIdRef.current.get(next.id) ?? false;
+
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === next.id ? { ...item, status: "active" } : item,
+            ),
+          );
+          setActiveProgress(0);
+          // Start this file's live list empty, so the previous recording's sentences
+          // never linger under the next one's progress bar.
+          activeFilePathRef.current = next.filePath;
+          setActiveSegments({ filePath: next.filePath, segments: [] });
+
+          // Completion = this awaited invoke resolving. A rejection (whisper-cli
+          // missing, spawn failure) is caught and marks the item failed; a user
+          // Cancel comes back as a resolved "cancelled" item.
+          let result: RecordingBatchResult | null = null;
+          let failureMessage = "The recording could not be transcribed.";
+          try {
+            await persistSettingsIfNeededRef.current();
+            result = await invoke<RecordingBatchResult>(
+              "transcribe_recordings",
+              {
+                filePaths: [next.filePath],
+                force,
+              },
+            );
+          } catch (error) {
+            failureMessage = errorMessage(error, failureMessage);
+          }
+
+          if (!mountedRef.current) {
+            break;
+          }
+
+          // Refresh the Library from the returned bootstrap so a landed transcript
+          // shows up immediately, before the queue even drains.
+          if (result) {
+            applyBootstrapRef.current(result.bootstrap);
+          }
+          forceByIdRef.current.delete(next.id);
+
+          setItems((prev) =>
+            prev.map((item) => {
+              if (item.id !== next.id) {
+                return item;
+              }
+              if (!result) {
+                return { ...item, status: "failed", message: failureMessage };
+              }
+              const outcome = result.items[0];
+              // A result with no item is a real failure — keep the batch message.
+              if (!outcome) {
+                return { ...item, status: "failed", message: result.message };
+              }
+              if (outcome.status === "success") {
+                return { ...item, status: "done" };
+              }
+              // A user Cancel comes back as a "cancelled" item — read it so a
+              // deliberate cancel does not render as "Failed".
+              if (outcome.status === "cancelled") {
+                return { ...item, status: "cancelled" };
+              }
+              // "failed" | "skipped" | anything else — a row that did not land a
+              // transcript, kept with the backend's own reason.
+              return { ...item, status: "failed", message: outcome.message };
+            }),
+          );
+          setActiveProgress(null);
+          clearActiveSegments();
         }
-
-        const force = forceByIdRef.current.get(next.id) ?? false;
-
-        setItems((prev) =>
-          prev.map((item) =>
-            item.id === next.id ? { ...item, status: "active" } : item,
-          ),
-        );
-        setActiveProgress(0);
-        // Start this file's live list empty, so the previous recording's sentences
-        // never linger under the next one's progress bar.
-        activeFilePathRef.current = next.filePath;
-        setActiveSegments({ filePath: next.filePath, segments: [] });
-
-        // Completion = this awaited invoke resolving. A rejection (whisper-cli
-        // missing, spawn failure) is caught and marks the item failed; a user
-        // Cancel comes back as a resolved "cancelled" item.
-        let result: RecordingBatchResult | null = null;
-        let failureMessage = "The recording could not be transcribed.";
-        try {
-          await persistSettingsIfNeededRef.current();
-          result = await invoke<RecordingBatchResult>("transcribe_recordings", {
-            filePaths: [next.filePath],
-            force,
-          });
-        } catch (error) {
-          failureMessage = errorMessage(error, failureMessage);
-        }
-
-        if (!mountedRef.current) {
-          break;
-        }
-
-        // Refresh the Library from the returned bootstrap so a landed transcript
-        // shows up immediately, before the queue even drains.
-        if (result) {
-          applyBootstrapRef.current(result.bootstrap);
-        }
-        forceByIdRef.current.delete(next.id);
-
-        setItems((prev) =>
-          prev.map((item) => {
-            if (item.id !== next.id) {
-              return item;
-            }
-            if (!result) {
-              return { ...item, status: "failed", message: failureMessage };
-            }
-            const outcome = result.items[0];
-            // A result with no item is a real failure — keep the batch message.
-            if (!outcome) {
-              return { ...item, status: "failed", message: result.message };
-            }
-            if (outcome.status === "success") {
-              return { ...item, status: "done" };
-            }
-            // A user Cancel comes back as a "cancelled" item — read it so a
-            // deliberate cancel does not render as "Failed".
-            if (outcome.status === "cancelled") {
-              return { ...item, status: "cancelled" };
-            }
-            // "failed" | "skipped" | anything else — a row that did not land a
-            // transcript, kept with the backend's own reason.
-            return { ...item, status: "failed", message: outcome.message };
-          }),
-        );
+      } finally {
         setActiveProgress(null);
         clearActiveSegments();
+        runningRef.current = false;
       }
-
-      setActiveProgress(null);
-      clearActiveSegments();
-      runningRef.current = false;
     })();
   }, []);
 

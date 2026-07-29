@@ -104,7 +104,9 @@ export function useYoutubeQueue({
       // Dedupe against still-pending/active items and within this paste.
       const seen = new Set(
         prev
-          .filter((item) => item.status === "queued" || item.status === "active")
+          .filter(
+            (item) => item.status === "queued" || item.status === "active",
+          )
           .map((item) => item.url),
       );
       const additions: YoutubeQueueItem[] = [];
@@ -164,77 +166,83 @@ export function useYoutubeQueue({
     runningRef.current = true;
 
     void (async () => {
-      while (mountedRef.current) {
-        const next = itemsRef.current.find((item) => item.status === "queued");
-        if (!next) {
-          break;
-        }
+      // See the same guard in `useTranscriptionQueue`: clearing `runningRef` has to happen
+      // on every exit path, or one thrown error leaves the queue jammed for the session.
+      try {
+        while (mountedRef.current) {
+          const next = itemsRef.current.find(
+            (item) => item.status === "queued",
+          );
+          if (!next) {
+            break;
+          }
 
-        setItems((prev) =>
-          prev.map((item) =>
-            item.id === next.id ? { ...item, status: "active" } : item,
-          ),
-        );
-        setActiveProgress(0);
-
-        // Completion = this awaited invoke resolving. `importYoutube` already
-        // turns a rejection into a not-ok outcome, so this catch only covers
-        // what it could not; either way the loop still advances.
-        let settled: YoutubeImportOutcome;
-        try {
-          settled = await importYoutubeRef.current(next.url);
-        } catch (error) {
-          settled = {
-            ok: false,
-            message: errorMessage(
-              error,
-              "The YouTube link could not be imported.",
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === next.id ? { ...item, status: "active" } : item,
             ),
-          };
-        }
-        const outcome = settled;
+          );
+          setActiveProgress(0);
 
-        if (!mountedRef.current) {
-          break;
-        }
+          // Completion = this awaited invoke resolving. `importYoutube` already
+          // turns a rejection into a not-ok outcome, so this catch only covers
+          // what it could not; either way the loop still advances.
+          let settled: YoutubeImportOutcome;
+          try {
+            settled = await importYoutubeRef.current(next.url);
+          } catch (error) {
+            settled = {
+              ok: false,
+              message: errorMessage(
+                error,
+                "The YouTube link could not be imported.",
+              ),
+            };
+          }
+          const outcome = settled;
 
-        setItems((prev) =>
-          prev.map((item) => {
-            if (item.id !== next.id) {
-              return item;
-            }
-            // The command rejected — a livestream, a dead link, no yt-dlp. That
-            // is a failure, not a cancel, and the row has to say which.
-            if (!outcome.ok) {
-              return { ...item, status: "failed", message: outcome.message };
-            }
-            const { result } = outcome;
-            // A user Cancel comes back as a CANCELLED batch whose one item is
-            // marked failed — read the batch status, or a deliberate cancel
-            // renders as "Failed".
-            if (result.status === "cancelled") {
-              return { ...item, status: "cancelled" };
-            }
-            const landed = result.items.find(
-              (entry) => entry.status === "success",
-            );
-            if (landed) {
-              landedRef.current += 1;
-              return {
-                ...item,
-                status: "done",
-                title: fileNameFromPath(landed.filePath),
-              };
-            }
-            // A result with nothing landed is a real failure — keep the message.
-            return { ...item, status: "failed", message: result.message };
-          }),
-        );
+          if (!mountedRef.current) {
+            break;
+          }
+
+          setItems((prev) =>
+            prev.map((item) => {
+              if (item.id !== next.id) {
+                return item;
+              }
+              // The command rejected — a livestream, a dead link, no yt-dlp. That
+              // is a failure, not a cancel, and the row has to say which.
+              if (!outcome.ok) {
+                return { ...item, status: "failed", message: outcome.message };
+              }
+              const { result } = outcome;
+              // A user Cancel comes back as a CANCELLED batch whose one item is
+              // marked failed — read the batch status, or a deliberate cancel
+              // renders as "Failed".
+              if (result.status === "cancelled") {
+                return { ...item, status: "cancelled" };
+              }
+              const landed = result.items.find(
+                (entry) => entry.status === "success",
+              );
+              if (landed) {
+                landedRef.current += 1;
+                return {
+                  ...item,
+                  status: "done",
+                  title: fileNameFromPath(landed.filePath),
+                };
+              }
+              // A result with nothing landed is a real failure — keep the message.
+              return { ...item, status: "failed", message: result.message };
+            }),
+          );
+          setActiveProgress(null);
+        }
+      } finally {
         setActiveProgress(null);
+        runningRef.current = false;
       }
-
-      setActiveProgress(null);
-      runningRef.current = false;
     })();
   }, []);
 
