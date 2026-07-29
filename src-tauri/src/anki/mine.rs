@@ -21,7 +21,7 @@ use super::{
     screenshot::capture_screenshot,
 };
 use crate::{
-    app_runtime::{build_app_bootstrap, update_shell_snapshot},
+    app_runtime::{build_app_bootstrap, log_event, update_shell_snapshot},
     app_state::transcript_looks_japanese,
     app_types::{
         AppSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
@@ -271,7 +271,7 @@ fn capture_line_video(
         return Err(format!("the video is no longer at {}", video_path.display()));
     }
 
-    let clip = TempMedia::new(temp_media_path(&source.media_path, "clip", start_ms, ".mp4")?);
+    let clip = TempMedia::new(temp_media_path(&source.media_path, "clip", start_ms, ".webm")?);
     capture_clip(
         ffmpeg_path,
         video_path,
@@ -722,12 +722,26 @@ pub(crate) fn mine_watched_line_inner<R: Runtime>(
     // Rust while mpv has focus, and the app never hears about it. One event at the single
     // point they all pass through is what stops the three drifting again.
     if item.status == "success" || item.status == "skipped" {
-        let _ = app.emit(
+        let emitted = app.emit(
             WATCH_LINE_MINED_EVENT,
             serde_json::json!({
                 "startMs": start_ms,
                 "endMs": end_ms,
                 "text": text,
+            }),
+        );
+        // Logged because this is the only signal the watch page gets, and the hotkey path
+        // has no other way to be observed: it fires while mpv has focus, so a failure to
+        // deliver looks exactly like nothing having happened.
+        log_event(
+            app,
+            if emitted.is_ok() { "INFO" } else { "WARN" },
+            "watch.line_mined",
+            serde_json::json!({
+                "startMs": start_ms,
+                "endMs": end_ms,
+                "status": item.status,
+                "emitted": emitted.is_ok(),
             }),
         );
     }

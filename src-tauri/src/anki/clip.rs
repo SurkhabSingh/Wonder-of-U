@@ -12,13 +12,21 @@ const MAX_CLIP_WIDTH: u32 = 1280;
 const MAX_CLIP_HEIGHT: u32 = 720;
 
 /// Constant-quality rather than a target bitrate: a still shot and a busy action scene are
-/// worth different numbers of bits, and CRF spends them where they are needed. 28 lands a
-/// few-second line in the low hundreds of kilobytes on typical animation.
-const CLIP_QUALITY: &str = "28";
+/// worth different numbers of bits, and CRF spends them where they are needed. 34 is VP9's
+/// rough equivalent of x264's 28 and lands a few-second line in the low hundreds of
+/// kilobytes on typical animation.
+const CLIP_QUALITY: &str = "34";
 
 /// Builds the ffmpeg arguments for cutting `[start_ms, end_ms]` out of `input` as a small
-/// H.264/AAC MP4. Kept pure, like `screenshot_ffmpeg_args` and `slice_ffmpeg_args`, so the
+/// VP9/Opus WebM. Kept pure, like `screenshot_ffmpeg_args` and `slice_ffmpeg_args`, so the
 /// ordering and the filter string can be tested without spawning anything.
+///
+/// **WebM, not MP4, and this is not a preference.** Anki's desktop webview is Chromium built
+/// without the patent-encumbered codecs, so it cannot decode H.264 or AAC — which is exactly
+/// why Anki hands a `[sound:]` video to an external player instead of showing it in the card.
+/// An MP4 in a `<video>` element renders the controls and then plays nothing at all. VP9,
+/// Opus and WebM are the open codecs Chromium always ships, so they play inline on the
+/// desktop and in the Android webview.
 ///
 /// `-ss`/`-to` come before `-i`, matching the audio slicer: ffmpeg seeks by keyframe before
 /// it starts decoding, which is what keeps this fast on a long episode.
@@ -53,24 +61,30 @@ pub(super) fn clip_ffmpeg_args(start_ms: u64, end_ms: u64, input: &str, output: 
             height = MAX_CLIP_HEIGHT
         ),
         "-c:v".into(),
-        "libx264".into(),
-        "-preset".into(),
-        // This runs while the user waits for a card, so encode speed is worth more than the
-        // few percent of file size a slower preset would save.
-        "veryfast".into(),
+        "libvpx-vp9".into(),
         "-crf".into(),
         CLIP_QUALITY.into(),
-        // The pixel format every Anki client can decode. libx264 would otherwise keep a
-        // source's 10-bit or 4:2:2 format and produce a file that plays nowhere but a desktop.
+        // VP9 reads `-crf` as a ceiling unless the bitrate target is explicitly zero, in
+        // which case it encodes at constant quality. Without this it silently targets a
+        // default bitrate and ignores the CRF.
+        "-b:v".into(),
+        "0".into(),
+        // This runs while the user waits for a card. `good` with a high `cpu-used` is the
+        // usual fast-but-not-terrible corner; VP9's default is far slower than x264's.
+        "-deadline".into(),
+        "good".into(),
+        "-cpu-used".into(),
+        "4".into(),
+        "-row-mt".into(),
+        "1".into(),
+        // A 10-bit source would otherwise produce a profile-2 file that the webview cannot
+        // decode, which is the same failure this whole choice of codec exists to avoid.
         "-pix_fmt".into(),
         "yuv420p".into(),
         "-c:a".into(),
-        "aac".into(),
+        "libopus".into(),
         "-b:a".into(),
         "96k".into(),
-        // Moves the index to the front so a player can start without reading the whole file.
-        "-movflags".into(),
-        "+faststart".into(),
         output.into(),
     ]
 }
@@ -124,7 +138,7 @@ mod tests {
     use super::clip_ffmpeg_args;
 
     fn args() -> Vec<String> {
-        clip_ffmpeg_args(4_200, 7_500, "input.mkv", "clip.mp4")
+        clip_ffmpeg_args(4_200, 7_500, "input.mkv", "clip.webm")
     }
 
     fn index_of(args: &[String], value: &str) -> usize {
@@ -165,16 +179,26 @@ mod tests {
     }
 
     #[test]
-    fn encodes_what_every_anki_client_can_play() {
+    fn encodes_the_open_codecs_the_anki_webview_can_actually_decode() {
+        // H.264/AAC render a player that shows nothing: Anki's webview is Chromium without
+        // the proprietary decoders. This assertion is the reason the clip is a WebM.
         let args = args();
-        assert_eq!(args[index_of(&args, "-c:v") + 1], "libx264");
+        assert_eq!(args[index_of(&args, "-c:v") + 1], "libvpx-vp9");
+        assert_eq!(args[index_of(&args, "-c:a") + 1], "libopus");
         assert_eq!(args[index_of(&args, "-pix_fmt") + 1], "yuv420p");
-        assert_eq!(args[index_of(&args, "-c:a") + 1], "aac");
+    }
+
+    #[test]
+    fn vp9_is_told_to_use_constant_quality_rather_than_a_bitrate() {
+        // `-crf` alone is a ceiling for VP9; without `-b:v 0` it targets a default bitrate
+        // and the quality setting does nothing.
+        let args = args();
+        assert_eq!(args[index_of(&args, "-b:v") + 1], "0");
     }
 
     #[test]
     fn sub_second_offsets_keep_three_digits() {
-        let args = clip_ffmpeg_args(250, 1_005, "input.mkv", "clip.mp4");
+        let args = clip_ffmpeg_args(250, 1_005, "input.mkv", "clip.webm");
         assert_eq!(args[index_of(&args, "-ss") + 1], "0.250");
         assert_eq!(args[index_of(&args, "-to") + 1], "1.005");
     }
@@ -182,6 +206,6 @@ mod tests {
     #[test]
     fn the_output_path_is_last_so_ffmpeg_reads_it_as_the_destination() {
         let args = args();
-        assert_eq!(args.last().unwrap(), "clip.mp4");
+        assert_eq!(args.last().unwrap(), "clip.webm");
     }
 }
