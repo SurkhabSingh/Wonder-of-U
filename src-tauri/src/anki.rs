@@ -1,9 +1,11 @@
 mod catalog;
+mod clip;
 mod client;
 mod fields;
 mod furigana;
 mod furigana_update;
 mod lookup;
+mod media_temp;
 mod mine;
 mod mined;
 mod model;

@@ -55,6 +55,7 @@ export function AnkiMappingSettingsPage({
             title: "Title",
             position: "Time",
             image: "Image",
+            video: "Video",
           },
         },
       });
@@ -217,6 +218,7 @@ export function AnkiMappingSettingsPage({
                     title: "",
                     position: "",
                     image: "",
+                    video: "",
                   },
                 },
               });
@@ -288,6 +290,14 @@ export function AnkiMappingSettingsPage({
           label="Screenshot field"
           description="Optional still from the video at the mined line's moment. Only lines mined while watching a video get one — a mic recording or an audio file is mined without a picture, and so is a video you have since moved."
           currentValue={settingsDraft.anki.fields.image}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
+          field="video"
+          label="Video clip field"
+          description="Optional short video of the mined line, cut to the same window as the audio. Like the screenshot, only lines mined while watching a video get one. Leave unmapped to skip it — clips are far larger than stills and sync to AnkiWeb with everything else."
+          currentValue={settingsDraft.anki.fields.video}
           fieldOptions={displayedAnkiCatalog.fields}
           onChange={onUpdateAnkiField}
         />

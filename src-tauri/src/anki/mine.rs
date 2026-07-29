@@ -9,6 +9,7 @@ use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Manager, Runtime};
 
 use super::{
+    clip::capture_clip,
     client::{anki_connect_request, anki_offline_message},
     fields::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
@@ -16,6 +17,7 @@ use super::{
     furigana::{
         insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
     },
+    media_temp::{mining_temp_dir, TempMedia},
     screenshot::capture_screenshot,
 };
 use crate::{
@@ -102,32 +104,38 @@ fn slice_ffmpeg_args(
     ]
 }
 
-/// Slices the requested sentence out of `audio_path` into a fresh MP3 beside it.
+/// Names one of a mine's scratch files inside the temp directory.
+///
+/// `unique_path_with_suffix` still does the work, so two mines of the same line at the same
+/// moment cannot collide; only the directory has changed.
+fn temp_media_path(stem_source: &Path, label: &str, start_ms: u64, extension: &str) -> Result<PathBuf, String> {
+    let directory = mining_temp_dir()?;
+    let stem = stem_source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("recording");
+    Ok(unique_path_with_suffix(
+        &directory,
+        &format!("{stem}_{label}{start_ms}"),
+        extension,
+    ))
+}
+
+/// Slices the requested sentence out of `audio_path` into a fresh MP3.
 /// FFmpeg is mandatory here: unlike the optional WAV->MP3 compression, a mine has
 /// nothing to attach without the clip, so a missing binary is a hard error.
 fn slice_segment_clip(
-    settings: &AppSettings,
+    ffmpeg_path: &Path,
     audio_path: &Path,
     start_ms: u64,
     end_ms: u64,
     padding: ClipPadding,
-) -> Result<PathBuf, String> {
-    let detection = detect_local_ffmpeg(settings);
-    let executable_path = detection
-        .executable_path
-        .clone()
-        .ok_or_else(|| "FFmpeg is required to mine audio; install it in Setup.".to_string())?;
+) -> Result<TempMedia, String> {
+    let clip = TempMedia::new(temp_media_path(audio_path, "seg", start_ms, ".mp3")?);
 
-    let parent = audio_path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = audio_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("recording");
-    let clip_path = unique_path_with_suffix(parent, &format!("{stem}_seg{start_ms}"), ".mp3");
-
-    let mut command = Command::new(&executable_path);
+    let mut command = Command::new(ffmpeg_path);
     hide_command_window(&mut command);
-    if let Some(ffmpeg_directory) = Path::new(&executable_path).parent() {
+    if let Some(ffmpeg_directory) = ffmpeg_path.parent() {
         command.current_dir(ffmpeg_directory);
     }
     command.args(slice_ffmpeg_args(
@@ -135,7 +143,7 @@ fn slice_segment_clip(
         end_ms,
         padding,
         &audio_path.display().to_string(),
-        &clip_path.display().to_string(),
+        &clip.path().display().to_string(),
     ));
 
     let output = command.output().map_err(|error| {
@@ -147,12 +155,11 @@ fn slice_segment_clip(
     })?;
 
     let clip_ready = output.status.success()
-        && fs::metadata(&clip_path)
+        && fs::metadata(clip.path())
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false);
 
     if !clip_ready {
-        let _ = fs::remove_file(&clip_path);
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
             "FFmpeg did not produce an audio clip for this sentence.".to_string()
@@ -161,7 +168,7 @@ fn slice_segment_clip(
         });
     }
 
-    Ok(clip_path)
+    Ok(clip)
 }
 
 /// Everything a mine needs about where the sentence came from, with no notion of
@@ -199,11 +206,12 @@ pub(super) struct MineSource {
 /// The midpoint rather than the start: a line's first frame is often the tail of the
 /// previous shot or a hard cut, while the middle reliably shows whoever is speaking.
 fn capture_line_screenshot(
+    ffmpeg_path: &Path,
     settings: &AppSettings,
     source: &MineSource,
     start_ms: u64,
     end_ms: u64,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<TempMedia>, String> {
     if settings.anki.fields.image.is_empty() {
         return Ok(None);
     }
@@ -214,35 +222,50 @@ fn capture_line_screenshot(
         return Err(format!("the video is no longer at {}", video_path.display()));
     }
 
-    let detection = detect_local_ffmpeg(settings);
-    let executable_path = detection
-        .executable_path
-        .clone()
-        .ok_or_else(|| "FFmpeg is required to take a screenshot".to_string())?;
-
-    let parent = source
-        .media_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let stem = source
-        .media_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("recording");
-    let shot_path = unique_path_with_suffix(parent, &format!("{stem}_shot{start_ms}"), ".jpg");
-
+    let shot = TempMedia::new(temp_media_path(&source.media_path, "shot", start_ms, ".jpg")?);
     let midpoint_ms = start_ms + (end_ms.saturating_sub(start_ms)) / 2;
-    capture_screenshot(
-        Path::new(&executable_path),
+    // The guard drops on the `?`, so a failed grab cleans up after itself.
+    capture_screenshot(ffmpeg_path, video_path, midpoint_ms, shot.path())?;
+    Ok(Some(shot))
+}
+
+/// Cuts a short video of the line, or explains why not.
+///
+/// Same contract as the screenshot: `Ok(None)` for every ordinary reason there is no clip —
+/// no video field mapped, or a source with no video at all — and `Err` only when there
+/// should have been one. The card is still created either way; audio is the only part a
+/// mine cannot do without.
+///
+/// Unlike the screenshot, this uses the SAME padded window as the audio. A still is a single
+/// moment and the midpoint is the best guess at it, but a clip the user watches has to start
+/// and end where the audio they hear does, or the two disagree on the same card.
+fn capture_line_video(
+    ffmpeg_path: &Path,
+    settings: &AppSettings,
+    source: &MineSource,
+    start_ms: u64,
+    end_ms: u64,
+    padding: ClipPadding,
+) -> Result<Option<TempMedia>, String> {
+    if settings.anki.fields.video.is_empty() {
+        return Ok(None);
+    }
+    let Some(video_path) = source.video_path.as_ref() else {
+        return Ok(None);
+    };
+    if !video_path.exists() {
+        return Err(format!("the video is no longer at {}", video_path.display()));
+    }
+
+    let clip = TempMedia::new(temp_media_path(&source.media_path, "clip", start_ms, ".mp4")?);
+    capture_clip(
+        ffmpeg_path,
         video_path,
-        midpoint_ms,
-        &shot_path,
-    )
-    .map_err(|error| {
-        let _ = fs::remove_file(&shot_path);
-        error
-    })?;
-    Ok(Some(shot_path))
+        start_ms.saturating_sub(padding.before_ms),
+        end_ms.saturating_add(padding.after_ms),
+        clip.path(),
+    )?;
+    Ok(Some(clip))
 }
 
 /// Runs the whole mine for one sentence and returns the single action item plus
@@ -342,28 +365,40 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         return failed("There is no sentence text to mine.".into());
     }
 
-    // 3. Slice the sentence clip (ffmpeg is mandatory). The per-mine override wins; the
-    // global setting is the default for both sides.
+    // 3. Resolve ffmpeg once. Each call re-walks the managed install directory, and a mine
+    // needs it up to three times now — audio, still, clip.
+    let ffmpeg_path = match detect_local_ffmpeg(&settings).executable_path {
+        Some(path) => PathBuf::from(path),
+        None => return failed("FFmpeg is required to mine audio; install it in Setup.".into()),
+    };
+
+    // 3 (cont.). Slice the sentence clip (ffmpeg is mandatory). The per-mine override wins;
+    // the global setting is the default for both sides.
     let padding = padding_override
         .unwrap_or_else(|| ClipPadding::symmetric(settings.anki.clip_padding_ms));
-    let clip_path = match slice_segment_clip(&settings, &source.media_path, start_ms, end_ms, padding)
+    let clip = match slice_segment_clip(&ffmpeg_path, &source.media_path, start_ms, end_ms, padding)
     {
-        Ok(path) => path,
+        Ok(clip) => clip,
         Err(error) => return failed(error),
     };
 
-    // 3 (cont.). A still from the video, when there is one. Deliberately not fatal: a
-    // card with audio and no picture is worth far more than no card, so a failure here
-    // rides along as a note on an otherwise successful mine.
-    let (screenshot_path, mut screenshot_problem) =
-        match capture_line_screenshot(&settings, source, start_ms, end_ms) {
+    // 3 (cont.). A still and a video of the line, when there is a video to take them from.
+    // Deliberately not fatal: a card with audio and no picture is worth far more than no
+    // card, so a failure here rides along as a note on an otherwise successful mine.
+    let (screenshot, mut screenshot_problem) =
+        match capture_line_screenshot(&ffmpeg_path, &settings, source, start_ms, end_ms) {
+            Ok(path) => (path, None),
+            Err(problem) => (None, Some(problem)),
+        };
+    let (video_clip, mut video_problem) =
+        match capture_line_video(&ffmpeg_path, &settings, source, start_ms, end_ms, padding) {
             Ok(path) => (path, None),
             Err(problem) => (None, Some(problem)),
         };
 
-    // 4. Anki must be reachable before we store media or add the note.
+    // 4. Anki must be reachable before we store media or add the note. Every scratch file
+    // is owned by a `TempMedia`, so returning from here cleans them up on its own.
     if let Err(error) = anki_connect_request("version", serde_json::json!({})) {
-        let _ = fs::remove_file(&clip_path);
         return (
             RecordingActionItem {
                 file_path: file_path.to_string(),
@@ -375,42 +410,54 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         );
     }
 
-    let clip_media_file_name = anki_media_file_name(&clip_path);
-    let store_result = anki_connect_request(
+    // Anki copies each file into its own media folder, so the originals stay scratch.
+    let clip_media_file_name = anki_media_file_name(clip.path());
+    if let Err(error) = anki_connect_request(
         "storeMediaFile",
         serde_json::json!({
             "filename": clip_media_file_name,
-            "path": clip_path.display().to_string()
+            "path": clip.path().display().to_string()
         }),
-    );
-    // 8. Anki copies the clip into its own media folder, so the temp file is done
-    // regardless of whether storing (or the later addNote) succeeds.
-    let _ = fs::remove_file(&clip_path);
-    if let Err(error) = store_result {
-        if let Some(path) = &screenshot_path {
-            let _ = fs::remove_file(path);
-        }
+    ) {
         return failed(format!("Anki could not store the audio clip. {error}"));
     }
 
-    // The still goes into Anki's media folder the same way. A store failure here demotes
-    // the card to audio-only rather than losing it.
-    let screenshot_media_file_name = match &screenshot_path {
-        Some(path) => {
-            let media_file_name = anki_media_file_name(path);
-            let stored = anki_connect_request(
+    // The still and the clip go in the same way. A store failure here demotes the card to
+    // audio-only rather than losing it.
+    let screenshot_media_file_name = match &screenshot {
+        Some(shot) => {
+            let media_file_name = anki_media_file_name(shot.path());
+            match anki_connect_request(
                 "storeMediaFile",
                 serde_json::json!({
                     "filename": media_file_name,
-                    "path": path.display().to_string()
+                    "path": shot.path().display().to_string()
                 }),
-            );
-            let _ = fs::remove_file(path);
-            match stored {
+            ) {
                 Ok(_) => Some(media_file_name),
                 Err(error) => {
                     screenshot_problem =
                         Some(format!("Anki could not store the screenshot. {error}"));
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
+    let video_media_file_name = match &video_clip {
+        Some(video) => {
+            let media_file_name = anki_media_file_name(video.path());
+            match anki_connect_request(
+                "storeMediaFile",
+                serde_json::json!({
+                    "filename": media_file_name,
+                    "path": video.path().display().to_string()
+                }),
+            ) {
+                Ok(_) => Some(media_file_name),
+                Err(error) => {
+                    video_problem = Some(format!("Anki could not store the video clip. {error}"));
                     None
                 }
             }
@@ -438,6 +485,16 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
                 "<img src=\"{}\">",
                 html_escape(media_file_name)
             )),
+        );
+    }
+    if let Some(media_file_name) = &video_media_file_name {
+        // `[sound:...]` rather than a `<video>` tag: Anki treats it as media it owns, which
+        // is what gets it played on AnkiDroid and AnkiMobile and counted by Check Media.
+        // Anki renders a video file behind that tag as a player, not an audio bar.
+        prepend_anki_field_value(
+            &mut fields,
+            &anki.fields.video,
+            format!("[sound:{media_file_name}]"),
         );
     }
     if !anki.fields.source_path.is_empty() {
@@ -568,14 +625,20 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         RecordingActionItem {
             file_path: file_path.to_string(),
             status: "success".into(),
-            // The card exists either way, but a screenshot the user expected and did not
-            // get has to be said out loud — silently dropping it would report a partial
-            // result as a whole one.
-            message: match screenshot_problem {
-                Some(problem) => format!(
+            // The card exists either way, but media the user expected and did not get has
+            // to be said out loud — silently dropping it would report a partial result as a
+            // whole one.
+            message: match (screenshot_problem, video_problem) {
+                (None, None) => format!("Mined sentence into Anki note {note_id}."),
+                (Some(problem), None) => format!(
                     "Mined sentence into Anki note {note_id}, without a screenshot: {problem}."
                 ),
-                None => format!("Mined sentence into Anki note {note_id}."),
+                (None, Some(problem)) => format!(
+                    "Mined sentence into Anki note {note_id}, without a video clip: {problem}."
+                ),
+                (Some(shot), Some(video)) => format!(
+                    "Mined sentence into Anki note {note_id}, without a screenshot ({shot})                      or a video clip ({video})."
+                ),
             },
             note_id: Some(note_id),
         },

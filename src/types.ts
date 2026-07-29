@@ -48,6 +48,10 @@ export type AnkiFieldMapping = {
   // Receives an <img> of a still grabbed from the video at the mined line's moment.
   // Empty = unmapped, which is also every source that has no video.
   image: string;
+  // Receives a [sound:...] tag for a short video of the line. Anki renders a video behind
+  // that tag as a player, and treats it as media it owns, so it works on the phone clients
+  // and Check Media counts it. Empty = unmapped, which is what turns clip capture off.
+  video: string;
 };
 
 export type AnkiSettings = {

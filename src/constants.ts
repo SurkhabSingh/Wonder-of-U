@@ -343,6 +343,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         title: "",
         position: "",
         image: "",
+        video: "",
       },
       clipPaddingMs: 250,
     },

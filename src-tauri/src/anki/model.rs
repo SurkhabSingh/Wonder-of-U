@@ -17,10 +17,11 @@ const CARD_TEMPLATE_NAME: &str = "Listening";
 /// pushed" keeps working. Display is template-driven, so the sentence being field 1
 /// does not put it on the front. `Audio` holds the `[sound:...]` the app fills;
 /// `Reading` is an optional manual kana aid, left unmapped by default.
-const FIELD_NAMES: [&str; 8] = [
+const FIELD_NAMES: [&str; 9] = [
     "Sentence",
     "Audio",
     "Image",
+    "Video",
     "Translation",
     "Reading",
     "SourceURL",
@@ -47,7 +48,8 @@ const FRONT_TEMPLATE: &str = r#"<div class="wu-card wu-front">
 /// does not use `{{FrontSide}}`: the back shows its own `{{Audio}}` replay without
 /// repeating the hint.
 const BACK_TEMPLATE: &str = r#"<div class="wu-card wu-back">
-  {{#Image}}<div class="wu-image">{{Image}}</div>{{/Image}}
+  {{#Video}}<div class="wu-video">{{Video}}</div>{{/Video}}
+  {{^Video}}{{#Image}}<div class="wu-image">{{Image}}</div>{{/Image}}{{/Video}}
   {{#Audio}}<div class="wu-audio">{{Audio}}</div>{{/Audio}}
   {{#Sentence}}<div class="wu-sentence">{{furigana:Sentence}}</div>{{/Sentence}}
   {{#Reading}}<div class="wu-reading">{{Reading}}</div>{{/Reading}}
@@ -92,6 +94,8 @@ const CARD_CSS: &str = r#".card {
    pushing the sentence off screen. */
 .wu-image { margin: 0 0 10px; }
 .wu-image img { max-width: 100%; max-height: 45vh; border-radius: 6px; }
+.wu-video { margin: 0 0 10px; }
+.wu-video video { max-width: 100%; max-height: 45vh; border-radius: 6px; }
 .wu-audio a { transform: scale(1.6); display: inline-block; }
 .wu-front .wu-hint {
   margin-top: 22px;

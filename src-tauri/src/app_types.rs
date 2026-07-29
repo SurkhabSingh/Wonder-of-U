@@ -295,6 +295,12 @@ pub(crate) struct AnkiFieldMapping {
     /// Receives an `<img src="...">` tag.
     #[serde(default)]
     pub(crate) image: String,
+    /// Target field for a short video of the mined line. Empty = unmapped, which is what
+    /// switches clip capture off; every source without a video gets the same. Receives a
+    /// `[sound:...]` tag — Anki treats video behind that tag as media it owns and renders a
+    /// player for it, which is what makes it work on the phone clients too.
+    #[serde(default)]
+    pub(crate) video: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
