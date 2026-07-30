@@ -192,6 +192,46 @@ function App() {
   // Realign the subtitle file against the video's own audio, then reload the corrected
   // file into both mpv (done in Rust, so the player never shows subtitles the app thinks
   // it has fixed) and the app's cue list.
+  // Transcribe the picked video's own audio into a subtitle file, then adopt it as the
+  // session's sidecar. Adopting it is the point: from there it is an ordinary subtitle file,
+  // so the alass Sync button below applies to it exactly like a downloaded one — which is
+  // what makes the transcribe-time-realign chain testable end to end.
+  const [isGeneratingSubtitles, setIsGeneratingSubtitles] = useState(false);
+  const generateWatchSubtitles = useCallback(
+    async (videoPath: string) => {
+      setIsGeneratingSubtitles(true);
+      setWatchSyncResult(null);
+      try {
+        const generated = await invoke<{
+          path: string;
+          cueCount: number;
+          language: string;
+        }>("generate_watch_subtitles", { videoPath });
+        setWatchSubtitlePath(generated.path);
+        if (watch.snapshot.path === videoPath) {
+          await watchSubtitles.load(videoPath, generated.path, null);
+        }
+        setWatchSyncResult({
+          ok: true,
+          message: `${generated.cueCount} lines written to ${fileNameFromPath(
+            generated.path,
+          )}. Sync it if the timings look off.`,
+        });
+      } catch (caught) {
+        setWatchSyncResult({
+          ok: false,
+          message:
+            caught instanceof Error
+              ? caught.message
+              : String(caught ?? "Subtitles could not be generated."),
+        });
+      } finally {
+        setIsGeneratingSubtitles(false);
+      }
+    },
+    [watch.snapshot.path, watchSubtitles],
+  );
+
   const syncWatchSubtitles = useCallback(async () => {
     const videoPath = watch.snapshot.path;
     if (!watchSubtitlePath || !videoPath) {
@@ -686,6 +726,12 @@ function App() {
               onOpenScannerSettings={() => openSettingsSection("scanner")}
               isSyncing={isSyncingSubtitles}
               syncResult={watchSyncResult}
+              isGeneratingSubtitles={isGeneratingSubtitles}
+              // Available for any picked video, playing or not — a subtitle-free file is
+              // usually discovered before pressing play.
+              onGenerateSubtitles={(videoPath) =>
+                void generateWatchSubtitles(videoPath)
+              }
               // Only a sidecar file can be realigned: alass rewrites a subtitle file, and an
               // embedded track has none of its own.
               onSyncSubtitles={

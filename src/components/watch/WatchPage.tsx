@@ -70,6 +70,8 @@ export function WatchPage({
   onOpenScannerSettings,
   onSyncSubtitles,
   isSyncing,
+  onGenerateSubtitles,
+  isGeneratingSubtitles,
   syncResult,
 }: {
   snapshot: WatchSnapshot;
@@ -107,6 +109,11 @@ export function WatchPage({
   /// its own, and alass needs one to rewrite.
   onSyncSubtitles: (() => void) | undefined;
   isSyncing: boolean;
+  // Transcribe the chosen video's own audio into a subtitle file beside it, for material
+  // nothing has subtitles for. The result is adopted as the chosen sidecar, so Sync below
+  // can then realign it exactly like a downloaded file.
+  onGenerateSubtitles: (videoPath: string) => void;
+  isGeneratingSubtitles: boolean;
   syncResult: { ok: boolean; message: string } | null;
 }) {
   const [videoPath, setVideoPath] = useState<string | null>(null);
@@ -182,6 +189,27 @@ export function WatchPage({
           onDownloaded={setSubtitlePath}
           onOpenSettings={onOpenScannerSettings}
         />
+
+        <div className="panel-section">
+          <h3>No subtitles anywhere?</h3>
+          <p className="microcopy">
+            Write them from the video's own speech. This runs the same transcription the
+            library uses, so it takes a few minutes on a full episode and needs the Whisper
+            engine set up. The file is saved next to the video and selected for you.
+          </p>
+          <div className="panel-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => videoPath && onGenerateSubtitles(videoPath)}
+              disabled={!videoPath || isGeneratingSubtitles}
+            >
+              {isGeneratingSubtitles
+                ? "Writing subtitles…"
+                : "Generate subtitles from the audio"}
+            </button>
+          </div>
+        </div>
 
         <div className="panel-actions">
           <button

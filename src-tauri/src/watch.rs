@@ -29,6 +29,7 @@ use std::os::windows::process::CommandExt;
 use serde::Serialize;
 
 pub(crate) mod subtitles;
+pub(crate) mod transcribe;
 pub(crate) mod sync;
 #[cfg(target_os = "windows")]
 pub(crate) mod window;

@@ -148,7 +148,7 @@ fn parse_ffprobe_duration_ms(stdout: &str) -> Option<u64> {
 /// Best-effort duration probe. A missing or failing ffprobe is never an import
 /// failure — the recording simply lands with `duration_ms = 0`, exactly as an
 /// unprobeable file recovered from disk does.
-fn probe_duration_ms(ffmpeg_executable: Option<&str>, audio_path: &Path) -> u64 {
+pub(crate) fn probe_duration_ms(ffmpeg_executable: Option<&str>, audio_path: &Path) -> u64 {
     if let Some(ffmpeg_executable) = ffmpeg_executable {
         let ffprobe = ffprobe_path_for(ffmpeg_executable);
         let mut command = Command::new(&ffprobe);

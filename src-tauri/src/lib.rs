@@ -110,6 +110,7 @@ pub fn run() {
             set_scanner_popup,
             set_watch_subtitle_delay,
             sync_watch_subtitles,
+            generate_watch_subtitles,
             download_recommended_alass,
             jimaku_search,
             jimaku_files,

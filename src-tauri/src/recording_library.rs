@@ -4,9 +4,9 @@ use tauri::{AppHandle, Manager, Runtime};
 
 mod actions;
 mod conversion;
-mod import;
+pub(crate) mod import;
 mod texts;
-mod transcription;
+pub(crate) mod transcription;
 
 pub(crate) use actions::{
     delete_recording_inner, delete_recordings_inner, play_recording_inner, playback_path,

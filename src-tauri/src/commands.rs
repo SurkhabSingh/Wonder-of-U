@@ -3,6 +3,7 @@ use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 use crate::{
+    watch::transcribe::{generate_watch_subtitles_inner, GeneratedSubtitles},
     app_types::SharedPersistedState,
     runtime_assets::detect_local_mpv,
     anki::{lookup_term_inner, mine_watched_line_inner, LookupResult},
@@ -386,6 +387,23 @@ pub(crate) struct SubtitleSyncResult {
 ///
 /// For the harder fault, where the drift varies across the episode and no single offset
 /// works. Writes beside the original rather than over it.
+/// Transcribe the playing/selected video's own audio into a subtitle file beside it.
+///
+/// Blocking work on the blocking pool, like every other whisper pass. The result is handed
+/// back rather than loaded here: the caller sets it as the session's sidecar, which is what
+/// makes it eligible for the alass Sync button exactly like a downloaded subtitle.
+#[tauri::command]
+pub(crate) async fn generate_watch_subtitles(
+    app: AppHandle,
+    video_path: String,
+) -> Result<GeneratedSubtitles, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        generate_watch_subtitles_inner(&app, Path::new(&video_path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub(crate) async fn sync_watch_subtitles(
     app: AppHandle,

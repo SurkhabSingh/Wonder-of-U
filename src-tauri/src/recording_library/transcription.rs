@@ -104,6 +104,61 @@ fn log_speech_regions<R: Runtime>(
     );
 }
 
+/// Everything a transcription pass needs resolved from settings and detection.
+pub(crate) struct WhisperEngine {
+    pub(crate) cli_path: PathBuf,
+    pub(crate) model_path: PathBuf,
+    pub(crate) vad_model_path: PathBuf,
+    pub(crate) ffmpeg_path: PathBuf,
+}
+
+/// Resolve the engine, or say exactly what is missing.
+///
+/// The engine decodes with ffmpeg, then runs whisper-cli with its built-in Silero VAD, so the
+/// managed runtime + ggml model, ffmpeg, and the VAD model must all be present.
+///
+/// Shared so the library batch and the watch-session generator cannot drift into two different
+/// answers to "is Whisper ready" — the batch reports these as an `unavailable` result, the
+/// generator as a plain error, but the checks and their wording are one thing.
+pub(crate) fn resolve_whisper_engine<R: Runtime>(
+    app: &AppHandle<R>,
+    settings: &crate::app_types::AppSettings,
+) -> Result<WhisperEngine, String> {
+    let whisper_detection = refresh_whisper_detection_state(app).map_err(|error| error.to_string())?;
+    if whisper_detection.status != "ready" {
+        return Err(format!(
+            "Whisper is not ready yet: {}",
+            whisper_detection.message
+        ));
+    }
+
+    let ffmpeg_path = detect_local_ffmpeg(settings)
+        .executable_path
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            "FFmpeg is required for transcription. Download it from Settings.".to_string()
+        })?;
+
+    let vad_model_path = Path::new(&settings.asset_directory)
+        .join("models")
+        .join(WHISPER_VAD_MODEL_FILE);
+    // Only speech mode uses the VAD model; music mode skips VAD entirely, so don't require the
+    // VAD model to be present when the user has chosen Music.
+    if settings.whisper.audio_type != "music" && !vad_model_path.exists() {
+        return Err(
+            "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
+                .to_string(),
+        );
+    }
+
+    Ok(WhisperEngine {
+        cli_path: PathBuf::from(whisper_detection.executable_path.unwrap_or_default()),
+        model_path: PathBuf::from(whisper_detection.model_path.unwrap_or_default()),
+        vad_model_path,
+        ffmpeg_path,
+    })
+}
+
 fn apply_transcription_result_to_recording<R: Runtime>(
     app: &AppHandle<R>,
     original_file_path: &str,
@@ -463,7 +518,7 @@ fn clamp_end_to_speech(
     }
 }
 
-fn clean_segments(
+pub(crate) fn clean_segments(
     segments: Vec<RecordingSegment>,
     duration_ms: u64,
     speech_regions: &[SpeechRegion],
@@ -523,7 +578,7 @@ fn clean_segments(
 /// Read whisper's json and convert its `transcription[].offsets.{from,to}` (ms)
 /// plus text into the clean segment array. Returns `None` for a missing or
 /// unparseable file so the caller can degrade to no segments.
-fn parse_whisper_segments(json_path: &Path) -> Option<Vec<RecordingSegment>> {
+pub(crate) fn parse_whisper_segments(json_path: &Path) -> Option<Vec<RecordingSegment>> {
     let raw = fs::read_to_string(json_path).ok()?;
     let parsed: WhisperJson = serde_json::from_str(&raw).ok()?;
     let segments = parsed
@@ -651,45 +706,23 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
 
     // The engine decodes with ffmpeg, then runs whisper-cli with its built-in Silero VAD, so
     // the managed Whisper runtime + ggml model, ffmpeg, and the VAD model must all be present.
-    let whisper_detection = refresh_whisper_detection_state(app)?;
-    if whisper_detection.status != "ready" {
-        return Ok(RecordingBatchResult {
-            status: "unavailable".into(),
-            message: format!("Whisper is not ready yet: {}", whisper_detection.message),
-            items: Vec::new(),
-            bootstrap: build_app_bootstrap(app)?,
-        });
-    }
-    let cli_path = PathBuf::from(whisper_detection.executable_path.clone().unwrap_or_default());
-    let model_path = PathBuf::from(whisper_detection.model_path.clone().unwrap_or_default());
-
-    let ffmpeg_path = match detect_local_ffmpeg(&settings).executable_path {
-        Some(path) => PathBuf::from(path),
-        None => {
+    let engine = match resolve_whisper_engine(app, &settings) {
+        Ok(engine) => engine,
+        Err(message) => {
             return Ok(RecordingBatchResult {
                 status: "unavailable".into(),
-                message: "FFmpeg is required for transcription. Download it from Settings.".into(),
+                message,
                 items: Vec::new(),
                 bootstrap: build_app_bootstrap(app)?,
             });
         }
     };
-
-    let vad_model_path = Path::new(&settings.asset_directory)
-        .join("models")
-        .join(WHISPER_VAD_MODEL_FILE);
-    // Only speech mode uses the VAD model; music mode skips VAD entirely, so don't require
-    // the VAD model to be present when the user has chosen Music.
-    if settings.whisper.audio_type != "music" && !vad_model_path.exists() {
-        return Ok(RecordingBatchResult {
-            status: "unavailable".into(),
-            message:
-                "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
-                    .into(),
-            items: Vec::new(),
-            bootstrap: build_app_bootstrap(app)?,
-        });
-    }
+    let WhisperEngine {
+        cli_path,
+        model_path,
+        vad_model_path,
+        ffmpeg_path,
+    } = engine;
     let recordings = selected_untranscribed_recordings(app, file_paths, &language, force)?;
     let total = recordings.len();
     let mut items = Vec::new();
