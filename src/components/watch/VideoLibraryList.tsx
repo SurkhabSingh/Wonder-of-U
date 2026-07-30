@@ -53,7 +53,7 @@ export function VideoLibraryList({
   onCancelGenerate,
   openMenuPath,
   onOpenMenuChange,
-  isStarting,
+  startingPath,
   searchQuery,
 }: {
   videos: WatchedVideo[];
@@ -75,7 +75,7 @@ export function VideoLibraryList({
   // Lifted so only one row's menu is open at a time, exactly as the audio rows do it.
   openMenuPath: string | null;
   onOpenMenuChange: (videoPath: string | null) => void;
-  isStarting: boolean;
+  startingPath: string | null;
   searchQuery: string;
 }) {
   if (videos.length === 0) {
@@ -97,6 +97,7 @@ export function VideoLibraryList({
         const chip = subtitleChip(video);
         const missing = missingPaths.has(video.videoPath);
         const generating = video.videoPath === generatingPath;
+        const starting = video.videoPath === startingPath;
 
         return (
           <article
@@ -174,10 +175,10 @@ export function VideoLibraryList({
                 type="button"
                 className="secondary recording-primary-action"
                 onClick={() => onOpen(video)}
-                disabled={missing || generating || isStarting}
+                disabled={missing || generating || starting}
                 title={missing ? "This file is no longer where it was." : undefined}
               >
-                {isStarting ? "Opening…" : "Open in mpv"}
+                {starting ? "Opening…" : "Open in mpv"}
               </button>
               <DropdownMenuPrimitive.Root
                 modal={false}

@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { JimakuSearchPanel } from "./JimakuSearchPanel";
-import { fileNameFromPath } from "../../lib/format";
 
 /**
  * A shell around the existing Jimaku panel so searching happens over the library rather than
@@ -44,9 +43,6 @@ export function JimakuDialog({
         onClick={(event) => event.stopPropagation()}
       >
         <p className="confirm-title">Search Jimaku</p>
-        <p className="microcopy">
-          Downloads save beside {fileNameFromPath(videoPath)} and are paired with it.
-        </p>
 
         <JimakuSearchPanel
           hasApiKey={hasApiKey}

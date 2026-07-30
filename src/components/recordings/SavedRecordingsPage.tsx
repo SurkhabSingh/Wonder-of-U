@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import type { RecordingFilterTab } from "../../lib/navigation";
 import type {
@@ -73,8 +74,6 @@ export function SavedRecordingsPage({
   onView,
   transcriptionItems,
   transcriptionActiveProgress,
-  transcriptionCurrentIndex,
-  transcriptionTotal,
   transcriptionFinishedCount,
   onCancelTranscription,
   onRemoveTranscription,
@@ -134,8 +133,6 @@ export function SavedRecordingsPage({
   // same shape as the Home YouTube queue.
   transcriptionItems: TranscriptionQueueItem[];
   transcriptionActiveProgress: number | null;
-  transcriptionCurrentIndex: number;
-  transcriptionTotal: number;
   transcriptionFinishedCount: number;
   onCancelTranscription: () => void;
   onRemoveTranscription: (id: string) => void;
@@ -157,6 +154,28 @@ export function SavedRecordingsPage({
     }
     player.playRecording(recording);
   };
+
+  // The queue is single-flight, so at most one path is "active". Built once per render
+  // rather than scanned per row, and it is what lets a row show its own progress instead of
+  // the user hunting for it in a panel above the list.
+  const transcriptionByPath = useMemo(() => {
+    const byPath = new Map<
+      string,
+      { status: "active" | "queued"; progress: number | null; id: string }
+    >();
+    for (const item of transcriptionItems) {
+      if (item.status === "active") {
+        byPath.set(item.filePath, {
+          status: "active",
+          progress: transcriptionActiveProgress,
+          id: item.id,
+        });
+      } else if (item.status === "queued") {
+        byPath.set(item.filePath, { status: "queued", progress: null, id: item.id });
+      }
+    }
+    return byPath;
+  }, [transcriptionItems, transcriptionActiveProgress]);
 
   return (
     <div className="recorder-view recordings-view">
@@ -233,16 +252,8 @@ export function SavedRecordingsPage({
 
         <TranscriptionQueuePanel
           items={transcriptionItems}
-          activeProgress={transcriptionActiveProgress}
-          currentIndex={transcriptionCurrentIndex}
-          total={transcriptionTotal}
           finishedCount={transcriptionFinishedCount}
-          onCancel={onCancelTranscription}
-          onRemove={onRemoveTranscription}
           onClearFinished={onClearFinishedTranscription}
-          // The same action the card's View uses — the viewer renders the live
-          // sentences while the run is going and the saved transcript after.
-          onViewLive={(filePath) => void onView(filePath)}
         />
 
         {recentRecordings.length === 0 ? (
@@ -279,6 +290,27 @@ export function SavedRecordingsPage({
                 onConvertToMp3={onConvertToMp3}
                 onDelete={onDeleteRecording}
                 onView={onView}
+                transcriptionStatus={
+                  transcriptionByPath.get(recording.filePath)?.status ?? null
+                }
+                transcriptionProgress={
+                  transcriptionByPath.get(recording.filePath)?.progress ?? null
+                }
+                // Cancel kills whatever whisper is running, so it is offered on the ACTIVE
+                // row only — on a queued row it would stop a different file.
+                onCancelTranscription={
+                  transcriptionByPath.get(recording.filePath)?.status === "active"
+                    ? onCancelTranscription
+                    : undefined
+                }
+                onViewLiveTranscription={onView}
+                // The queue removes by item id, and the row only knows its own path.
+                onRemoveFromQueue={(filePath) => {
+                  const queued = transcriptionByPath.get(filePath);
+                  if (queued) {
+                    onRemoveTranscription(queued.id);
+                  }
+                }}
               />
             ))}
           </div>

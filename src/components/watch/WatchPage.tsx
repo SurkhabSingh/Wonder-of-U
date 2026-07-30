@@ -47,7 +47,7 @@ const PADDING_OPTIONS = [
 
 export function WatchPage({
   snapshot,
-  isStarting,
+  startingPath,
   error,
   onStart,
   onStop,
@@ -93,7 +93,8 @@ export function WatchPage({
   syncResult,
 }: {
   snapshot: WatchSnapshot;
-  isStarting: boolean;
+  // The video being opened, so only its row says so.
+  startingPath: string | null;
   error: string | null;
   onStart: (videoPath: string, subtitlePath: string | null) => void;
   onStop: () => void;
@@ -227,7 +228,7 @@ export function WatchPage({
             onCancelGenerate={onCancelGenerate}
             openMenuPath={openMenuPath}
             onOpenMenuChange={onOpenMenuChange}
-            isStarting={isStarting}
+            startingPath={startingPath}
             searchQuery={searchQuery}
           />
 

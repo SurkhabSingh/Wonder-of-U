@@ -326,6 +326,9 @@ input::placeholder {
 }
 
 .confirm-title {
+  /* The UA gives a `p` a 1em block margin, which stacked on top of the panel's own gap and
+     left the heading sitting low in its own dialog. */
+  margin: 0;
   font-size: var(--text-lg);
   color: var(--text-strong);
 }
@@ -3528,6 +3531,10 @@ input::placeholder {
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   overflow-y: auto;
+  /* Explicit, and load-bearing: setting only one axis makes the other compute to `auto`,
+     so this box was a horizontal scroll container as well. Subtitle file names are long
+     and often unbreakable, so it always found something to scroll. */
+  overflow-x: hidden;
 }
 
 .jimaku-results-header {
@@ -3539,11 +3546,31 @@ input::placeholder {
   border-bottom: 1px solid var(--border);
 }
 
+/* Flex items default to `min-width: auto`, so a long anime title refused to shrink and
+   widened the whole list. Same treatment `.themed-select-trigger > span` already uses. */
+.jimaku-results-header > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The header's title is a span, which flex blockifies — so `.microcopy`'s 10px top margin
+   applied and pushed it off the Back link's baseline. */
+.jimaku-results-header .microcopy {
+  margin-top: 0;
+}
+
 .jimaku-result {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  min-width: 0;
+  /* A file name like `[SubsPlease]_Grand_Blue_S3_-_01_(1080p)_[F6B8A2C1].ass` has no break
+     opportunity at all — underscores and mid-word dots are not break points — so without
+     this it is one ~430px token in ~378px of room, and the list scrolls sideways. */
+  overflow-wrap: anywhere;
   padding: var(--space-2) var(--space-3);
   border: none;
   border-radius: var(--radius-sm);
@@ -3671,8 +3698,29 @@ input::placeholder {
   font-size: var(--text-xs);
 }
 
-/* The Jimaku dialog borrows the confirm modal's shell but needs room for results. */
+/* The Jimaku dialog borrows the confirm modal's shell, and has to be told its own size.
+   `.confirm-panel` sets no max-height and the overlay centres with `place-items: center`
+   under `body { overflow: hidden }` — so a panel taller than the viewport is clipped at BOTH
+   ends with nothing able to scroll to what was cut. Bounding the panel and letting one
+   region inside it scroll is what keeps the dialog still while its contents change.
+
+   The width matches `.confirm-panel`'s own `min(30rem, 100%)`; the first version of this
+   rule said 440px, which made the "wide" dialog 40px NARROWER than a plain one. */
 .modal-panel-wide {
-  width: min(440px, calc(100vw - 48px));
-  text-align: left;
+  width: min(30rem, calc(100vw - 48px));
+  max-height: min(560px, calc(100vh - 48px));
+  overflow: hidden;
+}
+
+/* Inside the dialog the results take the leftover height instead of a fixed 260px, so the
+   panel is the same size whether a search returns one file or forty. */
+.modal-panel-wide .jimaku-panel {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.modal-panel-wide .jimaku-results {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
 }

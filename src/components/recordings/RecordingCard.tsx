@@ -52,6 +52,11 @@ export function RecordingCard({
   onConvertToMp3,
   onDelete,
   onView,
+  transcriptionStatus,
+  transcriptionProgress,
+  onCancelTranscription,
+  onViewLiveTranscription,
+  onRemoveFromQueue,
 }: {
   recording: RecentRecording;
   selected: boolean;
@@ -80,6 +85,15 @@ export function RecordingCard({
   onConvertToMp3: RecordingAction;
   onDelete: SingleRecordingAction;
   onView: SingleRecordingAction;
+  // This recording's place in the transcription queue, or null when it is not in it. The
+  // queue is single-flight, so at most one row anywhere is "active".
+  transcriptionStatus?: "active" | "queued" | null;
+  transcriptionProgress?: number | null;
+  // Only wired for the ACTIVE row: the cancel event kills whatever whisper is working on,
+  // so offering it on a queued row would stop the wrong file.
+  onCancelTranscription?: (() => void) | undefined;
+  onViewLiveTranscription?: ((filePath: string) => void) | undefined;
+  onRemoveFromQueue?: ((filePath: string) => void) | undefined;
 }) {
   const hasSelectedTranscript = recordingHasTranscriptForLanguage(
     recording,
@@ -148,7 +162,13 @@ export function RecordingCard({
   // The single most-relevant next step, surfaced as a one-click primary button.
   // Priority mirrors recordingChips(); each case invokes the same handler its
   // matching overflow-menu item uses, so no new behavior is introduced.
-  const primaryAction = !hasSelectedTranscript
+  const primaryAction = transcriptionStatus
+    ? {
+        label: transcriptionStatus === "active" ? "Transcribing…" : "Queued",
+        onClick: () => {},
+        disabled: true,
+      }
+    : !hasSelectedTranscript
     ? {
         label: "Transcribe",
         // Enqueues into the non-blocking transcription queue — stays enabled
@@ -204,13 +224,65 @@ export function RecordingCard({
         ) : (
           <strong className="recording-name">{recording.fileName}</strong>
         )}
-        <span className="recording-meta">
-          {formatDuration(recording.durationMs)} ·{" "}
-          {formatBytes(recording.bytesWritten)} ·{" "}
-          {formatTimestamp(recording.createdAtMs)}
-        </span>
+        {transcriptionStatus === "active" ? (
+          // In place of the metadata line, so progress belongs to the row it is about
+          // rather than to a panel somewhere above the list. Same shape the video library
+          // uses, which is what keeps the two feeling like one app.
+          <div className="video-progress">
+            <span className="video-progress-text">
+              {transcriptionProgress !== null
+                ? `Transcribing… ${transcriptionProgress}%`
+                : "Starting…"}
+            </span>
+            <div
+              className="video-progress-bar"
+              role="progressbar"
+              aria-label="Transcription progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={transcriptionProgress ?? undefined}
+            >
+              <div className="progress-track" aria-hidden="true">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${transcriptionProgress ?? 0}%` }}
+                />
+              </div>
+            </div>
+            {onViewLiveTranscription ? (
+              <button
+                type="button"
+                className="ghost video-progress-cancel"
+                onClick={() => onViewLiveTranscription(recording.filePath)}
+                title="Watch the transcript as it is written"
+              >
+                Live
+              </button>
+            ) : null}
+            {onCancelTranscription ? (
+              <button
+                type="button"
+                className="ghost video-progress-cancel"
+                onClick={onCancelTranscription}
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <span className="recording-meta">
+            {formatDuration(recording.durationMs)} ·{" "}
+            {formatBytes(recording.bytesWritten)} ·{" "}
+            {formatTimestamp(recording.createdAtMs)}
+          </span>
+        )}
         <div className="recording-state-row" title={stateRowTitle}>
-          {stateChips.map((chip) => (
+          {transcriptionStatus === "queued" ? (
+            <span className="status-chip status-chip-accent">
+              Queued to transcribe
+            </span>
+          ) : null}
+          {(transcriptionStatus ? [] : stateChips).map((chip) => (
             <span
               key={chip.label}
               className={`status-chip status-chip-${chip.tone}`}
@@ -450,6 +522,17 @@ export function RecordingCard({
                     Convert to MP3
                   </DropdownMenuPrimitive.Item>
                 </TooltipWrap>
+              ) : null}
+              {transcriptionStatus === "queued" && onRemoveFromQueue ? (
+                <>
+                  <DropdownMenuPrimitive.Separator className="action-menu-separator" />
+                  <DropdownMenuPrimitive.Item
+                    className="action-menu-item"
+                    onSelect={() => onRemoveFromQueue(recording.filePath)}
+                  >
+                    Remove from queue
+                  </DropdownMenuPrimitive.Item>
+                </>
               ) : null}
               <DropdownMenuPrimitive.Separator className="action-menu-separator" />
               <DropdownMenuPrimitive.Item
