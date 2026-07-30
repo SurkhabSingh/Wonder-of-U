@@ -13,8 +13,8 @@ use crate::{
 
 use super::{
     client::{anki_connect_request, anki_note_field_value, anki_offline_message},
-    fields::{anki_media_file_name, preserve_anki_sound_tags, user_friendly_anki_error},
-    furigana::{recording_transcript_supports_furigana, request_furigana_html},
+    fields::{anki_media_file_name, user_friendly_anki_error},
+    furigana::{insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html},
     references::refresh_recording_anki_reference,
 };
 
@@ -194,23 +194,25 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
             )
         })?;
     let media_file_name = anki_media_file_name(&PathBuf::from(&recording.file_path));
-    let fallback_sound_tag =
-        if !settings.fields.audio.is_empty() && settings.fields.audio == target_field {
-            Some(format!("[sound:{media_file_name}]"))
-        } else {
-            None
-        };
-    let furigana_html = preserve_anki_sound_tags(
-        existing_furigana_field_value.as_deref(),
-        &furigana_html,
-        fallback_sound_tag.as_deref(),
-    );
 
+    // The SAME writer the mine and push paths use, seeded with what Anki already holds.
+    //
+    // This used to be a hand-rolled copy of it, and the copy had drifted: it wrote the
+    // bracket text to the field WITHOUT escaping, while the shared writer escapes it. That
+    // difference is the whole security argument for bracket notation — the text comes from
+    // an unauthenticated localhost port and lands in a field Anki renders as HTML, and a
+    // transcript containing a bare `<` or `&` was being written raw on this path alone.
+    //
+    // `insert_furigana_field` merges against whatever is already in the map, so seeding it
+    // with the note's current field value reproduces this path's behaviour exactly.
     let mut fields = serde_json::Map::new();
-    fields.insert(
-        target_field.to_string(),
-        serde_json::Value::String(furigana_html),
-    );
+    if let Some(existing) = existing_furigana_field_value.as_deref() {
+        fields.insert(
+            target_field.to_string(),
+            serde_json::Value::String(existing.to_string()),
+        );
+    }
+    insert_furigana_field(settings, &furigana_html, &media_file_name, &mut fields);
     anki_connect_request(
         "updateNoteFields",
         serde_json::json!({

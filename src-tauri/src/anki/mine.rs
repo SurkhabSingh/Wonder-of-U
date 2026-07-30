@@ -15,7 +15,7 @@ use super::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
     },
     furigana::{
-        insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
+        insert_furigana_field, request_furigana_html,
     },
     media_temp::{mining_temp_dir, TempMedia},
     screenshot::capture_screenshot,
@@ -336,7 +336,17 @@ fn mine_single_segment<R: Runtime>(
         created_at_ms: Some(recording.created_at_ms),
         source_url: recording.source_url.clone(),
         display_title: recording_display_title(&recording),
-        supports_furigana: recording_transcript_supports_furigana(&recording, text.trim()),
+        // Judged on the mined LINE, exactly as the watch path judges it, because that is
+        // what the card will hold.
+        //
+        // The recording-level gate takes `transcript_language`, which is the language of
+        // whichever pass ran LAST — not of the transcript this line came from. On a
+        // recording transcribed in Japanese and later in English, mining a Japanese line
+        // asked "is the recording English?", got yes, and skipped furigana on Japanese
+        // text without a word. The push and the furigana updater avoid it by overriding
+        // that field with the variant's own language first; this call did not, and a single
+        // line does not need the indirection — the text is right here.
+        supports_furigana: transcript_looks_japanese(text.trim()),
     };
 
     mine_media_to_anki(app, file_path, &source, text, start_ms, end_ms, translation, None)

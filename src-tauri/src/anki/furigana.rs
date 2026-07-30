@@ -247,6 +247,46 @@ pub(crate) fn recording_transcript_supports_furigana(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::app_types::AnkiSettings;
+
+    #[test]
+    fn the_field_writer_escapes_markup_that_survived_the_conversion() {
+        // The bracket text is plain text by construction, but the SENTENCE inside it is
+        // whatever was transcribed — a bare `<` or `&` reaches here intact, and the field
+        // it lands in is rendered by Anki as HTML. Escaping is the whole reason bracket
+        // notation replaced ruby markup, so it is pinned rather than assumed.
+        let mut settings = AnkiSettings::default();
+        settings.fields.transcription = "Sentence".into();
+        let mut fields = serde_json::Map::new();
+        insert_furigana_field(&settings, "a < b & c", "clip.mp3", &mut fields);
+
+        let written = fields["Sentence"].as_str().unwrap();
+        assert!(!written.contains("< b"), "a bare < would open a tag: {written}");
+        assert!(written.contains("&lt;"));
+        assert!(written.contains("&amp;"));
+    }
+
+    #[test]
+    fn an_existing_sound_tag_survives_the_furigana_rewrite() {
+        // Furigana overwrites the transcript field, and on a note type where the audio is
+        // mapped to that same field the `[sound:]` tag lives there too — losing it would
+        // silently mute a card that had audio a moment earlier.
+        let mut settings = AnkiSettings::default();
+        settings.fields.transcription = "Sentence".into();
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "Sentence".into(),
+            serde_json::Value::String("[sound:old.mp3] previous text".into()),
+        );
+        insert_furigana_field(&settings, "kanji[reading]", "clip.mp3", &mut fields);
+
+        let written = fields["Sentence"].as_str().unwrap();
+        assert!(
+            written.contains("[sound:old.mp3]"),
+            "audio was dropped: {written}"
+        );
+    }
     use super::ruby_html_to_furigana_brackets;
 
     #[test]
