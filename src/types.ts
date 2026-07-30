@@ -143,8 +143,8 @@ export type AppSettings = {
   features: FeatureSettings;
   translation: TranslationSettings;
   scanner: ScannerSettings;
-  // jimaku.cc API key. Flat rather than a nested group: a single field cannot hit the
-  // trap where a partial update wipes a group's siblings.
+  // jimaku.cc API key. Flat because it is one field; the sibling-wiping trap that once
+  // made flatness the safer choice is gone — see mergeSettings.
   jimakuApiKey: string;
   theme: ThemePreference;
   indicatorPosition: IndicatorPosition;
