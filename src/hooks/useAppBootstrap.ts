@@ -3,32 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { APP_SNAPSHOT_EVENT, DEFAULT_BOOTSTRAP } from "../constants";
+import { mergeSettings } from "./mergeSettings";
 import type {
-  AnkiFieldMapping,
-  AnkiSettings,
+  SettingsUpdate,
   AppBootstrap,
   AppSettings,
   AutosaveState,
-  FeatureSettings,
-  ScannerSettings,
-  TranslationSettings,
-  WhisperSettings,
 } from "../types";
-
-type SettingsUpdate = Partial<
-  Omit<
-    AppSettings,
-    "features" | "whisper" | "anki" | "translation" | "scanner"
-  >
-> & {
-  features?: Partial<FeatureSettings>;
-  whisper?: Partial<WhisperSettings>;
-  translation?: Partial<TranslationSettings>;
-  scanner?: Partial<ScannerSettings>;
-  anki?: Partial<Omit<AnkiSettings, "fields">> & {
-    fields?: Partial<AnkiFieldMapping>;
-  };
-};
 
 export function useAppBootstrap() {
   const [bootstrap, setBootstrap] = useState<AppBootstrap>(DEFAULT_BOOTSTRAP);
@@ -231,45 +212,7 @@ export function useAppBootstrap() {
   }, [applyBootstrap, settingsDraft, settingsDraftKey, settingsDirty]);
 
   const updateSettings = useCallback((update: SettingsUpdate) => {
-    setSettingsDraft((current) => {
-      const nextFeatures: FeatureSettings = {
-        ...current.features,
-        ...(update.features ?? {}),
-      };
-      const nextWhisper: WhisperSettings = {
-        ...current.whisper,
-        ...(update.whisper ?? {}),
-      };
-      const nextTranslation: TranslationSettings = {
-        ...current.translation,
-        ...(update.translation ?? {}),
-      };
-      // Every nested group needs its own merge line. Without one, the `...update`
-      // below REPLACES the whole object with whatever partial the caller passed,
-      // wiping its siblings — silently, with no type error.
-      const nextScanner: ScannerSettings = {
-        ...current.scanner,
-        ...(update.scanner ?? {}),
-      };
-      const nextAnki: AnkiSettings = {
-        ...current.anki,
-        ...(update.anki ?? {}),
-        fields: {
-          ...current.anki.fields,
-          ...(update.anki?.fields ?? {}),
-        },
-      };
-
-      return {
-        ...current,
-        ...update,
-        whisper: nextWhisper,
-        translation: nextTranslation,
-        anki: nextAnki,
-        features: nextFeatures,
-        scanner: nextScanner,
-      };
-    });
+    setSettingsDraft((current) => mergeSettings(current, update));
   }, []);
 
   const persistSettingsIfNeeded = useCallback(async () => {

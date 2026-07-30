@@ -1,27 +1,4 @@
-import type {
-  AnkiFieldMapping,
-  AnkiSettings,
-  AppSettings,
-  FeatureSettings,
-  ScannerSettings,
-  TranslationSettings,
-  WhisperSettings,
-} from "../../types";
-
-export type SettingsUpdate = Partial<
-  Omit<
-    AppSettings,
-    "features" | "whisper" | "anki" | "translation" | "scanner"
-  >
-> & {
-  features?: Partial<FeatureSettings>;
-  whisper?: Partial<WhisperSettings>;
-  translation?: Partial<TranslationSettings>;
-  scanner?: Partial<ScannerSettings>;
-  anki?: Partial<Omit<AnkiSettings, "fields">> & {
-    fields?: Partial<AnkiFieldMapping>;
-  };
-};
+export type { SettingsUpdate } from "../../types";
 
 export type BrowseDirectoryField = "outputDirectory" | "assetDirectory";
 export type BrowseFileField = "cliPath" | "modelPath";
