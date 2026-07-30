@@ -6,23 +6,13 @@ import { errorMessage } from "../lib/errors";
 import { normalizeSelection } from "../lib/helpers";
 import type {
   AnkiFieldMapping,
-  AnkiSettings,
+  SettingsUpdate,
   AppBootstrap,
   AppSettings,
   BusyAction,
-  FeatureSettings,
   SettingsSection,
   WhisperAssetUpdateResult,
-  WhisperSettings,
 } from "../types";
-
-type SettingsUpdate = Partial<Omit<AppSettings, "features" | "whisper" | "anki">> & {
-  features?: Partial<FeatureSettings>;
-  whisper?: Partial<WhisperSettings>;
-  anki?: Partial<Omit<AnkiSettings, "fields">> & {
-    fields?: Partial<AnkiFieldMapping>;
-  };
-};
 
 type UseSetupActionsOptions = {
   applyBootstrap: (nextBootstrap: AppBootstrap) => void;

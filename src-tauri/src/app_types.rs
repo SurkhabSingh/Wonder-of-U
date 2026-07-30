@@ -66,10 +66,6 @@ pub(crate) fn default_whisper_model_id() -> &'static str {
     "small"
 }
 
-pub(crate) fn default_whisper_model_choice() -> String {
-    default_whisper_model_id().to_string()
-}
-
 pub(crate) fn default_whisper_runtime_version() -> String {
     RECOMMENDED_WHISPER_RUNTIME_VERSION.to_string()
 }
@@ -125,19 +121,17 @@ pub(crate) fn default_translation_target_language() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct TranslationSettings {
     /// Which provider the extension should use for desktop-initiated translations:
     /// `"google-translate"` or `"deepl"`. Passed through the bridge as the job's
     /// `provider`; an unknown value simply lets the extension fall back to its own
     /// selection.
-    #[serde(default = "default_translation_provider")]
     pub(crate) provider: String,
     /// The language transcripts are translated INTO, as a lowercase ISO 639-1 code.
     /// Sent as the job's `targetLang` and used to name the `{stem}.translation.{lang}.txt`
     /// sidecar. The UI owns which codes are offered; see
     /// `normalize_translation_target_language` for why only the format is enforced here.
-    #[serde(default = "default_translation_target_language")]
     pub(crate) target_language: String,
 }
 
@@ -192,35 +186,26 @@ pub(crate) fn default_reading_font_size_px() -> u64 {
 /// note that a nested group must also gain a merge line in the frontend's `updateSettings`,
 /// or a partial update silently wipes its siblings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct ScannerSettings {
     /// Held to scan: `shift` | `ctrl` | `alt` | `none`. `none` scans on bare hover, which
     /// is why the debounce below matters more in that mode.
-    #[serde(default = "default_scan_modifier")]
     pub(crate) modifier: String,
     /// What releasing the modifier does: `remainOpen` | `close`.
-    #[serde(default = "default_scan_release_behavior")]
     pub(crate) release_behavior: String,
-    #[serde(default = "default_scan_debounce_ms")]
     pub(crate) debounce_ms: u64,
     /// Popup font. Empty means inherit the app's reading font. A free string, deliberately:
     /// the UI owns which families it offers, Rust only bounds the length.
-    #[serde(default)]
     pub(crate) font_family: String,
-    #[serde(default = "default_lookup_font_size_px")]
     pub(crate) font_size_px: u64,
     /// Draw our own scannable subtitles over mpv instead of mpv's styled ones. **Off by
     /// default**: mpv's `.ass` rendering is what works today and stays the default.
-    #[serde(default)]
     pub(crate) overlay_enabled: bool,
-    #[serde(default = "default_overlay_font_size_px")]
     pub(crate) overlay_font_size_px: u64,
     /// The app's own reading font, driving `--font-reading`. Empty = the built-in stack.
-    #[serde(default)]
     pub(crate) reading_font_family: String,
     /// Drives `--reading-base`, which the transcript rows, the live pane and the watch line
     /// already size themselves from.
-    #[serde(default = "default_reading_font_size_px")]
     pub(crate) reading_font_size_px: u64,
 }
 
@@ -241,20 +226,16 @@ impl Default for ScannerSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct FeatureSettings {
     pub(crate) transcription: bool,
-    #[serde(default)]
     pub(crate) delete_local_audio_after_anki_push: bool,
-    #[serde(default)]
     pub(crate) allow_mp3_conversion: bool,
-    #[serde(default)]
     pub(crate) auto_add_furigana_after_anki_push: bool,
     /// Translate a transcript as soon as it is created, instead of waiting for the
     /// user to press Translate. Needs the browser extension in App Support mode;
     /// when it is not connected the transcript is still saved and the translation
     /// is simply skipped.
-    #[serde(default)]
     pub(crate) translate_after_transcription: bool,
 }
 
@@ -271,10 +252,9 @@ impl Default for FeatureSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct AnkiFieldMapping {
     pub(crate) transcription: String,
-    #[serde(default)]
     pub(crate) furigana: String,
     pub(crate) audio: String,
     pub(crate) translation: String,
@@ -282,37 +262,30 @@ pub(crate) struct AnkiFieldMapping {
     pub(crate) created_at: String,
     /// Target field for a clickable link back to the source (YouTube links deep-link
     /// to the sentence's moment). Empty = unmapped.
-    #[serde(default)]
     pub(crate) source_url: String,
     /// Target field for the recording's display title. Empty = unmapped.
-    #[serde(default)]
     pub(crate) title: String,
     /// Target field for the sentence's timestamp (H:MM:SS). Empty = unmapped.
-    #[serde(default)]
     pub(crate) position: String,
     /// Target field for a still frame from the video at the mined line's moment.
     /// Empty = unmapped, which is also what every source without a video gets.
     /// Receives an `<img src="...">` tag.
-    #[serde(default)]
     pub(crate) image: String,
     /// Target field for a short video of the mined line. Empty = unmapped, which is what
     /// switches clip capture off; every source without a video gets the same. Receives a
     /// `[sound:...]` tag — Anki treats video behind that tag as media it owns and renders a
     /// player for it, which is what makes it work on the phone clients too.
-    #[serde(default)]
     pub(crate) video: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct AnkiSettings {
     pub(crate) deck_name: String,
     pub(crate) note_type: String,
-    #[serde(default)]
     pub(crate) fields: AnkiFieldMapping,
     /// Milliseconds of audio padding added to each side of a mined sentence clip so it does
     /// not cut the first/last syllable. Clamped to the file start on the low side.
-    #[serde(default = "default_clip_padding_ms")]
     pub(crate) clip_padding_ms: u64,
 }
 
@@ -328,22 +301,18 @@ impl Default for AnkiSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct WhisperSettings {
     pub(crate) cli_path: String,
     pub(crate) model_path: String,
-    #[serde(default = "default_whisper_runtime_version")]
     pub(crate) runtime_version: String,
-    #[serde(default = "default_whisper_model_choice")]
     pub(crate) model_choice: String,
     pub(crate) language: String,
     /// How much of the machine transcription may use: `"low" | "balanced" | "high"`. Maps to
     /// a whisper-cli `-t` thread count via `transcription_thread_count`.
-    #[serde(default = "default_cpu_usage")]
     pub(crate) cpu_usage: String,
     /// Audio content mode: `"speech"` (default) or `"music"`. Music skips VAD so a full
     /// song (sung vocals) transcribes; speech keeps the VAD-anchored behaviour.
-    #[serde(default = "default_audio_type")]
     pub(crate) audio_type: String,
     /// Decoder search width: `"balanced"` (default) or `"fast"`. Fast drops whisper to
     /// greedy decoding (`-bs 1 -bo 1`), measured 13–23% quicker with lateral quality
@@ -351,7 +320,6 @@ pub(crate) struct WhisperSettings {
     /// worse ones. There is deliberately no "thorough" setting: a wider beam
     /// (`-bs 8 -bo 8`) was measured against the default on both conversation and sung
     /// vocals and recovered nothing, sometimes choosing a worse reading.
-    #[serde(default = "default_decode_speed")]
     pub(crate) decode_speed: String,
 }
 
@@ -370,33 +338,61 @@ impl Default for WhisperSettings {
     }
 }
 
+/// Every settings struct carries a container-level `default`, so a key missing from
+/// `state.json` falls back to that struct's `Default` rather than failing the parse.
+///
+/// It is worth being precise about what that buys, because the parse failure was not
+/// silent: an unparseable state file is moved aside and reported. But it takes the
+/// whole file with it — the recording library included — and which keys could do that
+/// was decided by nothing more than the order the fields were written in. Thirteen of
+/// the oldest had no default while the twenty-one newer ones did, so deleting
+/// `"audio": ""` by hand cost the library and deleting `"video": ""` beside it cost
+/// nothing. This file is hand-edited by design; `normalize_decode_speed` says so in as
+/// many words.
+///
+/// Container level rather than per field, so a field added later is covered without
+/// anyone remembering to cover it, and the `Default` impl below stays the only place a
+/// default is written down.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct AppSettings {
     pub(crate) output_directory: String,
     pub(crate) asset_directory: String,
-    #[serde(default)]
     pub(crate) whisper: WhisperSettings,
-    #[serde(default)]
     pub(crate) anki: AnkiSettings,
-    #[serde(default)]
     pub(crate) features: FeatureSettings,
-    #[serde(default)]
     pub(crate) translation: TranslationSettings,
-    #[serde(default)]
     pub(crate) scanner: ScannerSettings,
     /// Jimaku API key (jimaku.cc/account). Flat rather than a nested group on purpose: a
     /// single field cannot hit the trap where a partial update wipes a group's siblings.
-    #[serde(default)]
     pub(crate) jimaku_api_key: String,
-    #[serde(default = "default_theme_preference")]
     pub(crate) theme: String,
-    #[serde(default = "default_indicator_position")]
     pub(crate) indicator_position: String,
-    #[serde(default)]
     pub(crate) launch_at_login: bool,
-    #[serde(default)]
     pub(crate) start_minimized: bool,
+}
+
+/// The two directories are left empty rather than guessed at, because the real defaults
+/// depend on an `AppHandle` this impl does not have. `normalize_settings` turns an empty
+/// directory into the platform default and runs on every load and every save, so empty
+/// here means "ask normalize", not "no directory".
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            output_directory: String::new(),
+            asset_directory: String::new(),
+            whisper: WhisperSettings::default(),
+            anki: AnkiSettings::default(),
+            features: FeatureSettings::default(),
+            translation: TranslationSettings::default(),
+            scanner: ScannerSettings::default(),
+            jimaku_api_key: String::new(),
+            theme: default_theme_preference(),
+            indicator_position: default_indicator_position(),
+            launch_at_login: false,
+            start_minimized: false,
+        }
+    }
 }
 
 /// One time-aligned sentence/segment parsed from whisper's `--output-json`
@@ -867,4 +863,102 @@ pub(crate) struct ModelDownloadControl {
 pub(crate) struct ActiveRecording {
     pub(crate) stop_signal: Arc<AtomicBool>,
     pub(crate) worker: JoinHandle<Result<RecordingCaptureResult, String>>,
+}
+
+#[cfg(test)]
+mod settings_default_tests {
+    use super::*;
+
+    /// The defaults, written out by hand rather than read back from `Default`.
+    ///
+    /// Moving them to the container attribute made `Default` the single source, which is
+    /// the point — but it also means a typo in `Default` would now agree with itself
+    /// everywhere and look correct. This is the independent copy that would disagree.
+    /// It doubles as the contract the frontend's `DEFAULT_BOOTSTRAP` mirrors.
+    #[test]
+    fn an_empty_settings_object_deserializes_to_the_documented_defaults() {
+        let settings: AppSettings = serde_json::from_str("{}").expect("empty settings parse");
+
+        assert_eq!(settings.output_directory, "");
+        assert_eq!(settings.asset_directory, "");
+        assert_eq!(settings.jimaku_api_key, "");
+        assert_eq!(settings.theme, "system");
+        assert_eq!(settings.indicator_position, "top-center");
+        assert!(!settings.launch_at_login);
+        assert!(!settings.start_minimized);
+
+        assert_eq!(settings.whisper.cli_path, "");
+        assert_eq!(settings.whisper.model_path, "");
+        assert_eq!(settings.whisper.runtime_version, "v1.8.4");
+        assert_eq!(settings.whisper.model_choice, "small");
+        assert_eq!(settings.whisper.language, "auto");
+        assert_eq!(settings.whisper.cpu_usage, "balanced");
+        assert_eq!(settings.whisper.audio_type, "speech");
+        assert_eq!(settings.whisper.decode_speed, "balanced");
+
+        assert_eq!(settings.anki.deck_name, "");
+        assert_eq!(settings.anki.note_type, "");
+        assert_eq!(settings.anki.clip_padding_ms, 250);
+        assert_eq!(settings.anki.fields.transcription, "");
+        assert_eq!(settings.anki.fields.video, "");
+
+        // The one default that is not the type's own zero value: transcription is the
+        // app's whole purpose, so absence must not read as "off".
+        assert!(settings.features.transcription);
+        assert!(!settings.features.delete_local_audio_after_anki_push);
+        assert!(!settings.features.allow_mp3_conversion);
+        assert!(!settings.features.auto_add_furigana_after_anki_push);
+        assert!(!settings.features.translate_after_transcription);
+
+        assert_eq!(settings.translation.provider, "google-translate");
+        assert_eq!(settings.translation.target_language, "en");
+
+        assert_eq!(settings.scanner.modifier, "shift");
+        assert_eq!(settings.scanner.release_behavior, "remainOpen");
+        assert_eq!(settings.scanner.debounce_ms, 20);
+        assert_eq!(settings.scanner.font_family, "");
+        assert_eq!(settings.scanner.font_size_px, 14);
+        assert!(!settings.scanner.overlay_enabled);
+        assert_eq!(settings.scanner.overlay_font_size_px, 28);
+        assert_eq!(settings.scanner.reading_font_family, "");
+        assert_eq!(settings.scanner.reading_font_size_px, 17);
+    }
+
+    /// The case that cost the whole library: a key deleted by hand from a group that
+    /// still has other keys in it. The group used to fail to parse, and with it the file.
+    #[test]
+    fn deleting_one_key_by_hand_keeps_the_rest_of_the_group() {
+        let raw = r#"{
+            "features": { "allowMp3Conversion": true },
+            "anki": { "deckName": "Mining", "fields": { "video": "Video" } },
+            "whisper": { "language": "ja" }
+        }"#;
+        let settings: AppSettings = serde_json::from_str(raw).expect("partial settings parse");
+
+        assert!(settings.features.allow_mp3_conversion);
+        assert!(settings.features.transcription, "absent means default, not false");
+        assert_eq!(settings.anki.deck_name, "Mining");
+        assert_eq!(settings.anki.fields.video, "Video");
+        assert_eq!(settings.anki.fields.audio, "");
+        assert_eq!(settings.anki.clip_padding_ms, 250);
+        assert_eq!(settings.whisper.language, "ja");
+        assert_eq!(settings.whisper.model_choice, "small");
+    }
+
+    /// A round trip has to survive, or the tolerance above would be hiding a rename.
+    #[test]
+    fn settings_survive_a_round_trip_through_json() {
+        let mut settings = AppSettings::default();
+        settings.anki.fields.image = "Screenshot".into();
+        settings.scanner.overlay_enabled = true;
+        settings.whisper.decode_speed = "fast".into();
+
+        let encoded = serde_json::to_string(&settings).expect("encode");
+        let decoded: AppSettings = serde_json::from_str(&encoded).expect("decode");
+
+        assert_eq!(decoded.anki.fields.image, "Screenshot");
+        assert!(decoded.scanner.overlay_enabled);
+        assert_eq!(decoded.whisper.decode_speed, "fast");
+        assert!(decoded.features.transcription);
+    }
 }

@@ -152,6 +152,24 @@ export type AppSettings = {
   startMinimized: boolean;
 };
 
+/**
+ * A settings change: any subset of the fields, at any depth.
+ *
+ * Derived from AppSettings rather than written out, because the written-out version
+ * existed three times and one copy had fallen two groups behind — it still omitted
+ * `translation` and `scanner`, so inside `useSetupActions` those two were typed as
+ * whole objects and could not be partially updated at all. Deriving it means a group
+ * added to AppSettings is covered here the moment it exists.
+ *
+ * AppSettings holds only strings, numbers, booleans and nested groups of the same, so
+ * `extends object` cleanly separates "group to recurse into" from "value to replace".
+ */
+export type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
+export type SettingsUpdate = DeepPartial<AppSettings>;
+
 export type RecentRecording = {
   fileName: string;
   filePath: string;
