@@ -18,8 +18,8 @@ use crate::{
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
     transcription::{
-        run_whisper_transcription, transcription_thread_count, WhisperTranscriptionRequest,
-        TRANSCRIPTION_CANCELLED,
+        run_whisper_transcription, transcription_thread_count, SpeechRegion,
+        WhisperTranscriptionRequest, TRANSCRIPTION_CANCELLED,
     },
 };
 
@@ -61,6 +61,46 @@ fn selected_untranscribed_recordings<R: Runtime>(
     };
 
     Ok(recordings)
+}
+
+/// Record what Silero VAD found, and warn when it found nothing it should have.
+///
+/// The regions are scraped from whisper's stderr, which is an INFO log rather than an API, and
+/// the runtime is user-upgradable — so a rename in a future build would take the cue-end clamp
+/// with it. Everything degrades to whisper's own ends in that case, which is exactly the old
+/// behaviour and therefore invisible. This WARN is the only thing that would say so out loud.
+fn log_speech_regions<R: Runtime>(
+    app: &AppHandle<R>,
+    speech_regions: &[SpeechRegion],
+    music_mode: bool,
+) {
+    // Music mode runs no VAD at all, so an empty list is the correct outcome there.
+    if speech_regions.is_empty() && !music_mode {
+        log_event(
+            app,
+            "WARN",
+            "transcription.vad_regions_missing",
+            serde_json::json!({
+                "message": "VAD was enabled but no speech regions were parsed from whisper's \
+                            output; segment ends fall back to whisper's own timings."
+            }),
+        );
+        return;
+    }
+
+    let speech_ms: u64 = speech_regions
+        .iter()
+        .map(|region| region.end_ms.saturating_sub(region.start_ms))
+        .sum();
+    log_event(
+        app,
+        "INFO",
+        "transcription.vad_regions",
+        serde_json::json!({
+            "regionCount": speech_regions.len(),
+            "speechMs": speech_ms
+        }),
+    );
 }
 
 fn apply_transcription_result_to_recording<R: Runtime>(
@@ -589,6 +629,9 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         let app_progress = app.clone();
         let app_segment = app.clone();
         let streaming_file_path = original_file_path.clone();
+        // Named rather than inlined twice: the region warning must fire on exactly the runs
+        // that enabled VAD, and two copies of one condition is how that drifts apart.
+        let music_mode = settings.whisper.audio_type == "music";
         let result = run_whisper_transcription(
             &WhisperTranscriptionRequest {
                 cli_path: cli_path.clone(),
@@ -598,7 +641,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 language: settings.whisper.language.clone(),
                 ffmpeg_path: ffmpeg_path.clone(),
                 thread_count,
-                music_mode: settings.whisper.audio_type == "music",
+                music_mode,
                 fast_decode: settings.whisper.decode_speed == "fast",
             },
             cancel_listener.flag(),
@@ -630,6 +673,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             },
         )
         .and_then(|result| {
+            log_speech_regions(app, &result.speech_regions, music_mode);
             apply_transcription_result_to_recording(
                 app,
                 &original_file_path,

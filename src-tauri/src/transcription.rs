@@ -64,6 +64,11 @@ pub struct WhisperTranscriptionResult {
     /// may not exist if whisper skipped writing it; callers parse it best-effort and never
     /// fail transcription over a missing json.
     pub json_path: PathBuf,
+    /// The speech regions Silero VAD found, scraped from whisper's own stderr.
+    ///
+    /// Empty in music mode, which runs no VAD, and empty if a future runtime stops printing
+    /// the lines. Both must degrade to leaving cue ends exactly as whisper reported them.
+    pub speech_regions: Vec<SpeechRegion>,
 }
 
 /// A fixed ASCII output base for whisper's `--output-file`. We deliberately do NOT derive it
@@ -301,6 +306,146 @@ fn parse_whisper_timestamp(value: &str) -> Option<u64> {
         .checked_add(seconds)?
         .checked_mul(1000)?
         .checked_add(millis)
+}
+
+/// One region Silero VAD judged to be speech, in absolute milliseconds against the source
+/// audio.
+///
+/// This is the ground truth for where speech actually stops, which whisper's own cue ends do
+/// not give us. A cue end is the mapped position of a processed-timeline offset, so it lands
+/// on the last region the cue spans and quietly absorbs every silence in between: measured on
+/// real material, `大丈夫ですか?` occupied a 6.04 s cue holding 1.0 s of speech. Cue *starts*
+/// are exact, so only ends need this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeechRegion {
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+/// Which of whisper's two VAD log lines a region came from. They describe the same regions,
+/// so mixing them would double every entry — see `VadRegionLog::into_regions`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeechRegionSource {
+    /// `whisper_vad: vad_segment_info: orig_start: … orig_end: …`, printed by the consumer
+    /// after merging and filtering — the regions whisper actually decoded.
+    Mapped,
+    /// `whisper_vad_segments_from_probs: VAD segment N: start = … end = …`, printed by the
+    /// detector before merging.
+    Probe,
+}
+
+/// Both VAD region lists as they arrive on stderr, so the better one can be chosen at the end
+/// rather than guessed at while parsing.
+#[derive(Debug, Default)]
+struct VadRegionLog {
+    mapped: Vec<SpeechRegion>,
+    probe: Vec<SpeechRegion>,
+}
+
+impl VadRegionLog {
+    fn push(&mut self, source: SpeechRegionSource, region: SpeechRegion) {
+        match source {
+            SpeechRegionSource::Mapped => self.mapped.push(region),
+            SpeechRegionSource::Probe => self.probe.push(region),
+        }
+    }
+
+    /// The mapped list wins when present: it survives merging and filtering, so it matches
+    /// what was decoded. The probe list is the fallback for a build that stops printing the
+    /// mapping — better a slightly pre-merge region list than none.
+    fn into_regions(self) -> Vec<SpeechRegion> {
+        if self.mapped.is_empty() {
+            self.probe
+        } else {
+            self.mapped
+        }
+    }
+}
+
+/// Which way to break a tie finer than a millisecond.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rounding {
+    /// For a region start: never later than the speech.
+    Down,
+    /// For a region end: never earlier than the speech.
+    Up,
+}
+
+/// Seconds as whisper prints them (`1.92`) → milliseconds.
+///
+/// Digit-wise rather than `f64 * 1000.0` deliberately. 1.92 has no exact binary float, so the
+/// product is 1919.999…, and flooring that to honour "a start never rounds later" would lose a
+/// millisecond off almost every region. Integer digits cannot drift.
+fn parse_vad_seconds(value: &str, round: Rounding) -> Option<u64> {
+    let value = value.trim();
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let millis_digits = fraction.get(..3).unwrap_or(fraction);
+    let millis = match millis_digits.len() {
+        0 => 0,
+        _ => millis_digits.parse::<u64>().ok()? * 10u64.pow(3 - millis_digits.len() as u32),
+    };
+    // Checked for the same reason `parse_whisper_timestamp` is: this runs on the drain thread
+    // that owns the EOF signal, so a debug-build overflow panic there would present as a
+    // frozen, uncancellable run rather than an error.
+    let total = whole
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(1000)?
+        .checked_add(millis)?;
+
+    let discarded_precision = fraction.len() > 3 && fraction[3..].bytes().any(|byte| byte != b'0');
+    if round == Rounding::Up && discarded_precision {
+        total.checked_add(1)
+    } else {
+        Some(total)
+    }
+}
+
+/// The digits immediately following `key`, so `orig_start: 1.92,` yields `1.92`.
+fn value_after<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let rest = line.split_once(key)?.1.trim_start();
+    let end = rest
+        .find(|character: char| !(character.is_ascii_digit() || character == '.'))
+        .unwrap_or(rest.len());
+    (end > 0).then(|| &rest[..end])
+}
+
+/// Parse one of whisper's two VAD region lines into an absolute speech region.
+///
+/// Both forms are handled because this reads an INFO log, not an API, and the whisper runtime
+/// is user-upgradable (`download_whisper_runtime_version`) — a rename in either line must not
+/// silently take the clamp with it. `run_whisper_once`'s caller warns when VAD ran and no
+/// region parsed at all, which is the tripwire for exactly that.
+fn parse_vad_region_line(line: &str) -> Option<(SpeechRegionSource, SpeechRegion)> {
+    let (source, start, end) = if line.contains("vad_segment_info:") {
+        (
+            SpeechRegionSource::Mapped,
+            value_after(line, "orig_start:")?,
+            value_after(line, "orig_end:")?,
+        )
+    } else if line.contains("VAD segment ") {
+        (
+            SpeechRegionSource::Probe,
+            value_after(line, "start = ")?,
+            value_after(line, "end = ")?,
+        )
+    } else {
+        return None;
+    };
+
+    let region = SpeechRegion {
+        start_ms: parse_vad_seconds(start, Rounding::Down)?,
+        end_ms: parse_vad_seconds(end, Rounding::Up)?,
+    };
+    // A backwards region would corrupt the forward walk the clamp does over this list.
+    (region.end_ms >= region.start_ms).then_some((source, region))
 }
 
 /// Parse a whisper-cli progress line — `whisper_print_progress_callback: progress = N%`
@@ -546,10 +691,20 @@ fn run_whisper_once(
 
     let stderr_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let stderr_sink = Arc::clone(&stderr_buffer);
+    // The VAD region table arrives here, before any decoding starts. Collected ahead of
+    // `push_diagnostic_line` on purpose: `is_whisper_noise_line` classifies every
+    // `whisper_vad` line as chatter and drops it, so there would be nothing to read back out.
+    let region_log: Arc<Mutex<VadRegionLog>> = Arc::new(Mutex::new(VadRegionLog::default()));
+    let region_sink = Arc::clone(&region_log);
     let stderr_thread = thread::spawn(move || {
         for line in drain_lines(stderr) {
             if let Some(percent) = parse_whisper_progress_line(&line) {
                 on_progress(percent);
+            }
+            if let Some((source, region)) = parse_vad_region_line(&line) {
+                if let Ok(mut log) = region_sink.lock() {
+                    log.push(source, region);
+                }
             }
             push_diagnostic_line(&stderr_sink, &line);
         }
@@ -655,9 +810,16 @@ fn run_whisper_once(
         });
     }
 
+    // Both drain threads are joined by now, so this is the only remaining holder.
+    let speech_regions = region_log
+        .lock()
+        .map(|mut log| std::mem::take(&mut *log).into_regions())
+        .unwrap_or_default();
+
     Ok(WhisperTranscriptionResult {
         transcript_path,
         json_path,
+        speech_regions,
     })
 }
 
@@ -708,6 +870,92 @@ mod tests {
         // Non-progress lines are ignored.
         assert_eq!(parse_whisper_progress_line("whisper_full_with_state: decode"), None);
         assert_eq!(parse_whisper_progress_line(""), None);
+    }
+
+    /// Both lines are copied verbatim from the pinned v1.8.4 binary's stderr, so a runtime
+    /// upgrade that reformats them fails here rather than silently disabling the clamp.
+    #[test]
+    fn the_mapped_vad_line_gives_absolute_region_bounds() {
+        let line = "whisper_vad: vad_segment_info: orig_start: 2.53, orig_end: 3.71,                     vad_start: 0.52, vad_end: 1.70";
+
+        let (source, region) = parse_vad_region_line(line).expect("mapped line parses");
+
+        assert_eq!(source, SpeechRegionSource::Mapped);
+        // orig_*, not vad_* — the processed timeline is not where the audio lives.
+        assert_eq!(region.start_ms, 2530);
+        assert_eq!(region.end_ms, 3710);
+    }
+
+    #[test]
+    fn the_probe_vad_line_is_read_as_a_fallback() {
+        let line = "whisper_vad_segments_from_probs: VAD segment 0: start = 1.92, end = 2.24                     (duration: 0.32)";
+
+        let (source, region) = parse_vad_region_line(line).expect("probe line parses");
+
+        assert_eq!(source, SpeechRegionSource::Probe);
+        assert_eq!(region.start_ms, 1920);
+        // The trailing "(duration: …)" must not be mistaken for part of the end value.
+        assert_eq!(region.end_ms, 2240);
+    }
+
+    #[test]
+    fn ordinary_whisper_output_is_not_a_region() {
+        for line in [
+            "[00:00:01.920 --> 00:00:04.830]  生まれ変わる今",
+            "whisper_print_progress_callback: progress =  40%",
+            "whisper_vad: vad_segment_info: orig_start: , orig_end: 3.71",
+            "",
+        ] {
+            assert!(parse_vad_region_line(line).is_none(), "{line:?}");
+        }
+    }
+
+    /// A start must never round later than the speech, nor an end earlier.
+    #[test]
+    fn seconds_convert_without_losing_a_millisecond() {
+        // 1.92 has no exact binary float; a naive `f64 * 1000.0` floors to 1919.
+        assert_eq!(parse_vad_seconds("1.92", Rounding::Down), Some(1920));
+        assert_eq!(parse_vad_seconds("1.92", Rounding::Up), Some(1920));
+        assert_eq!(parse_vad_seconds("0.00", Rounding::Down), Some(0));
+        assert_eq!(parse_vad_seconds("7", Rounding::Down), Some(7000));
+        assert_eq!(parse_vad_seconds("1.5", Rounding::Down), Some(1500));
+        // Finer than a millisecond: the end grows, the start does not.
+        assert_eq!(parse_vad_seconds("1.9204", Rounding::Down), Some(1920));
+        assert_eq!(parse_vad_seconds("1.9204", Rounding::Up), Some(1921));
+        // Exact at millisecond precision, so there is nothing to round up to.
+        assert_eq!(parse_vad_seconds("1.9200", Rounding::Up), Some(1920));
+        assert_eq!(parse_vad_seconds("abc", Rounding::Down), None);
+    }
+
+    /// The two log lines describe the same regions, so appending both would double every one.
+    #[test]
+    fn the_mapped_list_wins_when_both_were_printed() {
+        let mut log = VadRegionLog::default();
+        let mapped = SpeechRegion {
+            start_ms: 2530,
+            end_ms: 3710,
+        };
+        let probe = SpeechRegion {
+            start_ms: 1920,
+            end_ms: 2240,
+        };
+        log.push(SpeechRegionSource::Probe, probe);
+        log.push(SpeechRegionSource::Mapped, mapped);
+
+        assert_eq!(log.into_regions(), vec![mapped]);
+    }
+
+    #[test]
+    fn the_probe_list_carries_a_build_that_stopped_printing_the_mapping() {
+        let mut log = VadRegionLog::default();
+        let probe = SpeechRegion {
+            start_ms: 1920,
+            end_ms: 2240,
+        };
+        log.push(SpeechRegionSource::Probe, probe);
+
+        assert_eq!(log.into_regions(), vec![probe]);
+        assert!(VadRegionLog::default().into_regions().is_empty());
     }
 
     #[test]
