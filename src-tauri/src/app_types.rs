@@ -182,9 +182,10 @@ pub(crate) fn default_reading_font_size_px() -> u64 {
 
 /// The word scanner and the typography it is read at.
 ///
-/// Grouped rather than flattened onto `AppSettings` because these are one feature — but
-/// note that a nested group must also gain a merge line in the frontend's `updateSettings`,
-/// or a partial update silently wipes its siblings.
+/// Grouped rather than flattened onto `AppSettings` because these are one feature. Adding
+/// a group used to carry an obligation — a matching merge line in the frontend's
+/// `updateSettings`, or a partial update silently wiped its siblings — but that merge
+/// walks the shape now, so a new group needs nothing beyond existing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct ScannerSettings {
@@ -363,8 +364,8 @@ pub(crate) struct AppSettings {
     pub(crate) features: FeatureSettings,
     pub(crate) translation: TranslationSettings,
     pub(crate) scanner: ScannerSettings,
-    /// Jimaku API key (jimaku.cc/account). Flat rather than a nested group on purpose: a
-    /// single field cannot hit the trap where a partial update wipes a group's siblings.
+    /// Jimaku API key (jimaku.cc/account). Flat rather than a nested group because it is
+    /// one field; the sibling-wiping trap that once made flatness the safer choice is gone.
     pub(crate) jimaku_api_key: String,
     pub(crate) theme: String,
     pub(crate) indicator_position: String,
@@ -710,7 +711,9 @@ impl Default for AlassDetection {
         Self {
             status: "notFound".into(),
             executable_path: None,
-            message: "alass is not installed. Download it to align out-of-sync subtitles automatically.".into(),
+            message:
+                "alass is not installed. Download it to align out-of-sync subtitles automatically."
+                    .into(),
         }
     }
 }
@@ -936,7 +939,10 @@ mod settings_default_tests {
         let settings: AppSettings = serde_json::from_str(raw).expect("partial settings parse");
 
         assert!(settings.features.allow_mp3_conversion);
-        assert!(settings.features.transcription, "absent means default, not false");
+        assert!(
+            settings.features.transcription,
+            "absent means default, not false"
+        );
         assert_eq!(settings.anki.deck_name, "Mining");
         assert_eq!(settings.anki.fields.video, "Video");
         assert_eq!(settings.anki.fields.audio, "");

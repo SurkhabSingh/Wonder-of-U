@@ -160,6 +160,25 @@ where
     }
 }
 
+/// The first candidate that both exists and runs, with any that does not removed.
+///
+/// This is what "we already have it" has to mean before a download may be skipped.
+/// Existence alone was the test, and the downloads that would have repaired a broken
+/// binary were the very thing it suppressed — worst for the whisper runtime, where
+/// nothing removed the file afterwards either, so the failure repeated on every retry
+/// with no way out through the interface.
+///
+/// Removal is what keeps detection honest, since it tests existence as well and would
+/// otherwise report a runtime that cannot transcribe as ready.
+pub(super) fn first_runnable_binary<V>(candidates: Vec<PathBuf>, verify: V) -> Option<PathBuf>
+where
+    V: Fn(&Path) -> Result<(), String>,
+{
+    candidates.into_iter().find(|candidate| {
+        candidate.exists() && verify_managed_binary_or_remove(candidate, &verify).is_ok()
+    })
+}
+
 fn remove_directory_contents(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
@@ -356,7 +375,7 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::{verify_managed_binary_or_remove, PartialDownloadGuard};
+    use super::{first_runnable_binary, verify_managed_binary_or_remove, PartialDownloadGuard};
     use std::path::Path;
 
     #[test]
@@ -415,5 +434,63 @@ mod tests {
         guard.disarm();
         drop(guard);
         assert!(renamed.exists());
+    }
+
+    /// The case that had no way out: the only installed binary does not run, so the
+    /// search must report nothing found and let the download proceed to replace it.
+    #[test]
+    fn a_candidate_that_does_not_run_is_not_treated_as_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = dir.path().join("whisper-cli.exe");
+        std::fs::write(&broken, b"MZ...").unwrap();
+
+        let found = first_runnable_binary(vec![broken.clone()], |_: &Path| {
+            Err("a DLL beside it is missing".to_string())
+        });
+
+        assert!(
+            found.is_none(),
+            "a binary that cannot run is not one we have"
+        );
+        // Removed, so detection stops reporting a runtime that cannot transcribe.
+        assert!(!broken.exists());
+    }
+
+    /// A broken candidate must not hide a working one further down the list.
+    #[test]
+    fn the_search_passes_over_a_broken_candidate_to_a_working_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = dir.path().join("v1/whisper-cli.exe");
+        let working = dir.path().join("v2/whisper-cli.exe");
+        for path in [&broken, &working] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"MZ...").unwrap();
+        }
+
+        let working_for_check = working.clone();
+        let found = first_runnable_binary(vec![broken.clone(), working.clone()], move |path| {
+            if path == working_for_check {
+                Ok(())
+            } else {
+                Err("did not run".to_string())
+            }
+        });
+
+        assert_eq!(found.as_deref(), Some(working.as_path()));
+        assert!(!broken.exists());
+        assert!(working.exists());
+    }
+
+    /// A path that was never there is not an error, and nothing is spawned for it.
+    #[test]
+    fn absent_candidates_are_skipped_without_being_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("not-installed.exe");
+
+        let found = first_runnable_binary(vec![missing], |_: &Path| {
+            panic!("verification must not run for a path that does not exist")
+        });
+
+        assert!(found.is_none());
     }
 }

@@ -19,7 +19,8 @@ use crate::{
 
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
-    reset_model_download_control, update_model_download_snapshot, DownloadSlotGuard,
+    first_runnable_binary, reset_model_download_control, update_model_download_snapshot,
+    verify_managed_binary_or_remove, DownloadSlotGuard,
 };
 
 fn activate_managed_runtime_version<R: Runtime>(
@@ -96,6 +97,29 @@ fn find_existing_managed_cli_path(
         .find(|candidate| candidate.exists())
 }
 
+/// A managed whisper-cli that will not run does not count as one we have.
+///
+/// The download skipped itself whenever the file merely existed, and existence is a
+/// weak claim for an executable: antivirus can quarantine one of the DLLs beside it,
+/// an extraction can be cut short, a disk can fill. Verification did run — and then
+/// returned the error, leaving the file exactly where it was. So every retry found it
+/// again, failed again, and there was no way out through the interface; the one action
+/// that would have replaced the file was the action being refused.
+///
+/// Failing candidates are removed, because detection tests existence too
+/// (`detect_local_whisper`) and would otherwise keep reporting the runtime ready while
+/// nothing could transcribe. If the download that follows also fails, "not installed"
+/// is the truthful state to be left in.
+fn find_runnable_managed_cli_path(
+    asset_directory: &Path,
+    runtime_version: &str,
+) -> Option<PathBuf> {
+    first_runnable_binary(
+        collect_managed_whisper_cli_candidates(asset_directory, runtime_version),
+        verify_whisper_cli,
+    )
+}
+
 pub(crate) fn download_recommended_whisper_runtime_inner<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(), String> {
@@ -159,26 +183,35 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
                     PathBuf::from(&persisted.settings.asset_directory)
                 };
 
-                let cli_path = if let Some(existing_cli_path) =
-                    find_existing_managed_cli_path(&asset_directory, &runtime_version)
-                {
-                    verify_whisper_cli(&existing_cli_path)?;
-                    existing_cli_path
-                } else {
-                    download_file_to_path_with_progress(
-                        &app_handle,
-                        &download_url,
-                        &archive_path,
-                        "runtime",
-                        &format!("Whisper runtime {runtime_version}"),
-                    )?;
+                let cli_path =
+                    match find_runnable_managed_cli_path(&asset_directory, &runtime_version) {
+                        // Already run by the search, so nothing to check again here.
+                        Some(existing_cli_path) => existing_cli_path,
+                        None => {
+                            download_file_to_path_with_progress(
+                                &app_handle,
+                                &download_url,
+                                &archive_path,
+                                "runtime",
+                                &format!("Whisper runtime {runtime_version}"),
+                            )?;
 
-                    extract_zip_archive_to_directory(&archive_path, &install_directory)?;
-                    find_existing_managed_cli_path(&asset_directory, &runtime_version).ok_or_else(
-                        || "The runtime downloaded, but whisper-cli.exe was not found.".to_string(),
-                    )?
-                };
-                verify_whisper_cli(&cli_path)?;
+                            extract_zip_archive_to_directory(&archive_path, &install_directory)?;
+                            let downloaded_cli_path =
+                                find_existing_managed_cli_path(&asset_directory, &runtime_version)
+                                    .ok_or_else(|| {
+                                        "The runtime downloaded, but whisper-cli.exe was not found."
+                                            .to_string()
+                                    })?;
+                            // A fresh download that cannot run is reported, not kept: leaving it
+                            // would have detection call the runtime ready on the next launch.
+                            verify_managed_binary_or_remove(
+                                &downloaded_cli_path,
+                                verify_whisper_cli,
+                            )?;
+                            downloaded_cli_path
+                        }
+                    };
                 activate_managed_runtime_version(&app_handle, &runtime_version)?;
 
                 let detection = refresh_whisper_detection_state(&app_handle)?;

@@ -16,8 +16,8 @@ use crate::{
 
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
-    reset_model_download_control, update_model_download_snapshot, verify_managed_binary_or_remove,
-    DownloadSlotGuard,
+    first_runnable_binary, reset_model_download_control, update_model_download_snapshot,
+    verify_managed_binary_or_remove, DownloadSlotGuard,
 };
 
 fn recommended_ffmpeg_archive_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -52,6 +52,19 @@ fn find_existing_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> 
     collect_managed_ffmpeg_candidates(asset_directory)
         .into_iter()
         .find(|candidate| candidate.exists())
+}
+
+/// As with the whisper runtime: a managed ffmpeg that will not run is not one we have.
+///
+/// This path was less badly off than whisper's — the broken binary was removed, so a
+/// second click did download a working one — but the first click reported "FFmpeg
+/// download failed" without having attempted a download, and the recovery depended on
+/// the user trying the same button twice after being told it failed.
+fn find_runnable_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> {
+    first_runnable_binary(
+        collect_managed_ffmpeg_candidates(asset_directory),
+        verify_ffmpeg_binary,
+    )
 }
 
 pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
@@ -104,27 +117,29 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
                     PathBuf::from(&persisted.settings.asset_directory)
                 };
 
-                let ffmpeg_path = if let Some(existing_path) =
-                    find_existing_managed_ffmpeg_path(&asset_directory)
-                {
-                    existing_path
-                } else {
-                    download_file_to_path_with_progress(
-                        &app_handle,
-                        RECOMMENDED_FFMPEG_RUNTIME_URL,
-                        &archive_path,
-                        "ffmpeg",
-                        "FFmpeg",
-                    )?;
+                let ffmpeg_path = match find_runnable_managed_ffmpeg_path(&asset_directory) {
+                    // Already run by the search, so nothing to check again here.
+                    Some(existing_path) => existing_path,
+                    None => {
+                        download_file_to_path_with_progress(
+                            &app_handle,
+                            RECOMMENDED_FFMPEG_RUNTIME_URL,
+                            &archive_path,
+                            "ffmpeg",
+                            "FFmpeg",
+                        )?;
 
-                    extract_zip_archive_to_directory(&archive_path, &install_directory)?;
-                    find_existing_managed_ffmpeg_path(&asset_directory)
-                        .ok_or_else(|| "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string())?
+                        extract_zip_archive_to_directory(&archive_path, &install_directory)?;
+                        let downloaded_path = find_existing_managed_ffmpeg_path(&asset_directory)
+                            .ok_or_else(|| {
+                                "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string()
+                            })?;
+                        // Detection trusts ffmpeg.exe by existence, so one that no longer runs
+                        // has to go rather than keep reporting ready.
+                        verify_managed_binary_or_remove(&downloaded_path, verify_ffmpeg_binary)?;
+                        downloaded_path
+                    }
                 };
-
-                // Covers a reused install too: detection trusts ffmpeg.exe by existence,
-                // so one that no longer runs has to go rather than keep reporting ready.
-                verify_managed_binary_or_remove(&ffmpeg_path, verify_ffmpeg_binary)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
                     snapshot.kind = Some("ffmpeg".into());
                     snapshot.status = "completed".into();
