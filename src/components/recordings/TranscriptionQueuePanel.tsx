@@ -26,40 +26,45 @@ const STATUS_CHIP: Record<TranscriptionQueueItem["status"], string> = {
   cancelled: "status-chip-warning",
 };
 
-// What became of transcriptions that have already ended, rendered above the Library list.
-//
-// Live work is no longer here: a running recording carries its own progress bar, Live
-// transcript and Cancel on its own row, and a queued one carries Remove from queue in its
-// menu. What a row cannot show is a run that has finished — above all a failure and its
-// message — so that is what this keeps, plus the control to dismiss it.
+// The non-blocking transcription queue, rendered above the Library list. Cloned
+// from the Home YouTube queue: a flat list of status rows, the one `active` row
+// carrying a live progress bar + Cancel, queued rows a × remove, terminal rows a
+// status chip, and a Clear finished control once there is history to drop.
 export function TranscriptionQueuePanel({
   items,
+  activeProgress,
+  currentIndex,
+  total,
   finishedCount,
+  onCancel,
+  onRemove,
   onClearFinished,
+  onViewLive,
 }: {
   items: TranscriptionQueueItem[];
+  activeProgress: number | null;
+  currentIndex: number;
+  total: number;
   finishedCount: number;
+  onCancel: () => void;
+  onRemove: (id: string) => void;
   onClearFinished: () => void;
+  // Open the transcript viewer for the recording being transcribed, to watch the
+  // sentences arrive as whisper writes them.
+  onViewLive: (filePath: string) => void;
 }) {
-  // Live work now lives on the recording's own row — its progress, its Live transcript,
-  // its Cancel, and Remove from queue in its menu. What a row cannot show is what happened
-  // to a run that has already ended, especially a failure, so that is all this keeps.
-  //
-  // Nothing was deleted without a new home first: the three controls above moved to the
-  // rows before this was narrowed.
-  const finishedItems = items.filter(
-    (item) => item.status !== "active" && item.status !== "queued",
-  );
-
-  // No history, no panel — a clean run leaves no empty chrome behind.
-  if (finishedItems.length === 0) {
+  // No rows, no panel — matches the YouTube queue, which is absent until work is
+  // queued.
+  if (items.length === 0) {
     return null;
   }
+
+  const isTranscribing = items.some((item) => item.status === "active");
 
   return (
     <section className="transcription-queue" aria-label="Transcription queue">
       <div className="transcription-queue-header">
-        <span className="transcription-queue-label">Finished transcriptions</span>
+        <span className="transcription-queue-label">Transcription queue</span>
         {/* Finished rows are history, not work in progress — offer the dismissal
             only once there is something to dismiss. */}
         {finishedCount > 0 ? (
@@ -73,8 +78,14 @@ export function TranscriptionQueuePanel({
         ) : null}
       </div>
 
+      {isTranscribing && total > 0 ? (
+        <p className="transcription-queue-progress">
+          Transcribing {currentIndex} of {total}…
+        </p>
+      ) : null}
+
       <ul className="transcription-queue-list">
-        {finishedItems.map((item) => {
+        {items.map((item) => {
           const label = item.title ?? item.filePath;
           return (
             <li className="transcription-queue-item" key={item.id}>
@@ -87,12 +98,63 @@ export function TranscriptionQueuePanel({
               >
                 {label}
               </span>
-              <span
-                className={`status-chip ${STATUS_CHIP[item.status]}`}
-                aria-label={STATUS_LABEL[item.status]}
-              >
-                {STATUS_LABEL[item.status].toLowerCase()}
-              </span>
+              {item.status === "active" ? (
+                <div className="transcription-queue-active">
+                  {/* Completion is the awaited invoke resolving, not this bar
+                      hitting 100 — the bar is live feedback fed by the
+                      transcription-progress event. */}
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className="progress-fill"
+                      style={{
+                        width: `${Math.max(
+                          0,
+                          Math.min(100, activeProgress ?? 0),
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  {/* Always offered on the active row, never gated on "is this the
+                      first run": this panel only renders on the Library page, so
+                      seeing it means the viewer is NOT open and the button cannot
+                      be redundant. Gating it on the enqueue's `force` flag instead
+                      made it vanish after a cancel-then-re-transcribe, which is
+                      exactly when a way back in is wanted. */}
+                  <button
+                    type="button"
+                    className="ghost transcription-queue-live"
+                    onClick={() => onViewLive(item.filePath)}
+                    title="Watch the transcript as it is written"
+                  >
+                    Live transcript
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost transcription-queue-cancel"
+                    onClick={onCancel}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <span
+                  className={`status-chip ${STATUS_CHIP[item.status]}`}
+                  aria-label={STATUS_LABEL[item.status]}
+                >
+                  {STATUS_LABEL[item.status].toLowerCase()}
+                </span>
+              )}
+              {item.status === "queued" ? (
+                <button
+                  type="button"
+                  className="ghost transcription-queue-remove"
+                  onClick={() => onRemove(item.id)}
+                  aria-label="Remove from queue"
+                  title="Remove from queue"
+                >
+                  ×
+                </button>
+              ) : null}
             </li>
           );
         })}

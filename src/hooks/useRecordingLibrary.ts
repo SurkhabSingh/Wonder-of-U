@@ -18,9 +18,6 @@ type UseRecordingLibraryOptions = {
   ankiSettings: AnkiSettings;
   recentRecordings: RecentRecording[];
   transcriptionLanguage: string;
-  // Recordings currently queued or transcribing. They float to the top of the list while a
-  // batch runs; an empty set leaves the order exactly as it was.
-  transcribingPaths: ReadonlySet<string>;
 };
 
 const RECORDINGS_PER_PAGE = 8;
@@ -58,7 +55,6 @@ export function useRecordingLibrary({
   ankiSettings,
   recentRecordings,
   transcriptionLanguage,
-  transcribingPaths,
 }: UseRecordingLibraryOptions) {
   const [selectedRecordings, setSelectedRecordings] = useState<string[]>([]);
   const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
@@ -175,25 +171,6 @@ export function useRecordingLibrary({
     untranscribedRecordings,
   ]);
 
-  // While a batch runs, the recordings in it rise to the top so their progress is on the
-  // page being looked at. With 8 rows a page, a transcribing file can otherwise sit on page
-  // 5 with its bar out of sight.
-  //
-  // A stable partition, not a sort: relative order within each group is preserved, so
-  // nothing shuffles beyond the one movement being asked for. When nothing is transcribing
-  // the original array is returned by identity, so an idle library renders exactly as before.
-  const orderedRecordings = useMemo(() => {
-    if (transcribingPaths.size === 0) {
-      return filteredRecordings;
-    }
-    const running: RecentRecording[] = [];
-    const rest: RecentRecording[] = [];
-    for (const recording of filteredRecordings) {
-      (transcribingPaths.has(recording.filePath) ? running : rest).push(recording);
-    }
-    return [...running, ...rest];
-  }, [filteredRecordings, transcribingPaths]);
-
   const recordingPageCount = Math.max(
     1,
     Math.ceil(filteredRecordings.length / RECORDINGS_PER_PAGE),
@@ -208,11 +185,11 @@ export function useRecordingLibrary({
   );
   const visibleRecordings = useMemo(() => {
     const startIndex = (recordingPage - 1) * RECORDINGS_PER_PAGE;
-    return orderedRecordings.slice(
+    return filteredRecordings.slice(
       startIndex,
       startIndex + RECORDINGS_PER_PAGE,
     );
-  }, [orderedRecordings, recordingPage]);
+  }, [filteredRecordings, recordingPage]);
 
   const selectedRecordingSet = useMemo(
     () => new Set(selectedRecordings),

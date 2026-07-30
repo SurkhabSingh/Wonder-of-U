@@ -448,23 +448,6 @@ function App() {
     runtimeUpdateResult?.status === "available"
       ? runtimeUpdateResult.latestVersion
       : null;
-  const transcriptionQueue = useTranscriptionQueue({
-    applyBootstrap,
-    persistSettingsIfNeeded,
-  });
-
-  // Queued and active alike: both float, so a batch stays together at the top instead of
-  // the running file jumping away from the ones waiting behind it.
-  const transcribingPaths = useMemo(
-    () =>
-      new Set(
-        transcriptionQueue.items
-          .filter((item) => item.status === "active" || item.status === "queued")
-          .map((item) => item.filePath),
-      ),
-    [transcriptionQueue.items],
-  );
-
   const {
     availableAnkiDecks,
     configuredAnkiDeckLabel,
@@ -503,7 +486,6 @@ function App() {
     ankiSettings: settingsDraft.anki,
     recentRecordings: bootstrap.recentRecordings,
     transcriptionLanguage: settingsDraft.whisper.language,
-    transcribingPaths,
   });
   const {
     activeRuntimeVersion,
@@ -605,6 +587,11 @@ function App() {
   // transcription runs NON-blocking (the app stays usable while this queue shows
   // progress) instead of the old full-screen busy overlay. Each item applies its
   // returned bootstrap, so the Library refreshes as transcripts land.
+  const transcriptionQueue = useTranscriptionQueue({
+    applyBootstrap,
+    persistSettingsIfNeeded,
+  });
+
   // Adapt the shared `(filePaths, force)` action shape the Transcribe buttons use
   // to the queue's enqueue, stamping each row with the recording's display name.
   const enqueueTranscriptions = useCallback(
@@ -892,6 +879,8 @@ function App() {
               onView={openTranscriptViewer}
               transcriptionItems={transcriptionQueue.items}
               transcriptionActiveProgress={transcriptionQueue.activeProgress}
+              transcriptionCurrentIndex={transcriptionQueue.currentIndex}
+              transcriptionTotal={transcriptionQueue.total}
               transcriptionFinishedCount={transcriptionQueue.finishedCount}
               onCancelTranscription={transcriptionQueue.cancelActive}
               onRemoveTranscription={transcriptionQueue.remove}
