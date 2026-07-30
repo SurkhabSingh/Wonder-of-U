@@ -1,11 +1,16 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
 
 use crate::{
+    recording_library::import::probe_duration_ms,
+    watch::library::{
+        capture_thumbnail, normalize_origin, now_ms, remove_watched_video, upsert_watched_video,
+        ORIGIN_GENERATED, ORIGIN_SYNCED,
+    },
     watch::transcribe::{generate_watch_subtitles_inner, GeneratedSubtitles},
     app_types::SharedPersistedState,
-    runtime_assets::detect_local_mpv,
+    runtime_assets::{detect_local_ffmpeg, detect_local_mpv},
     anki::{lookup_term_inner, mine_watched_line_inner, LookupResult},
     jimaku::{
         download_file, entry_files, sanitize_subtitle_file_name, search_entries, JimakuEntry,
@@ -387,6 +392,95 @@ pub(crate) struct SubtitleSyncResult {
 ///
 /// For the harder fault, where the drift varies across the episode and no single offset
 /// works. Writes beside the original rather than over it.
+/// Remember a video, with a thumbnail and its duration, before it has ever been played.
+///
+/// Adding is deliberately separate from playing: a video you have queued up but not started is
+/// still one you want the app to keep, along with whatever subtitle you pair with it.
+#[tauri::command]
+pub(crate) async fn add_watched_video(
+    app: AppHandle,
+    video_path: String,
+) -> Result<AppBootstrap, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(&video_path);
+        if !path.exists() {
+            return Err(format!("The video is no longer at {}", path.display()));
+        }
+
+        let settings = {
+            let persisted_state = app.state::<SharedPersistedState>();
+            let persisted = persisted_state
+                .0
+                .lock()
+                .map_err(|_| "Could not read the app settings.".to_string())?;
+            persisted.settings.clone()
+        };
+
+        // Both are best-effort. ffmpeg missing is a perfectly ordinary state for a new install,
+        // and it must cost a thumbnail and a duration, not the ability to add a video.
+        let ffmpeg = detect_local_ffmpeg(&settings).executable_path;
+        let duration_ms = probe_duration_ms(ffmpeg.as_deref(), &path);
+        let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+        let added_at_ms = now_ms();
+        let thumbnail = ffmpeg.as_ref().and_then(|ffmpeg| {
+            capture_thumbnail(
+                Path::new(ffmpeg),
+                &path,
+                Path::new(&settings.asset_directory),
+                duration_ms,
+                added_at_ms,
+            )
+        });
+
+        upsert_watched_video(&app, &video_path, |video| {
+            video.duration_ms = duration_ms;
+            video.bytes = bytes;
+            // Re-adding a video that is already listed refreshes its facts but keeps the
+            // subtitle it is paired with — losing that to a second Add would be the one
+            // outcome this feature exists to prevent.
+            if video.thumbnail_path.is_none() {
+                video.thumbnail_path = thumbnail.map(|path| path.display().to_string());
+            }
+        })?;
+        build_app_bootstrap(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Pair a subtitle with a video, or clear the pairing when `subtitle_path` is `None`.
+#[tauri::command]
+pub(crate) async fn set_watched_video_subtitle(
+    app: AppHandle,
+    video_path: String,
+    subtitle_path: Option<String>,
+    origin: Option<String>,
+) -> Result<AppBootstrap, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        upsert_watched_video(&app, &video_path, |video| {
+            video.subtitle_path = subtitle_path;
+            video.subtitle_origin = normalize_origin(origin);
+        })?;
+        build_app_bootstrap(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Forget a video. Deletes the entry and the thumbnail this app made — never the video itself.
+#[tauri::command]
+pub(crate) async fn forget_watched_video(
+    app: AppHandle,
+    video_path: String,
+) -> Result<AppBootstrap, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        remove_watched_video(&app, &video_path)?;
+        build_app_bootstrap(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Transcribe the playing/selected video's own audio into a subtitle file beside it.
 ///
 /// Blocking work on the blocking pool, like every other whisper pass. The result is handed
@@ -398,7 +492,15 @@ pub(crate) async fn generate_watch_subtitles(
     video_path: String,
 ) -> Result<GeneratedSubtitles, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        generate_watch_subtitles_inner(&app, Path::new(&video_path))
+        let generated = generate_watch_subtitles_inner(&app, Path::new(&video_path))?;
+        // Recorded here rather than left to the caller: the backend knows for certain which
+        // file it just wrote and for which video, and a mapping that depends on the frontend
+        // remembering to report it is a mapping that will eventually be wrong.
+        upsert_watched_video(&app, &video_path, |video| {
+            video.subtitle_path = Some(generated.path.clone());
+            video.subtitle_origin = Some(ORIGIN_GENERATED.to_string());
+        })?;
+        Ok(generated)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -422,6 +524,12 @@ pub(crate) async fn sync_watch_subtitles(
         let outcome =
             sync_subtitles_with_alass(&settings, Path::new(&video_path), Path::new(&subtitle_path))?;
         let synced = outcome.output_path.display().to_string();
+        // Same reasoning as the generated case: alass has just rewritten which file this video
+        // should be watched with, and that is the mapping.
+        upsert_watched_video(&app, &video_path, |video| {
+            video.subtitle_path = Some(synced.clone());
+            video.subtitle_origin = Some(ORIGIN_SYNCED.to_string());
+        })?;
         // Hand the corrected file straight to the player. Reporting success while mpv keeps
         // showing the old subtitles would be the worst outcome: the user would trust a fix
         // they are not actually watching.

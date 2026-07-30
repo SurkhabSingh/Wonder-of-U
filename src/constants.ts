@@ -376,6 +376,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     startMinimized: false,
   },
   recentRecordings: [],
+  watchedVideos: [],
   whisperDetection: {
     status: "notFound",
     executablePath: null,

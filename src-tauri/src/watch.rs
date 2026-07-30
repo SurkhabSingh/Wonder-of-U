@@ -28,6 +28,7 @@ use std::os::windows::process::CommandExt;
 
 use serde::Serialize;
 
+pub(crate) mod library;
 pub(crate) mod subtitles;
 pub(crate) mod transcribe;
 pub(crate) mod sync;

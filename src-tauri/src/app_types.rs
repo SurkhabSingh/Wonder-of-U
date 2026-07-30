@@ -572,12 +572,51 @@ impl RecentRecording {
 /// unparseable state file is not a small loss: `load_persisted_data` moves it aside and starts
 /// from scratch, taking the recording library and every setting with it. A field added later
 /// must be able to be absent, because on the first launch after an update it always is.
+/// A video the user has added to the video library, and the subtitle it is paired with.
+///
+/// The pairing is the whole point. Picking a video and its subtitle used to live in component
+/// state that did not survive leaving the page, so every session meant finding both files again.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct WatchedVideo {
+    /// Identity. The user's own file, never copied or moved by this app.
+    pub(crate) video_path: String,
+    /// The file name when it was added, so a moved video still has something to show.
+    pub(crate) title: Option<String>,
+    /// The remembered subtitle. `None` means none has been chosen — which is not the same as
+    /// none existing, since the container may carry an embedded track.
+    pub(crate) subtitle_path: Option<String>,
+    /// Where that subtitle came from: `picked` | `jimaku` | `generated` | `synced`.
+    ///
+    /// Labels the chip in the list and nothing else. It must never gate behaviour — a mapping
+    /// is a path, and its provenance is decoration.
+    pub(crate) subtitle_origin: Option<String>,
+    /// A still frame cached under the asset directory. `None` when one could not be made.
+    pub(crate) thumbnail_path: Option<String>,
+    pub(crate) duration_ms: u64,
+    pub(crate) bytes: u64,
+    pub(crate) added_at_ms: u64,
+    /// `None` until the video has actually been played once.
+    pub(crate) last_opened_at_ms: Option<u64>,
+}
+
+/// The whole of `state.json`.
+///
+/// Carries a container-level `default` for the same reason every settings struct does, and with
+/// a heavier consequence. Serde requires every field of a struct unless it can default, so
+/// adding a field here would make every state file written before it fail to parse — and an
+/// unparseable state file is not a small loss: `load_persisted_data` moves it aside and starts
+/// from scratch, taking the recording library and every setting with it. A field added later
+/// must be able to be absent, because on the first launch after an update it always is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct PersistedData {
     pub(crate) settings: AppSettings,
     pub(crate) recent_recordings: Vec<RecentRecording>,
     pub(crate) untitled_counter: u64,
+    /// The video library. Separate from `recent_recordings` on purpose: a video is watched and
+    /// subtitled, a recording is transcribed and mined, and the two share no actions.
+    pub(crate) watched_videos: Vec<WatchedVideo>,
 }
 
 impl Default for PersistedData {
@@ -588,6 +627,7 @@ impl Default for PersistedData {
             // 1, not 0: this counter names untitled recordings, and `load_persisted_data`
             // already repairs a stored 0 to 1 rather than ever handing out "Untitled 0".
             untitled_counter: 1,
+            watched_videos: Vec::new(),
         }
     }
 }
@@ -651,6 +691,7 @@ pub(crate) struct AppBootstrap {
     pub(crate) shell: ShellSnapshot,
     pub(crate) settings: AppSettings,
     pub(crate) recent_recordings: Vec<RecentRecording>,
+    pub(crate) watched_videos: Vec<WatchedVideo>,
     pub(crate) whisper_detection: WhisperDetection,
     pub(crate) ffmpeg_detection: FfmpegDetection,
     pub(crate) ytdlp_detection: YtdlpDetection,

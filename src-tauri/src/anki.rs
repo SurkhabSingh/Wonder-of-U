@@ -11,7 +11,7 @@ mod mined;
 mod model;
 mod push;
 mod references;
-mod screenshot;
+pub(crate) mod screenshot;
 
 pub(crate) use self::{
     catalog::load_anki_catalog_inner,

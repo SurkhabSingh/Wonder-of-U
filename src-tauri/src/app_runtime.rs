@@ -94,6 +94,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         shell,
         settings: persisted.settings,
         recent_recordings: persisted.recent_recordings,
+        watched_videos: persisted.watched_videos,
         whisper_detection,
         ffmpeg_detection,
         ytdlp_detection,

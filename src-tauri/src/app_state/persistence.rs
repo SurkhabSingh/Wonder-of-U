@@ -75,10 +75,11 @@ fn default_settings<R: Runtime>(
 }
 
 fn first_run_state(settings: AppSettings) -> PersistedData {
+    // Spread the derived default so a collection added later starts empty here too, rather
+    // than making first-run the one place that has to be remembered.
     PersistedData {
         settings,
-        recent_recordings: Vec::new(),
-        untitled_counter: 1,
+        ..PersistedData::default()
     }
 }
 

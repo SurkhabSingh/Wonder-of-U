@@ -111,6 +111,9 @@ pub fn run() {
             set_watch_subtitle_delay,
             sync_watch_subtitles,
             generate_watch_subtitles,
+            add_watched_video,
+            set_watched_video_subtitle,
+            forget_watched_video,
             download_recommended_alass,
             jimaku_search,
             jimaku_files,
@@ -350,6 +353,7 @@ mod tests {
             .unwrap(),
             recent_recordings: Vec::new(),
             untitled_counter: 0,
+            ..PersistedData::default()
         };
 
         assert_eq!(state.untitled_counter, 0);
@@ -413,6 +417,7 @@ mod tests {
             .unwrap(),
             recent_recordings: vec![existing],
             untitled_counter: 1,
+            ..PersistedData::default()
         };
 
         reconcile_recording_history(&mut state);
