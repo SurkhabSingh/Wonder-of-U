@@ -448,6 +448,52 @@ pub(crate) async fn add_watched_video(
     .map_err(|error| error.to_string())?
 }
 
+/// Note that a video was just opened, adding it to the library if it was not already there.
+///
+/// Opening is how a video most often enters the list — you find a file, watch it, and expect it
+/// to be there next time without having thought about "adding" anything.
+#[tauri::command]
+pub(crate) async fn mark_watched_video_opened(
+    app: AppHandle,
+    video_path: String,
+) -> Result<AppBootstrap, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        upsert_watched_video(&app, &video_path, |video| {
+            video.last_opened_at_ms = Some(now_ms());
+        })?;
+        build_app_bootstrap(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Which remembered videos are no longer on disk.
+///
+/// On demand rather than a field on the entry: this stats every video, and the snapshot that
+/// carries the library is emitted on every download progress tick. A per-emit filesystem walk
+/// is exactly the kind of hot-path work that had to be reverted once already.
+#[tauri::command]
+pub(crate) async fn missing_watched_videos(app: AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let videos = {
+            let persisted_state = app.state::<SharedPersistedState>();
+            let persisted = persisted_state
+                .0
+                .lock()
+                .map_err(|_| "Could not read the video library.".to_string())?;
+            persisted.watched_videos.clone()
+        };
+
+        Ok(videos
+            .into_iter()
+            .filter(|video| !Path::new(&video.video_path).exists())
+            .map(|video| video.video_path)
+            .collect())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Pair a subtitle with a video, or clear the pairing when `subtitle_path` is `None`.
 #[tauri::command]
 pub(crate) async fn set_watched_video_subtitle(

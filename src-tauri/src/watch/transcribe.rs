@@ -16,7 +16,8 @@ use crate::{
     app_runtime::log_event,
     app_types::{transcript_language_key, SharedPersistedState, SharedShellState},
     recording_library::transcription::{
-        clean_segments, parse_whisper_segments, resolve_whisper_engine, WhisperEngine,
+        clean_segments, parse_whisper_segments, resolve_whisper_engine, CancelListener,
+        WhisperEngine,
     },
     subtitles::segments_to_srt,
     transcription::{
@@ -87,6 +88,12 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
         ffmpeg_path,
     } = resolve_whisper_engine(app, &settings)?;
 
+    // A real cancel flag, not a placeholder. This listens to the same global
+    // `transcription-cancel` event the library batch uses, which is safe precisely because the
+    // shell-phase guard above means only one of the two can be running: one event, one owner.
+    // Registered before the pass so a Cancel pressed at any point during it lands, and
+    // unregistered on drop.
+    let cancel_listener = CancelListener::register(app);
     let app_progress = app.clone();
     let result = run_whisper_transcription(
         &WhisperTranscriptionRequest {
@@ -100,7 +107,7 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
             music_mode: settings.whisper.audio_type == "music",
             fast_decode: settings.whisper.decode_speed == "fast",
         },
-        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        cancel_listener.flag(),
         // Reuses the transcription progress channel, so the existing bar reports this too —
         // a 24-minute film is minutes of work and reads as a hang without one.
         move |percent| {

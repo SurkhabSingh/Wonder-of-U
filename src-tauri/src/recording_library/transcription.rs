@@ -653,14 +653,14 @@ fn move_file(source: &Path, target: &Path) -> Result<(), String> {
 /// including while a long whisper-cli pass is mid-flight — reaches the flag. Mirrors the
 /// yt-dlp import's `CancelListener`: `Drop` unregisters the `once` handler so a batch that
 /// finished normally never leaves it (and the `Arc` it pins) registered for the session.
-struct CancelListener<R: Runtime> {
+pub(crate) struct CancelListener<R: Runtime> {
     app: AppHandle<R>,
     event_id: EventId,
     flag: Arc<AtomicBool>,
 }
 
 impl<R: Runtime> CancelListener<R> {
-    fn register(app: &AppHandle<R>) -> Self {
+    pub(crate) fn register(app: &AppHandle<R>) -> Self {
         let flag = Arc::new(AtomicBool::new(false));
         let flag_for_listener = Arc::clone(&flag);
         let event_id = app.once("transcription-cancel", move |_| {
@@ -678,7 +678,7 @@ impl<R: Runtime> CancelListener<R> {
         self.flag.load(Ordering::Relaxed)
     }
 
-    fn flag(&self) -> Arc<AtomicBool> {
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.flag)
     }
 }

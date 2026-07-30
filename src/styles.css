@@ -3572,3 +3572,115 @@ input::placeholder {
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* ---- Video library -------------------------------------------------------
+   Deliberately its own rules rather than reuse of `.recording-item`: audio and
+   video share a look, not a component, and a row that had to satisfy both would
+   constrain whichever one changed second. The recipe below is copied from the
+   audio row so they match today, and free to diverge tomorrow. */
+.video-list {
+  display: grid;
+  gap: var(--space-5);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.video-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+
+/* The app's signature active cue, drawn as an inset shadow so selecting a row
+   never reflows the grid. Same treatment as `.recording-item.is-selected`. */
+.video-item.is-selected {
+  border-color: var(--border-strong);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* A video whose file has moved is dimmed, not hidden — the row still carries the
+   subtitle mapping, which is the part that would be expensive to lose. */
+.video-item.is-missing .video-item-main {
+  opacity: 0.62;
+}
+
+.video-item-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-4);
+  align-items: center;
+  width: 100%;
+  min-height: 0;
+  padding: var(--space-4) var(--space-5);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.video-item-main:hover {
+  background: var(--surface-active);
+}
+
+.video-thumb {
+  width: 76px;
+  height: 43px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-active);
+}
+
+.video-thumb-empty {
+  border: 1px solid var(--border);
+}
+
+.video-item-text {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.video-name {
+  font-size: var(--text-base);
+  font-weight: var(--weight-mid);
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The per-video controls, revealed by selecting a row. Scoped to the video rather
+   than floating on the page, so "which video does this apply to" is never a
+   question the layout leaves open. */
+.video-item-detail {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.video-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.video-detail-label {
+  min-width: 58px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.video-detail-file {
+  padding: 3px var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--surface-active);
+  color: var(--text-strong);
+  font-size: var(--text-xs);
+}

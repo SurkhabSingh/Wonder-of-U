@@ -6,7 +6,14 @@ import { SubtitleListPane } from "./SubtitleListPane";
 import { ScannableText } from "../scanner/ScannableText";
 import { SubtitleOffsetField } from "./SubtitleOffsetField";
 import { JimakuSearchPanel } from "./JimakuSearchPanel";
-import type { RecordingSegment, ScannerSettings, WatchSnapshot } from "../../types";
+import { VideoLibraryList } from "./VideoLibraryList";
+import type {
+  RecordingSegment,
+  ScannerSettings,
+  SubtitleOrigin,
+  WatchSnapshot,
+  WatchedVideo,
+} from "../../types";
 
 // How the scan gesture reads in the user's own configuration.
 const MODIFIER_LABELS: Record<string, string> = {
@@ -72,6 +79,15 @@ export function WatchPage({
   isSyncing,
   onGenerateSubtitles,
   isGeneratingSubtitles,
+  videos,
+  selectedVideoPath,
+  onSelectVideo,
+  onAddVideo,
+  onSubtitleChosen,
+  onForgetVideo,
+  missingVideoPaths,
+  generateProgress,
+  onCancelGenerate,
   syncResult,
 }: {
   snapshot: WatchSnapshot;
@@ -114,10 +130,26 @@ export function WatchPage({
   // can then realign it exactly like a downloaded file.
   onGenerateSubtitles: (videoPath: string) => void;
   isGeneratingSubtitles: boolean;
+  // The remembered videos, newest first. This page owns none of it — the list, the mapping
+  // and the selection all live in App so they survive leaving the page, which is the entire
+  // point of the feature.
+  videos: WatchedVideo[];
+  selectedVideoPath: string | null;
+  onSelectVideo: (videoPath: string) => void;
+  onAddVideo: (videoPath: string) => void;
+  onSubtitleChosen: (
+    videoPath: string,
+    subtitlePath: string,
+    origin: SubtitleOrigin,
+  ) => void;
+  onForgetVideo: (videoPath: string) => void;
+  // Videos whose file could not be found. Listed and dimmed rather than hidden.
+  missingVideoPaths: ReadonlySet<string>;
+  // 0-100 while subtitles are being written, null before the first tick arrives.
+  generateProgress: number | null;
+  onCancelGenerate: () => void;
   syncResult: { ok: boolean; message: string } | null;
 }) {
-  const [videoPath, setVideoPath] = useState<string | null>(null);
-  const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // The line on screen changes as the video plays. Keying the owner to the cue's start
   // means a highlight never survives onto a different line.
@@ -129,97 +161,146 @@ export function WatchPage({
       filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
     });
     if (typeof picked === "string") {
-      setVideoPath(picked);
+      onAddVideo(picked);
     }
   };
 
-  const pickSubtitle = async () => {
+  const pickSubtitle = async (videoPath: string) => {
     const picked = await open({
       multiple: false,
       filters: [{ name: "Subtitles", extensions: SUBTITLE_EXTENSIONS }],
     });
     if (typeof picked === "string") {
-      setSubtitlePath(picked);
+      onSubtitleChosen(videoPath, picked, "picked");
     }
   };
 
   if (!snapshot.connected) {
+    const selected =
+      videos.find((video) => video.videoPath === selectedVideoPath) ?? null;
+
     return (
       <>
         <header className="panel-header">
           <div>
             <p className="panel-kicker">Watch &amp; Mine</p>
-            <h2>Open a video</h2>
+            <h2>Video library</h2>
+          </div>
+          <div className="panel-actions">
+            <button type="button" onClick={() => void pickVideo()}>
+              Add a video
+            </button>
           </div>
         </header>
 
         <div className="info-note">
           <p className="microcopy">
-            The video plays in <strong>mpv</strong>, not in this window &mdash; mpv handles
-            MKV, H.265 and everything else this app&rsquo;s built-in player cannot. Wonder
-            of U reads the position and the subtitles from it, so you can mine the line you
-            are hearing.
+            Videos play in <strong>mpv</strong>, not in this window &mdash; mpv handles MKV,
+            H.265 and everything else this app&rsquo;s built-in player cannot. Wonder of U
+            reads the position and the subtitles from it, so you can mine the line you are
+            hearing. Whatever subtitles you pair with a video are remembered for next time.
           </p>
         </div>
 
-        <div className="settings-grid">
-          <label className="field">
-            <span>Video</span>
-            <button type="button" className="secondary" onClick={() => void pickVideo()}>
-              {videoPath ? fileNameFromPath(videoPath) : "Choose a video…"}
-            </button>
-          </label>
-
-          <label className="field">
-            <span>Subtitles (optional)</span>
-            <button type="button" className="secondary" onClick={() => void pickSubtitle()}>
-              {subtitlePath ? fileNameFromPath(subtitlePath) : "Choose a subtitle file…"}
-            </button>
-          </label>
-        </div>
-
-        <p className="microcopy">
-          Leave subtitles empty if the file already has them built in &mdash; the track is
-          read straight out of the container.
-        </p>
-
-        <JimakuSearchPanel
-          hasApiKey={hasJimakuKey}
-          videoPath={videoPath}
-          onDownloaded={setSubtitlePath}
-          onOpenSettings={onOpenScannerSettings}
+        <VideoLibraryList
+          videos={videos}
+          selectedPath={selectedVideoPath}
+          onSelect={onSelectVideo}
+          missingPaths={missingVideoPaths}
         />
 
-        <div className="panel-section">
-          <h3>No subtitles anywhere?</h3>
-          <p className="microcopy">
-            Write them from the video's own speech. This runs the same transcription the
-            library uses, so it takes a few minutes on a full episode and needs the Whisper
-            engine set up. The file is saved next to the video and selected for you.
-          </p>
-          <div className="panel-actions">
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => videoPath && onGenerateSubtitles(videoPath)}
-              disabled={!videoPath || isGeneratingSubtitles}
-            >
-              {isGeneratingSubtitles
-                ? "Writing subtitles…"
-                : "Generate subtitles from the audio"}
-            </button>
-          </div>
-        </div>
+        {selected ? (
+          <div className="video-item-detail">
+            <div className="video-detail-row">
+              <span className="video-detail-label">Subtitles</span>
+              {selected.subtitlePath ? (
+                <span
+                  className="video-detail-file"
+                  title={selected.subtitlePath}
+                >
+                  {fileNameFromPath(selected.subtitlePath)}
+                </span>
+              ) : (
+                <span className="microcopy" style={{ margin: 0 }}>
+                  None chosen &mdash; mpv will still use a track built into the file.
+                </span>
+              )}
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void pickSubtitle(selected.videoPath)}
+              >
+                {selected.subtitlePath ? "Change" : "Choose a file"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => onGenerateSubtitles(selected.videoPath)}
+                disabled={isGeneratingSubtitles}
+              >
+                Generate from the audio
+              </button>
+            </div>
 
-        <div className="panel-actions">
-          <button
-            type="button"
-            onClick={() => videoPath && onStart(videoPath, subtitlePath)}
-            disabled={!videoPath || isStarting}
-          >
-            {isStarting ? "Opening…" : "Open in mpv"}
-          </button>
-        </div>
+            <JimakuSearchPanel
+              hasApiKey={hasJimakuKey}
+              videoPath={selected.videoPath}
+              onDownloaded={(path) => onSubtitleChosen(selected.videoPath, path, "jimaku")}
+              onOpenSettings={onOpenScannerSettings}
+            />
+
+            {isGeneratingSubtitles ? (
+              <div className="transcript-enable-timing is-transcribing">
+                <span className="transcript-enable-timing-text">
+                  {generateProgress !== null
+                    ? `Writing subtitles… ${generateProgress}%`
+                    : "Preparing…"}
+                </span>
+                <div
+                  className="transcript-enable-timing-progress"
+                  role="progressbar"
+                  aria-label="Subtitle generation progress"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={generateProgress ?? undefined}
+                >
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className="progress-fill"
+                      style={{ width: `${generateProgress ?? 0}%` }}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="ghost transcript-enable-timing-cancel"
+                  onClick={onCancelGenerate}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : null}
+
+            <div className="panel-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => onForgetVideo(selected.videoPath)}
+              >
+                Remove from list
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onStart(selected.videoPath, selected.subtitlePath ?? null)
+                }
+                disabled={isStarting || missingVideoPaths.has(selected.videoPath)}
+              >
+                {isStarting ? "Opening…" : "Open in mpv"}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {error ? (
           <div className="update-card error">
