@@ -15,6 +15,7 @@ mod recording_session;
 mod runtime_assets;
 mod scanner_overlay;
 mod settings;
+mod subtitles;
 mod transcription;
 mod translation_bridge;
 mod watch;

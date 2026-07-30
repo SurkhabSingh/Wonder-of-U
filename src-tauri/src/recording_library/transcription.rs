@@ -17,6 +17,7 @@ use crate::{
         RecordingSegment, RecordingTranscript, SharedPersistedState, WHISPER_VAD_MODEL_FILE,
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
+    subtitles::segments_to_srt,
     transcription::{
         run_whisper_transcription, transcription_thread_count, SpeechRegion,
         WhisperTranscriptionRequest, TRANSCRIPTION_CANCELLED,
@@ -218,7 +219,20 @@ fn apply_transcription_result_to_recording<R: Runtime>(
             recording.duration_ms,
             speech_regions,
         ) {
-            Ok(path) => path.map(|path| path.display().to_string()),
+            Ok(sidecars) => sidecars.map(|sidecars| {
+                if sidecars.subtitle_path.is_none() {
+                    log_event(
+                        app,
+                        "WARN",
+                        "recording.store_subtitle_failed",
+                        serde_json::json!({
+                            "audioPath": recording.file_path,
+                            "message": "The segments were saved but the subtitle file could                                         not be written."
+                        }),
+                    );
+                }
+                sidecars.segments_path.display().to_string()
+            }),
             Err(error) => {
                 log_event(
                     app,
@@ -282,6 +296,16 @@ fn store_additional_language_transcript(
 /// sidecar is named/placed. Returns `Ok(Some(path))` on success, `Ok(None)` when
 /// the json is absent or carries no parseable segments (a normal, non-fatal case),
 /// and `Err` only when the sidecar itself could not be written.
+/// What a successful transcription left beside the audio.
+#[derive(Debug)]
+pub(crate) struct TranscriptSidecars {
+    /// `{stem}.{lang}.segments.json`, the per-sentence timings the viewer and miner read.
+    pub(crate) segments_path: PathBuf,
+    /// `{stem}.{lang}.srt`, for mpv and alass. `None` when only this file could not be
+    /// written, which never fails the transcription.
+    pub(crate) subtitle_path: Option<PathBuf>,
+}
+
 pub(crate) fn store_segments_sidecar(
     audio_file_path: &str,
     json_path: &Path,
@@ -289,7 +313,7 @@ pub(crate) fn store_segments_sidecar(
     transcript_path: &Path,
     duration_ms: u64,
     speech_regions: &[SpeechRegion],
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<TranscriptSidecars>, String> {
     let raw = match parse_whisper_segments(json_path) {
         Some(segments) if !segments.is_empty() => segments,
         _ => return Ok(None),
@@ -336,7 +360,29 @@ pub(crate) fn store_segments_sidecar(
         let _ = fs::write(transcript_path, format!("{cleaned_text}\n"));
     }
 
-    Ok(Some(target))
+    // A subtitle file beside the audio, from the same cleaned segments.
+    //
+    // Written for every transcription because it costs nothing and is the only form the
+    // rest of the world reads: mpv can load it with `--sub-file`, and alass can be pointed
+    // at it. Deterministically named like the sidecar, so a re-transcribe overwrites rather
+    // than accumulating.
+    //
+    // Best-effort on purpose. Timestamps and mining depend on the sidecar above; a subtitle
+    // file that could not be written must not fail a transcription that otherwise succeeded.
+    let subtitle_target = parent.join(format!("{stem}.{language_tag}.srt"));
+    let subtitle_path = match fs::write(&subtitle_target, segments_to_srt(&segments)) {
+        Ok(()) => Some(subtitle_target),
+        // Reported to the caller rather than returned as an error: the segments above are
+        // what timestamps and mining depend on, and they are already written. But it is not
+        // swallowed either, or a missing subtitle file would look like a feature that never
+        // ran rather than one that failed.
+        Err(_) => None,
+    };
+
+    Ok(Some(TranscriptSidecars {
+        segments_path: target,
+        subtitle_path,
+    }))
 }
 
 /// Repairs two whisper failure modes on non-vocal / trailing audio before the segments
@@ -992,7 +1038,23 @@ mod tests {
         .unwrap()
         .expect("a parseable json must yield a sidecar path");
 
-        assert_eq!(stored, dir.path().join("hola_100.fr.segments.json"));
+        assert_eq!(
+            stored.segments_path,
+            dir.path().join("hola_100.fr.segments.json")
+        );
+        // The subtitle file rides along with every transcription, from the same segments.
+        let subtitle_path = stored
+            .subtitle_path
+            .clone()
+            .expect("a subtitle file is written beside the segments");
+        assert_eq!(subtitle_path, dir.path().join("hola_100.fr.srt"));
+        let srt = fs::read_to_string(&subtitle_path).unwrap();
+        assert!(srt.starts_with("1
+00:00:00,000 --> 00:00:02,960
+Bonjour le monde
+"), "{srt}");
+
+        let stored = stored.segments_path;
 
         // Round-trip: the written sidecar deserializes back into clean segments
         // with trimmed text and the original ms offsets preserved.
@@ -1241,7 +1303,7 @@ mod tests {
         .expect("a parseable json must yield a sidecar path");
 
         let segments: Vec<RecordingSegment> =
-            serde_json::from_str(&fs::read_to_string(&stored).unwrap()).unwrap();
+            serde_json::from_str(&fs::read_to_string(&stored.segments_path).unwrap()).unwrap();
         assert_eq!(segments.len(), 1, "the six-segment loop collapses to one");
         // The transcript .txt was rewritten from the cleaned segment, dropping the loop.
         assert_eq!(fs::read_to_string(&transcript_path).unwrap().trim(), "ループ");
