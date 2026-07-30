@@ -564,12 +564,32 @@ impl RecentRecording {
     }
 }
 
+/// The whole of `state.json`.
+///
+/// Carries a container-level `default` for the same reason every settings struct does, and with
+/// a heavier consequence. Serde requires every field of a struct unless it can default, so
+/// adding a field here would make every state file written before it fail to parse — and an
+/// unparseable state file is not a small loss: `load_persisted_data` moves it aside and starts
+/// from scratch, taking the recording library and every setting with it. A field added later
+/// must be able to be absent, because on the first launch after an update it always is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct PersistedData {
     pub(crate) settings: AppSettings,
     pub(crate) recent_recordings: Vec<RecentRecording>,
     pub(crate) untitled_counter: u64,
+}
+
+impl Default for PersistedData {
+    fn default() -> Self {
+        Self {
+            settings: AppSettings::default(),
+            recent_recordings: Vec::new(),
+            // 1, not 0: this counter names untitled recordings, and `load_persisted_data`
+            // already repairs a stored 0 to 1 rather than ever handing out "Untitled 0".
+            untitled_counter: 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -952,6 +972,51 @@ mod settings_default_tests {
     }
 
     /// A round trip has to survive, or the tolerance above would be hiding a rename.
+    /// Today's exact shape keeps loading, with its contents intact.
+    ///
+    /// A sanity check rather than the regression guard — it supplies all three fields, so it
+    /// would pass with or without the container default. The guard is the test below.
+    #[test]
+    fn a_state_file_without_a_newly_added_field_still_loads() {
+        // Exactly the shape written today, plus one recording so the loss would be visible.
+        let raw = r#"{
+            "settings": { "theme": "dark", "anki": { "deckName": "Mining" } },
+            "recentRecordings": [{
+                "fileName": "a.wav",
+                "filePath": "/rec/a.wav",
+                "durationMs": 1000,
+                "bytesWritten": 32000,
+                "createdAtMs": 1700000000000
+            }],
+            "untitledCounter": 7
+        }"#;
+
+        let state: PersistedData = serde_json::from_str(raw).expect("an older state file loads");
+
+        assert_eq!(state.recent_recordings.len(), 1, "the library survives");
+        assert_eq!(state.recent_recordings[0].file_name, "a.wav");
+        assert_eq!(state.settings.theme, "dark", "settings survive");
+        assert_eq!(state.settings.anki.deck_name, "Mining");
+        assert_eq!(state.untitled_counter, 7);
+    }
+
+    /// **The regression guard.** Every field absent is what a state file looks like to a build
+    /// that has since gained one, so this is the case that decides whether adding a field is
+    /// safe. Without the container `default` it fails with "missing field `settings`" — and in
+    /// production that failure is not an error the user sees, it is `load_persisted_data`
+    /// moving the file aside and starting fresh, taking the recording library with it.
+    ///
+    /// Verified by removing the attribute and watching this fail.
+    #[test]
+    fn an_empty_state_file_is_a_usable_first_run() {
+        let state: PersistedData = serde_json::from_str("{}").expect("an empty object loads");
+
+        assert!(state.recent_recordings.is_empty());
+        // Never 0: this counter names recordings, and "Untitled 0" is not a name.
+        assert_eq!(state.untitled_counter, 1);
+        assert!(state.settings.features.transcription);
+    }
+
     #[test]
     fn settings_survive_a_round_trip_through_json() {
         let mut settings = AppSettings::default();
