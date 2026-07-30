@@ -599,10 +599,19 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         }
     }
 
-    // 6. Furigana (non-fatal).
-    if source.supports_furigana {
-        if let Ok(furigana_html) = request_furigana_html(trimmed_text) {
-            insert_furigana_field(&anki, &furigana_html, &clip_media_file_name, &mut fields);
+    // 6. Furigana (non-fatal), and only when it was asked for.
+    //
+    // The setting was read by the push path alone, so a mined card got furigana whether or
+    // not the toggle was on — one of the two ways to make a card ignored the switch that
+    // governs it. A failure is reported for the same reason the screenshot's is: furigana
+    // that was asked for and did not arrive is not something to find out later on the card.
+    let mut furigana_problem = None;
+    if settings.features.auto_add_furigana_after_anki_push && source.supports_furigana {
+        match request_furigana_html(trimmed_text) {
+            Ok(furigana_html) => {
+                insert_furigana_field(&anki, &furigana_html, &clip_media_file_name, &mut fields);
+            }
+            Err(error) => furigana_problem = Some(error),
         }
     }
 
@@ -656,17 +665,27 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             // The card exists either way, but media the user expected and did not get has
             // to be said out loud — silently dropping it would report a partial result as a
             // whole one.
-            message: match (screenshot_problem, video_problem) {
-                (None, None) => format!("Mined sentence into Anki note {note_id}."),
-                (Some(problem), None) => format!(
-                    "Mined sentence into Anki note {note_id}, without a screenshot: {problem}."
-                ),
-                (None, Some(problem)) => format!(
-                    "Mined sentence into Anki note {note_id}, without a video clip: {problem}."
-                ),
-                (Some(shot), Some(video)) => format!(
-                    "Mined sentence into Anki note {note_id}, without a screenshot ({shot})                      or a video clip ({video})."
-                ),
+            // Listed rather than matched pair by pair: there are three optional parts now,
+            // and a match over every combination grows as the product of them — which is
+            // how a fourth would end up quietly omitted from one arm.
+            message: {
+                let missing: Vec<String> = [
+                    screenshot_problem.map(|problem| format!("a screenshot ({problem})")),
+                    video_problem.map(|problem| format!("a video clip ({problem})")),
+                    furigana_problem.map(|problem| format!("furigana ({problem})")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+
+                if missing.is_empty() {
+                    format!("Mined sentence into Anki note {note_id}.")
+                } else {
+                    format!(
+                        "Mined sentence into Anki note {note_id}, without {}.",
+                        missing.join(", "),
+                    )
+                }
             },
             note_id: Some(note_id),
         },

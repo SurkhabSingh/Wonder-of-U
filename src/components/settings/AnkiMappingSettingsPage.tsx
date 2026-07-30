@@ -363,13 +363,12 @@ export function AnkiMappingSettingsPage({
               })
             }
           />
-          <span>Automatically add furigana when pushing Japanese cards</span>
+          <span>Automatically add furigana to Japanese cards</span>
         </label>
         <p className="microcopy">
-          Requires the Wonder of U Anki add-on to be running. If the add-on is
-          unavailable, Wonder of U still pushes the card and warns that furigana
-          was skipped. Furigana is written onto the expression/transcript field
-          itself.
+          Applies to mined sentences and to whole recordings alike. Anki needs to be
+          open; if it is not, the card is still made and you are told furigana was
+          skipped.
         </p>
       </div>
 
