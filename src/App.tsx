@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { HomePage } from "./components/home/HomePage";
@@ -11,6 +10,8 @@ import { SettingsPages } from "./components/settings/SettingsPages";
 import { SetupChecklist } from "./components/settings/SetupChecklist";
 import { TranscriptViewerPage } from "./components/transcripts/TranscriptViewerPage";
 import { WatchPage } from "./components/watch/WatchPage";
+import { JimakuDialog } from "./components/watch/JimakuDialog";
+import { useConfirm } from "./components/ui/ConfirmDialogProvider";
 import { LookupPopup } from "./components/scanner/LookupPopup";
 import { useWordScanner } from "./hooks/useWordScanner";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
@@ -39,6 +40,7 @@ import type {
 } from "./types";
 
 function App() {
+  const confirmDialog = useConfirm();
   const {
     applyBootstrap,
     autosaveMessage,
@@ -203,6 +205,7 @@ function App() {
   const generateWatchSubtitles = useCallback(
     async (videoPath: string) => {
       setIsGeneratingSubtitles(true);
+      setGeneratingPath(videoPath);
       setWatchSyncResult(null);
       try {
         const generated = await invoke<{
@@ -230,6 +233,7 @@ function App() {
         });
       } finally {
         setIsGeneratingSubtitles(false);
+        setGeneratingPath(null);
       }
     },
     [watch.snapshot.path, watchSubtitles],
@@ -238,7 +242,6 @@ function App() {
   // The video library. Selection and the generate-progress live here rather than in WatchPage
   // so they survive leaving the page — the whole point of remembering a pairing is that it
   // outlives the visit that made it.
-  const [selectedVideoPath, setSelectedVideoPath] = useState<string | null>(null);
   const [generateProgress, setGenerateProgress] = useState<number | null>(null);
   const [missingVideoPaths, setMissingVideoPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -296,13 +299,62 @@ function App() {
     [applyBootstrap],
   );
 
+  const [videoSearch, setVideoSearch] = useState("");
+  const [openVideoMenuPath, setOpenVideoMenuPath] = useState<string | null>(null);
+  const [jimakuDialogPath, setJimakuDialogPath] = useState<string | null>(null);
+  const [generatingPath, setGeneratingPath] = useState<string | null>(null);
+
+  // Filtering on the title the row actually shows, so what you type matches what you read.
+  const visibleVideos = useMemo(() => {
+    const query = videoSearch.trim().toLowerCase();
+    if (!query) {
+      return watchedVideos;
+    }
+    return watchedVideos.filter((video) =>
+      (video.title ?? video.videoPath).toLowerCase().includes(query),
+    );
+  }, [watchedVideos, videoSearch]);
+
+  const realignWatchedVideo = useCallback(
+    async (videoPath: string) => {
+      const video = watchedVideos.find((entry) => entry.videoPath === videoPath);
+      if (!video?.subtitlePath) {
+        return;
+      }
+      setIsSyncingSubtitles(true);
+      setWatchSyncResult(null);
+      try {
+        const synced = await invoke<{ path: string; summary: string }>(
+          "sync_watch_subtitles",
+          { videoPath, subtitlePath: video.subtitlePath },
+        );
+        // The backend has already repointed the mapping; this refreshes the list from it.
+        applyBootstrap(await invoke<AppBootstrap>("get_app_bootstrap"));
+        setWatchSyncResult({
+          ok: true,
+          message: `Realigned as ${fileNameFromPath(synced.path)}.${
+            synced.summary ? ` ${synced.summary}` : ""
+          }`,
+        });
+      } catch (caught) {
+        setWatchSyncResult({
+          ok: false,
+          message:
+            caught instanceof Error ? caught.message : String(caught ?? "Realign failed."),
+        });
+      } finally {
+        setIsSyncingSubtitles(false);
+      }
+    },
+    [applyBootstrap, watchedVideos],
+  );
+
   const addWatchedVideo = useCallback(
     async (videoPath: string) => {
       try {
         applyBootstrap(
           await invoke<AppBootstrap>("add_watched_video", { videoPath }),
         );
-        setSelectedVideoPath(videoPath);
       } catch (caught) {
         setLoadError(
           caught instanceof Error ? caught.message : String(caught ?? "Add failed."),
@@ -333,25 +385,30 @@ function App() {
 
   const forgetWatchedVideo = useCallback(
     async (videoPath: string) => {
-      const confirmed = await confirm(
-        "Remove this video from the list? The video file itself is not deleted.",
-        { title: "Remove video", kind: "warning" },
-      );
-      if (!confirmed) {
-        return;
-      }
       try {
+        // Inside the try, not before it: the previous version awaited outside, so a rejected
+        // confirm escaped as an unhandled promise and the whole action looked like a no-op.
+        const confirmed = await confirmDialog({
+          title: "Remove this video?",
+          message:
+            "Remove this video from the list, along with the subtitles it is paired with. The video file itself is not deleted.",
+          okLabel: "Remove",
+          cancelLabel: "Keep",
+          danger: true,
+        });
+        if (!confirmed) {
+          return;
+        }
         applyBootstrap(
           await invoke<AppBootstrap>("forget_watched_video", { videoPath }),
         );
-        setSelectedVideoPath((current) => (current === videoPath ? null : current));
       } catch (caught) {
         setLoadError(
           caught instanceof Error ? caught.message : String(caught ?? "Remove failed."),
         );
       }
     },
-    [applyBootstrap, setLoadError],
+    [applyBootstrap, confirmDialog, setLoadError],
   );
 
   const syncWatchSubtitles = useCallback(async () => {
@@ -831,7 +888,19 @@ function App() {
             />
           ) : null}
 
-          {activePage === "watch" ? (
+          {jimakuDialogPath ? (
+        <JimakuDialog
+          videoPath={jimakuDialogPath}
+          hasApiKey={settingsDraft.jimakuApiKey.trim().length > 0}
+          onDownloaded={(subtitlePath) =>
+            void setWatchedVideoSubtitle(jimakuDialogPath, subtitlePath, "jimaku")
+          }
+          onClose={() => setJimakuDialogPath(null)}
+          onOpenSettings={() => openSettingsSection("scanner")}
+        />
+      ) : null}
+
+      {activePage === "watch" ? (
             <WatchPage
               snapshot={watch.snapshot}
               isStarting={watch.isStarting}
@@ -848,18 +917,17 @@ function App() {
               }}
               onSetSubtitleDelay={(delayMs) => void watch.setSubtitleDelay(delayMs)}
               hasJimakuKey={settingsDraft.jimakuApiKey.trim().length > 0}
-              onOpenScannerSettings={() => openSettingsSection("scanner")}
               isSyncing={isSyncingSubtitles}
               syncResult={watchSyncResult}
-              isGeneratingSubtitles={isGeneratingSubtitles}
-              videos={watchedVideos}
-              selectedVideoPath={selectedVideoPath}
-              onSelectVideo={(videoPath) =>
-                setSelectedVideoPath((current) =>
-                  current === videoPath ? null : videoPath,
-                )
-              }
+              videos={visibleVideos}
               onAddVideo={(videoPath) => void addWatchedVideo(videoPath)}
+              onSearchJimaku={setJimakuDialogPath}
+              onRealign={(videoPath) => void realignWatchedVideo(videoPath)}
+              generatingPath={generatingPath}
+              openMenuPath={openVideoMenuPath}
+              onOpenMenuChange={setOpenVideoMenuPath}
+              searchQuery={videoSearch}
+              onSearchChange={setVideoSearch}
               onSubtitleChosen={(videoPath, subtitlePath, origin: SubtitleOrigin) =>
                 void setWatchedVideoSubtitle(videoPath, subtitlePath, origin)
               }

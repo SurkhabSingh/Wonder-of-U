@@ -19,7 +19,7 @@ use crate::{
     scanner_overlay::{set_scanner_overlay_enabled, set_scanner_popup_open},
     watch::{
         seek_watch_session as seek_watch_session_inner,
-        add_watch_subtitle_file,
+        add_watch_subtitle_file_if_playing,
         set_watch_subtitle_delay as set_watch_subtitle_delay_inner,
         start_watch_session as start_watch_session_inner,
         stop_watch_session as stop_watch_session_inner,
@@ -576,10 +576,13 @@ pub(crate) async fn sync_watch_subtitles(
             video.subtitle_path = Some(synced.clone());
             video.subtitle_origin = Some(ORIGIN_SYNCED.to_string());
         })?;
-        // Hand the corrected file straight to the player. Reporting success while mpv keeps
-        // showing the old subtitles would be the worst outcome: the user would trust a fix
-        // they are not actually watching.
-        add_watch_subtitle_file(&synced)?;
+        // Hand the corrected file to the player when one is running: reporting success while
+        // mpv keeps showing the old subtitles would have the user trusting a fix they are not
+        // watching. When nothing is playing there is nothing to mislead — realigning from the
+        // library is exactly that case — and the file is on disk with the mapping pointing at
+        // it, so the next open uses it. This previously failed the whole call, which also
+        // meant closing mpv mid-align reported a failure for a sync that had worked.
+        add_watch_subtitle_file_if_playing(&synced);
         Ok(SubtitleSyncResult {
             path: synced,
             summary: outcome.summary,
