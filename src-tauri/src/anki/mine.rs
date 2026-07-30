@@ -15,7 +15,7 @@ use super::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
     },
     furigana::{
-        insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
+        insert_furigana_field, request_furigana_html,
     },
     media_temp::{mining_temp_dir, TempMedia},
     screenshot::capture_screenshot,
@@ -336,7 +336,17 @@ fn mine_single_segment<R: Runtime>(
         created_at_ms: Some(recording.created_at_ms),
         source_url: recording.source_url.clone(),
         display_title: recording_display_title(&recording),
-        supports_furigana: recording_transcript_supports_furigana(&recording, text.trim()),
+        // Judged on the mined LINE, exactly as the watch path judges it, because that is
+        // what the card will hold.
+        //
+        // The recording-level gate takes `transcript_language`, which is the language of
+        // whichever pass ran LAST — not of the transcript this line came from. On a
+        // recording transcribed in Japanese and later in English, mining a Japanese line
+        // asked "is the recording English?", got yes, and skipped furigana on Japanese
+        // text without a word. The push and the furigana updater avoid it by overriding
+        // that field with the variant's own language first; this call did not, and a single
+        // line does not need the indirection — the text is right here.
+        supports_furigana: transcript_looks_japanese(text.trim()),
     };
 
     mine_media_to_anki(app, file_path, &source, text, start_ms, end_ms, translation, None)
@@ -589,10 +599,19 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         }
     }
 
-    // 6. Furigana (non-fatal).
-    if source.supports_furigana {
-        if let Ok(furigana_html) = request_furigana_html(trimmed_text) {
-            insert_furigana_field(&anki, &furigana_html, &clip_media_file_name, &mut fields);
+    // 6. Furigana (non-fatal), and only when it was asked for.
+    //
+    // The setting was read by the push path alone, so a mined card got furigana whether or
+    // not the toggle was on — one of the two ways to make a card ignored the switch that
+    // governs it. A failure is reported for the same reason the screenshot's is: furigana
+    // that was asked for and did not arrive is not something to find out later on the card.
+    let mut furigana_problem = None;
+    if settings.features.auto_add_furigana_after_anki_push && source.supports_furigana {
+        match request_furigana_html(trimmed_text) {
+            Ok(furigana_html) => {
+                insert_furigana_field(&anki, &furigana_html, &clip_media_file_name, &mut fields);
+            }
+            Err(error) => furigana_problem = Some(error),
         }
     }
 
@@ -646,17 +665,27 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             // The card exists either way, but media the user expected and did not get has
             // to be said out loud — silently dropping it would report a partial result as a
             // whole one.
-            message: match (screenshot_problem, video_problem) {
-                (None, None) => format!("Mined sentence into Anki note {note_id}."),
-                (Some(problem), None) => format!(
-                    "Mined sentence into Anki note {note_id}, without a screenshot: {problem}."
-                ),
-                (None, Some(problem)) => format!(
-                    "Mined sentence into Anki note {note_id}, without a video clip: {problem}."
-                ),
-                (Some(shot), Some(video)) => format!(
-                    "Mined sentence into Anki note {note_id}, without a screenshot ({shot})                      or a video clip ({video})."
-                ),
+            // Listed rather than matched pair by pair: there are three optional parts now,
+            // and a match over every combination grows as the product of them — which is
+            // how a fourth would end up quietly omitted from one arm.
+            message: {
+                let missing: Vec<String> = [
+                    screenshot_problem.map(|problem| format!("a screenshot ({problem})")),
+                    video_problem.map(|problem| format!("a video clip ({problem})")),
+                    furigana_problem.map(|problem| format!("furigana ({problem})")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+
+                if missing.is_empty() {
+                    format!("Mined sentence into Anki note {note_id}.")
+                } else {
+                    format!(
+                        "Mined sentence into Anki note {note_id}, without {}.",
+                        missing.join(", "),
+                    )
+                }
             },
             note_id: Some(note_id),
         },
