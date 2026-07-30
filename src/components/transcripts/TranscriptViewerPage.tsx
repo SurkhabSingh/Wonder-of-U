@@ -374,17 +374,23 @@ export function TranscriptViewerPage({
     changeSignature,
   });
 
-  // A re-transcribe in the same language overwrites the same sidecar paths, so
-  // `changeSignature` is unchanged and the fetch effect won't re-fire on its own. Force a
-  // reload when this recording's re-transcription finishes, so the viewer shows the new
-  // transcript rather than the stale one.
-  const wasReTranscribingRef = useRef(false);
+  // `changeSignature` is built from sidecar PATHS, and every writer here overwrites the
+  // path it already used — so a re-run is invisible to it by construction. That was known
+  // for re-transcription and handled; re-translation has exactly the same shape and was
+  // not, which is why a successful re-translate left the previous translation on screen.
+  // The first translation did update, because the path went from null to set.
+  //
+  // So this watches every writer at once rather than growing a ref per writer: any work
+  // that can rewrite this recording's text forces the re-read as it finishes, and a
+  // future writer joins by being named in this one expression.
+  const isRewritingText = isReTranscribing || isReTranslating;
+  const wasRewritingTextRef = useRef(false);
   useEffect(() => {
-    if (wasReTranscribingRef.current && !isReTranscribing) {
+    if (wasRewritingTextRef.current && !isRewritingText) {
       reload();
     }
-    wasReTranscribingRef.current = isReTranscribing;
-  }, [isReTranscribing, reload]);
+    wasRewritingTextRef.current = isRewritingText;
+  }, [isRewritingText, reload]);
 
   // Whole-file playback for this recording, driven by the compact top bar.
   // Gated on audioDeleted below so a transcript-only entry never tries to load.
