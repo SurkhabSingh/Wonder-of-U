@@ -85,6 +85,14 @@ function App() {
     toast.success(message, { duration: 3500 });
   }
 
+  // Errors from the video library are notices about one action, not conditions of the app.
+  // As cards they sat on the page until something else replaced them; as a toast the report
+  // arrives, can be dismissed, and leaves. Longer than a success because a failure is worth
+  // reading.
+  function showError(message: string) {
+    toast.error(message, { duration: 5000 });
+  }
+
   // Deep-link into the single Settings page and scroll a specific section into
   // view. Used by the Setup checklist rows and by post-download navigation.
   const openSettingsSection = useCallback((section: SettingsSection) => {
@@ -217,20 +225,17 @@ function App() {
         if (watch.snapshot.path === videoPath) {
           await watchSubtitles.load(videoPath, generated.path, null);
         }
-        setWatchSyncResult({
-          ok: true,
-          message: `${generated.cueCount} lines written to ${fileNameFromPath(
+        showSuccess(
+          `${generated.cueCount} lines written to ${fileNameFromPath(
             generated.path,
-          )}. Sync it if the timings look off.`,
-        });
+          )}. Realign it if the timings look off.`,
+        );
       } catch (caught) {
-        setWatchSyncResult({
-          ok: false,
-          message:
-            caught instanceof Error
-              ? caught.message
-              : String(caught ?? "Subtitles could not be generated."),
-        });
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "Subtitles could not be generated."),
+        );
       } finally {
         setIsGeneratingSubtitles(false);
         setGeneratingPath(null);
@@ -330,24 +335,31 @@ function App() {
         );
         // The backend has already repointed the mapping; this refreshes the list from it.
         applyBootstrap(await invoke<AppBootstrap>("get_app_bootstrap"));
-        setWatchSyncResult({
-          ok: true,
-          message: `Realigned as ${fileNameFromPath(synced.path)}.${
+        showSuccess(
+          `Realigned as ${fileNameFromPath(synced.path)}.${
             synced.summary ? ` ${synced.summary}` : ""
           }`,
-        });
+        );
       } catch (caught) {
-        setWatchSyncResult({
-          ok: false,
-          message:
-            caught instanceof Error ? caught.message : String(caught ?? "Realign failed."),
-        });
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The subtitles could not be realigned."),
+        );
       } finally {
         setIsSyncingSubtitles(false);
       }
     },
     [applyBootstrap, watchedVideos],
   );
+
+  useEffect(() => {
+    if (watch.error) {
+      showError(watch.error);
+    }
+    // Deliberately keyed on the message only: the same failure twice in a row is two
+    // attempts and deserves to be reported twice.
+  }, [watch.error]);
 
   const addWatchedVideo = useCallback(
     async (videoPath: string) => {
@@ -356,12 +368,14 @@ function App() {
           await invoke<AppBootstrap>("add_watched_video", { videoPath }),
         );
       } catch (caught) {
-        setLoadError(
-          caught instanceof Error ? caught.message : String(caught ?? "Add failed."),
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The video could not be added."),
         );
       }
     },
-    [applyBootstrap, setLoadError],
+    [applyBootstrap],
   );
 
   const setWatchedVideoSubtitle = useCallback(
@@ -375,12 +389,14 @@ function App() {
           }),
         );
       } catch (caught) {
-        setLoadError(
-          caught instanceof Error ? caught.message : String(caught ?? "Save failed."),
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The subtitle could not be saved."),
         );
       }
     },
-    [applyBootstrap, setLoadError],
+    [applyBootstrap],
   );
 
   const forgetWatchedVideo = useCallback(
@@ -403,12 +419,14 @@ function App() {
           await invoke<AppBootstrap>("forget_watched_video", { videoPath }),
         );
       } catch (caught) {
-        setLoadError(
-          caught instanceof Error ? caught.message : String(caught ?? "Remove failed."),
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The video could not be removed."),
         );
       }
     },
-    [applyBootstrap, confirmDialog, setLoadError],
+    [applyBootstrap, confirmDialog],
   );
 
   const syncWatchSubtitles = useCallback(async () => {
@@ -904,7 +922,6 @@ function App() {
             <WatchPage
               snapshot={watch.snapshot}
               startingPath={watch.startingPath}
-              error={watch.error}
               onStart={(videoPath, subtitlePath) => {
                 setWatchMinedKeys(new Set());
                 setWatchSubtitlePath(subtitlePath);

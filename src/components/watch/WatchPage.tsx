@@ -48,7 +48,6 @@ const PADDING_OPTIONS = [
 export function WatchPage({
   snapshot,
   startingPath,
-  error,
   onStart,
   onStop,
   onMine,
@@ -95,7 +94,6 @@ export function WatchPage({
   snapshot: WatchSnapshot;
   // The video being opened, so only its row says so.
   startingPath: string | null;
-  error: string | null;
   onStart: (videoPath: string, subtitlePath: string | null) => void;
   onStop: () => void;
   onMine: () => void;
@@ -231,12 +229,6 @@ export function WatchPage({
             startingPath={startingPath}
             searchQuery={searchQuery}
           />
-
-          {error ? (
-            <div className="update-card error">
-              <strong>{error}</strong>
-            </div>
-          ) : null}
         </article>
       </div>
     );
