@@ -628,6 +628,9 @@ function App() {
   const transcriptionQueue = useTranscriptionQueue({
     applyBootstrap,
     persistSettingsIfNeeded,
+    // A refusal — the whisper slot already taken, the engine not ready — used to reach the
+    // user only as a "failed" chip with the reason in a tooltip.
+    onFailure: showWarning,
   });
 
   // Adapt the shared `(filePaths, force)` action shape the Transcribe buttons use

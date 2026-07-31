@@ -261,8 +261,9 @@ input::placeholder {
   color: var(--text-muted) !important;
 }
 
+/* Colour only on hover, no fill. The button sits at the toast's very corner, so a
+   background paints over the rounded edge and spills past it. */
 .app-toast [data-close-button]:hover {
-  background: var(--surface-active) !important;
   color: var(--text-strong) !important;
 }
 
