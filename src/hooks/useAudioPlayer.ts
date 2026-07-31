@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { RecentRecording } from "../types";
 
 // The half-open time window of a per-sentence playback. `null` when nothing is
@@ -40,12 +40,7 @@ const INITIAL_STATE: AudioPlayerState = {
 
 export type AudioPlayer = AudioPlayerState & {
   playRecording: (recording: RecentRecording) => void;
-  playSegment: (
-    recording: RecentRecording,
-    startMs: number,
-    endMs: number,
-    paddingMs?: number,
-  ) => void;
+  playSegment: (recording: RecentRecording, startMs: number, endMs: number) => void;
   toggle: () => void;
   pause: () => void;
   seekMs: (ms: number) => void;
@@ -71,6 +66,13 @@ export function useAudioPlayer(): AudioPlayer {
   // The path currently attached to the element, so playSegment can decide
   // whether it needs to reload the source or can seek the loaded track.
   const loadedPathRef = useRef<string | null>(null);
+  // Cutting a preview clip is asynchronous, so a click while one is being cut has to be
+  // able to abandon it — otherwise the slower cut would win and play the wrong sentence.
+  const activeSegmentRequestRef = useRef(0);
+  // Where a playing preview clip sits in the recording. The element's own clock starts at
+  // zero for the clip, so without this the transport would jump to the beginning of the
+  // file whenever a sentence played.
+  const clipOffsetMsRef = useRef<number | null>(null);
   // The chosen playback speed, mirrored in a ref so the once-registered
   // loadedmetadata handler can re-apply it after a fresh src resets the element to 1.
   const rateRef = useRef(1);
@@ -88,7 +90,9 @@ export function useAudioPlayer(): AudioPlayer {
       // Setting a fresh `src` resets playbackRate to 1; re-apply the chosen speed.
       audio.playbackRate = rateRef.current;
       const seconds = audio.duration;
-      if (Number.isFinite(seconds) && seconds > 0) {
+      // A preview clip's duration is the sentence's, not the recording's — adopting it would
+      // shrink the transport to a few seconds.
+      if (clipOffsetMsRef.current === null && Number.isFinite(seconds) && seconds > 0) {
         setState((prev) => ({ ...prev, durationMs: Math.round(seconds * 1000) }));
       }
       const pending = pendingSeekMsRef.current;
@@ -126,7 +130,9 @@ export function useAudioPlayer(): AudioPlayer {
       }
       setState((prev) => ({
         ...prev,
-        currentTimeMs: Math.round(audio.currentTime * 1000),
+        currentTimeMs: Math.round(
+          (clipOffsetMsRef.current ?? 0) + audio.currentTime * 1000,
+        ),
       }));
     };
     const handleEnded = () => {
@@ -190,6 +196,10 @@ export function useAudioPlayer(): AudioPlayer {
     if (recording.audioDeleted) {
       return;
     }
+    // Whole-file playback: no clip is loaded, so the transport reads the element directly
+    // again, and a preview still being cut must not take over when it arrives.
+    clipOffsetMsRef.current = null;
+    activeSegmentRequestRef.current += 1;
     const audio = audioRef.current;
     if (!audio) {
       return;
@@ -218,7 +228,7 @@ export function useAudioPlayer(): AudioPlayer {
   }, []);
 
   const playSegment = useCallback(
-    (recording: RecentRecording, startMs: number, endMs: number, paddingMs?: number) => {
+    (recording: RecentRecording, startMs: number, endMs: number) => {
       // Never load audio for a recording whose local file has been removed.
       if (recording.audioDeleted) {
         return;
@@ -227,50 +237,59 @@ export function useAudioPlayer(): AudioPlayer {
       if (!audio) {
         return;
       }
-      // The same padding the miner cuts with, on both sides — so playing a sentence
-      // previews the card it would make rather than approximating it.
+      // Cutting is asynchronous, so a second click must be able to abandon the first.
+      const requestId = activeSegmentRequestRef.current + 1;
+      activeSegmentRequestRef.current = requestId;
+
+      // Play the very clip a mine would cut, rather than seeking the original file.
       //
-      // This was a fixed 150ms lead-in, chosen to cover the 30ms of speech padding
-      // whisper's VAD leaves at a region edge. It turned out the timestamps did not need
-      // covering: with the padding setting at 0 a mined clip is exact, and a lead-in only
-      // this side applied made playback and the card disagree about the same sentence.
-      // Reading the one setting means they cannot disagree again.
-      const padding = Math.max(0, paddingMs ?? 0);
-      const seekMs = Math.max(0, startMs - padding);
-      const startSeconds = seekMs / 1000;
-      boundaryMsRef.current = endMs + padding;
-      segmentStartMsRef.current = seekMs;
+      // Seeking was never the problem — measured on a real recording, a sentence spanning
+      // 8.08–11.32s started exactly where it should. The `currentTime` boundary was: on a
+      // variable-bitrate MP3 that clock runs ahead of the real position, so playback stopped
+      // around 9.80s and the row played "皆さんはカフェが" where the card held
+      // "皆さんはカフェが好きですか?". Giving playback the miner's padding did not fix it,
+      // because the two were never performing the same operation.
+      //
+      // Now there is only one operation. The backend cuts with ffmpeg exactly as it does for
+      // a card — same padding, same arguments — and this plays the result whole. There is no
+      // boundary to get wrong, because the file IS the sentence, and a preview cannot
+      // disagree with the card it previews.
+      boundaryMsRef.current = null;
+      segmentStartMsRef.current = null;
+      setState((prev) => ({
+        ...prev,
+        filePath: recording.filePath,
+        fileName: recording.fileName,
+        currentTimeMs: startMs,
+        durationMs: recording.durationMs,
+        activeSegment: { startMs, endMs },
+      }));
 
-      if (loadedPathRef.current !== recording.filePath || !audio.src) {
-        // Fresh source: the seek can't land until metadata is known, so defer
-        // it to loadedmetadata.
-        loadedPathRef.current = recording.filePath;
-        pendingSeekMsRef.current = seekMs;
-        audio.src = convertFileSrc(recording.filePath);
-        setState((prev) => ({
-          ...prev,
-          filePath: recording.filePath,
-          fileName: recording.fileName,
-          isPlaying: false,
-          currentTimeMs: startMs,
-          durationMs: recording.durationMs,
-          activeSegment: { startMs, endMs },
-        }));
-      } else {
-        // Same track already loaded — seek immediately.
-        pendingSeekMsRef.current = null;
-        audio.currentTime = startSeconds;
-        setState((prev) => ({
-          ...prev,
-          currentTimeMs: startMs,
-          activeSegment: { startMs, endMs },
-        }));
-      }
-
-      void audio.play().catch(() => {
-        boundaryMsRef.current = null;
-        setState((prev) => ({ ...prev, isPlaying: false, activeSegment: null }));
-      });
+      void (async () => {
+        try {
+          const clipPath = await invoke<string>("preview_segment_clip", {
+            filePath: recording.filePath,
+            startMs,
+            endMs,
+          });
+          // A newer click while this was cutting: that one owns playback now.
+          if (activeSegmentRequestRef.current !== requestId) {
+            return;
+          }
+          // The clip is its own file, so the element is never left pointing at the whole
+          // recording — `playRecording` reloads it when whole-file playback resumes.
+          loadedPathRef.current = null;
+          pendingSeekMsRef.current = null;
+          clipOffsetMsRef.current = startMs;
+          audio.src = convertFileSrc(clipPath);
+          audio.playbackRate = rateRef.current;
+          await audio.play();
+        } catch {
+          if (activeSegmentRequestRef.current === requestId) {
+            setState((prev) => ({ ...prev, isPlaying: false, activeSegment: null }));
+          }
+        }
+      })();
     },
     [],
   );

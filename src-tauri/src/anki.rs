@@ -6,6 +6,7 @@ mod furigana;
 mod furigana_update;
 mod lookup;
 mod media_temp;
+pub(crate) use media_temp::mining_temp_dir;
 mod mine;
 mod mined;
 mod model;
@@ -17,7 +18,7 @@ pub(crate) use self::{
     catalog::load_anki_catalog_inner,
     furigana_update::add_furigana_to_anki_inner,
     lookup::{lookup_term_inner, LookupResult},
-    mine::{hide_command_window, mine_segment_to_anki_inner, mine_watched_line_inner},
+    mine::{hide_command_window, mine_segment_to_anki_inner, preview_segment_clip_inner, mine_watched_line_inner},
     mined::load_mined_sentences_inner,
     model::create_recommended_note_type_inner,
     push::{push_recordings_to_anki_deck_inner, push_recordings_to_anki_inner},

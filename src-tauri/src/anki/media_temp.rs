@@ -14,7 +14,7 @@ use std::{
 /// The directory is created on demand and never cleaned up as a whole: it is shared with
 /// whatever else the OS puts there, and the individual files remove themselves (see
 /// `TempMedia`).
-pub(super) fn mining_temp_dir() -> Result<PathBuf, String> {
+pub(crate) fn mining_temp_dir() -> Result<PathBuf, String> {
     let directory = std::env::temp_dir().join("wonder-of-u");
     fs::create_dir_all(&directory)
         .map_err(|error| format!("Could not create a temporary folder for the clip: {error}"))?;
@@ -30,16 +30,28 @@ pub(super) fn mining_temp_dir() -> Result<PathBuf, String> {
 /// panic. Storing the file with Anki does not consume the guard, because Anki copies the
 /// bytes into its own collection and the original is scratch either way.
 pub(super) struct TempMedia {
-    path: PathBuf,
+    /// `None` once `keep` has taken it, which is what disarms the drop.
+    path: Option<PathBuf>,
 }
 
 impl TempMedia {
     pub(super) fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self { path: Some(path) }
     }
 
     pub(super) fn path(&self) -> &Path {
-        &self.path
+        // Only `keep` empties this, and it consumes the guard, so a caller cannot hold a
+        // reference to a taken path.
+        self.path.as_deref().unwrap_or(Path::new(""))
+    }
+
+    /// Hand the file to a caller that outlives the mine, and stop guarding it.
+    ///
+    /// A mined clip is scratch — Anki copies the bytes and the original is disposable. A
+    /// preview is not: the webview has to still be able to read it after this returns, so
+    /// that one caller takes ownership and is responsible for the cleanup instead.
+    pub(super) fn keep(mut self) -> PathBuf {
+        self.path.take().unwrap_or_default()
     }
 }
 
@@ -47,7 +59,9 @@ impl Drop for TempMedia {
     fn drop(&mut self) {
         // Best effort by design. A file that cannot be removed is a stray in the OS temp
         // directory, which is not worth failing a mine that has otherwise succeeded.
-        let _ = fs::remove_file(&self.path);
+        if let Some(path) = &self.path {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 

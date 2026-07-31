@@ -311,7 +311,6 @@ export function TranscriptViewerPage({
   onCancelTranscription,
   lastTranscriptionOutcome,
   transcriptionLanguage,
-  clipPaddingMs,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -359,9 +358,6 @@ export function TranscriptViewerPage({
   /// whichever variant happened to be first in the list, which is how the two came to
   /// disagree without either being obviously wrong.
   transcriptionLanguage: string;
-  // Milliseconds the miner pads a clip by on each side. Playback uses the same value so a
-  // previewed sentence and the card made from it cannot drift apart.
-  clipPaddingMs: number;
   // Set when the most recent transcription of this recording ended badly, so the viewer
   // can say which of "you cancelled it", "it failed" and "there is no transcript" the
   // empty screen actually means. Null when the last run succeeded or none has run.
@@ -421,8 +417,9 @@ export function TranscriptViewerPage({
   const handlePlaySegment = recording.audioDeleted
     ? undefined
     : (startMs: number, endMs: number) =>
-        // The miner's own padding, so what you hear here is what the card will hold.
-        player.playSegment(recording, startMs, endMs, clipPaddingMs);
+        // The backend cuts this with the miner's own padding, so what plays here is the
+        // clip the card would hold — not an approximation of it.
+        player.playSegment(recording, startMs, endMs);
   const activeSegment = isActiveTrack ? player.activeSegment : null;
 
   const transcripts = data?.transcripts ?? [];

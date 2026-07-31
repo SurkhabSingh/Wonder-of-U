@@ -128,6 +128,7 @@ pub fn run() {
             push_recordings_to_anki,
             push_recordings_to_anki_deck,
             mine_segment_to_anki,
+            preview_segment_clip,
             add_furigana_to_anki,
             translate_recordings,
             transcribe_recordings,
@@ -170,13 +171,22 @@ fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
         // also holds the whisper and ffmpeg binaries and the ggml models, and nothing the
         // webview does should be able to read those. The thumbnails subfolder holds only
         // stills this app generated.
-        vec![
+        let mut directories = vec![
             guard.settings.output_directory.clone(),
             Path::new(&guard.settings.asset_directory)
                 .join("thumbnails")
                 .display()
                 .to_string(),
-        ]
+        ];
+        drop(guard);
+
+        // The scratch folder mined clips are cut into. The transcript viewer plays a sentence
+        // by playing the very clip a mine would make, so the webview has to be able to read
+        // it — and everything in there is a few seconds of audio this app just produced.
+        if let Ok(clips) = anki::mining_temp_dir() {
+            directories.push(clips.display().to_string());
+        }
+        directories
     };
 
     let scope = app.asset_protocol_scope();
