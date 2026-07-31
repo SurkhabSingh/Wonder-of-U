@@ -2,7 +2,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
 };
 
 #[cfg(target_os = "windows")]
@@ -784,64 +783,6 @@ pub(crate) fn mine_watched_line_inner<R: Runtime>(
         items: vec![item],
         bootstrap: build_app_bootstrap(app)?,
     })
-}
-
-/// The previous preview clip, deleted when the next one is cut.
-///
-/// One stray file at most, and only while the app runs. The clip has to outlive this call —
-/// the webview reads it afterwards — so it cannot be a drop guard, and deleting it on the
-/// next request is the simplest lifetime that is still bounded.
-static LAST_PREVIEW_CLIP: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-/// Cut the exact clip a mine would produce, for the viewer to play.
-///
-/// The viewer used to seek the original file with the audio element and stop on a
-/// `currentTime` boundary. On a variable-bitrate MP3 that clock does not track the real
-/// position: measured on a real recording, a sentence spanning 8.08–11.32s started correctly
-/// and stopped around 9.80s, so the row played "皆さんはカフェが" where the card held
-/// "皆さんはカフェが好きですか?". Matching the two by giving playback the same padding was not
-/// enough, because the two were never doing the same thing.
-///
-/// Now they are: this is the miner's own slice, with the miner's own padding. A preview and
-/// the card it previews cannot disagree, because there is only one cut.
-pub(crate) fn preview_segment_clip_inner<R: Runtime>(
-    app: &AppHandle<R>,
-    file_path: String,
-    start_ms: u64,
-    end_ms: u64,
-) -> Result<String, String> {
-    let settings = {
-        let persisted_state = app.state::<SharedPersistedState>();
-        let persisted = persisted_state
-            .0
-            .lock()
-            .map_err(|_| "Could not read the app settings.".to_string())?;
-        persisted.settings.clone()
-    };
-
-    let ffmpeg_path = detect_local_ffmpeg(&settings)
-        .executable_path
-        .map(PathBuf::from)
-        .ok_or_else(|| "FFmpeg is required to play a sentence; install it in Setup.".to_string())?;
-
-    let clip = slice_segment_clip(
-        &ffmpeg_path,
-        Path::new(&file_path),
-        start_ms,
-        end_ms,
-        ClipPadding::symmetric(settings.anki.clip_padding_ms),
-    )?;
-    let kept = clip.keep();
-
-    // Swap in the new clip and drop the one before it. Done after the cut succeeded, so a
-    // failed preview leaves the previous file alone rather than deleting what still plays.
-    if let Ok(mut last) = LAST_PREVIEW_CLIP.lock() {
-        if let Some(previous) = last.replace(kept.clone()) {
-            let _ = fs::remove_file(previous);
-        }
-    }
-
-    Ok(kept.display().to_string())
 }
 
 pub(crate) fn mine_segment_to_anki_inner<R: Runtime>(

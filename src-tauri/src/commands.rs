@@ -11,9 +11,7 @@ use crate::{
     watch::transcribe::{generate_watch_subtitles_inner, GeneratedSubtitles},
     app_types::SharedPersistedState,
     runtime_assets::{detect_local_ffmpeg, detect_local_mpv},
-    anki::{
-        lookup_term_inner, mine_watched_line_inner, preview_segment_clip_inner, LookupResult,
-    },
+    anki::{lookup_term_inner, mine_watched_line_inner, LookupResult},
     jimaku::{
         download_file, entry_files, sanitize_subtitle_file_name, search_entries, JimakuEntry,
         JimakuFile,
@@ -394,21 +392,6 @@ pub(crate) struct SubtitleSyncResult {
 ///
 /// For the harder fault, where the drift varies across the episode and no single offset
 /// works. Writes beside the original rather than over it.
-/// Cut the clip the viewer plays for one sentence — the same slice a mine makes.
-#[tauri::command]
-pub(crate) async fn preview_segment_clip(
-    app: AppHandle,
-    file_path: String,
-    start_ms: u64,
-    end_ms: u64,
-) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        preview_segment_clip_inner(&app, file_path, start_ms, end_ms)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
 /// Remember a video, with a thumbnail and its duration, before it has ever been played.
 ///
 /// Adding is deliberately separate from playing: a video you have queued up but not started is
