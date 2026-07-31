@@ -51,13 +51,13 @@ pub(crate) fn hide_command_window(command: &mut Command) {
 /// value cannot serve both. `clip_padding_ms` in settings is the default for both sides;
 /// the subtitle list can override per mine.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ClipPadding {
+pub(crate) struct ClipPadding {
     pub(super) before_ms: u64,
     pub(super) after_ms: u64,
 }
 
 impl ClipPadding {
-    fn symmetric(padding_ms: u64) -> Self {
+    pub(crate) fn symmetric(padding_ms: u64) -> Self {
         Self {
             before_ms: padding_ms,
             after_ms: padding_ms,
@@ -75,7 +75,7 @@ fn format_ffmpeg_timestamp(ms: u64) -> String {
 /// out of `input` into `output`. Kept pure so the ordering and timestamp
 /// formatting can be unit-tested without spawning ffmpeg. `-ss`/`-to` come before
 /// `-i` so ffmpeg seeks by keyframe before decoding.
-fn slice_ffmpeg_args(
+pub(crate) fn slice_ffmpeg_args(
     start_ms: u64,
     end_ms: u64,
     padding: ClipPadding,

@@ -422,7 +422,11 @@ export function TranscriptViewerPage({
     ? undefined
     : (startMs: number, endMs: number) =>
         // The miner's own padding, so what you hear here is what the card will hold.
-        player.playSegment(recording, startMs, endMs, clipPaddingMs);
+        // A sentence that cannot be cut says so rather than falling back to the
+        // inaccurate seek it replaced.
+        player.playSegment(recording, startMs, endMs, clipPaddingMs, (message) =>
+          toast.error(message),
+        );
   const activeSegment = isActiveTrack ? player.activeSegment : null;
 
   const transcripts = data?.transcripts ?? [];

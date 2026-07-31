@@ -777,6 +777,31 @@ pub(crate) async fn push_recordings_to_anki_deck(
     .map_err(|error| error.to_string())?
 }
 
+/// Cuts the sentence the viewer is about to play, and answers with the clip's path.
+///
+/// Playback cannot seek a variable-bitrate MP3 accurately — the WebView interpolates between
+/// 100 index points and lands up to a second out — so the sentence is cut with ffmpeg, which
+/// is exact, and played whole.
+#[tauri::command]
+pub(crate) async fn preview_segment_clip(
+    app: AppHandle,
+    file_path: String,
+    start_ms: u64,
+    end_ms: u64,
+) -> Result<String, String> {
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::segment_preview::preview_segment_clip_inner(
+            &app_for_blocking,
+            file_path,
+            start_ms,
+            end_ms,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub(crate) async fn mine_segment_to_anki(
     app: AppHandle,

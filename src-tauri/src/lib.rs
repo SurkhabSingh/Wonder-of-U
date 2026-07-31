@@ -14,6 +14,7 @@ mod recording_library;
 mod recording_session;
 mod runtime_assets;
 mod scanner_overlay;
+mod segment_preview;
 mod settings;
 mod subtitles;
 mod transcription;
@@ -128,6 +129,7 @@ pub fn run() {
             push_recordings_to_anki,
             push_recordings_to_anki_deck,
             mine_segment_to_anki,
+            preview_segment_clip,
             add_furigana_to_anki,
             translate_recordings,
             transcribe_recordings,
@@ -163,20 +165,28 @@ fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
             }
         };
 
-        // Two directories, and no more. Recordings stream to the audio player, and video
-        // thumbnails are drawn in the video library.
+        // Three directories, and no more. Recordings stream to the audio player, video
+        // thumbnails are drawn in the video library, and sentence previews are the clips
+        // playback plays instead of seeking a VBR file it cannot seek accurately.
         //
         // Deliberately `{asset}/thumbnails` and NOT the asset directory itself: that folder
         // also holds the whisper and ffmpeg binaries and the ggml models, and nothing the
         // webview does should be able to read those. The thumbnails subfolder holds only
         // stills this app generated.
-        vec![
+        //
+        // The preview folder is likewise its own, never the miner's scratch directory — the
+        // webview has no business reading files a mine is about to hand to Anki.
+        let mut directories = vec![
             guard.settings.output_directory.clone(),
             Path::new(&guard.settings.asset_directory)
                 .join("thumbnails")
                 .display()
                 .to_string(),
-        ]
+        ];
+        if let Some(previews) = crate::segment_preview::preview_scope_dir() {
+            directories.push(previews.display().to_string());
+        }
+        directories
     };
 
     let scope = app.asset_protocol_scope();
