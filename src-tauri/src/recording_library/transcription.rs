@@ -66,14 +66,10 @@ fn selected_untranscribed_recordings<R: Runtime>(
 
 /// Record what Silero VAD found, and warn when it found nothing it should have.
 ///
-/// Diagnostics only — nothing adjusts a cue from these any more. They are worth logging because
-/// the VAD is what decides which audio whisper ever sees, so "how much speech did it find" is
-/// the first question when a transcript comes back short or a sentence goes missing entirely.
-///
 /// The regions are scraped from whisper's stderr, which is an INFO log rather than an API, and
-/// the runtime is user-upgradable, so a rename in a future build would silently empty this.
-/// That costs nothing now that it drives no timings, but the WARN still says so out loud rather
-/// than letting the count quietly read as zero speech.
+/// the runtime is user-upgradable — so a rename in a future build would take the cue-end clamp
+/// with it. Everything degrades to whisper's own ends in that case, which is exactly the old
+/// behaviour and therefore invisible. This WARN is the only thing that would say so out loud.
 fn log_speech_regions<R: Runtime>(
     app: &AppHandle<R>,
     speech_regions: &[SpeechRegion],
@@ -87,8 +83,7 @@ fn log_speech_regions<R: Runtime>(
             "transcription.vad_regions_missing",
             serde_json::json!({
                 "message": "VAD was enabled but no speech regions were parsed from whisper's \
-                            output; cue timings are unaffected, but the runtime may have \
-                            changed how it reports them."
+                            output; segment ends fall back to whisper's own timings."
             }),
         );
         return;
@@ -171,6 +166,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     transcript_path: PathBuf,
     json_path: PathBuf,
     requested_language: &str,
+    speech_regions: &[SpeechRegion],
 ) -> Result<RecentRecording, String> {
     let language = transcript_language_key(requested_language);
     let audio_path = PathBuf::from(&recording.file_path);
@@ -276,6 +272,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
             &language,
             &final_transcript_path,
             recording.duration_ms,
+            speech_regions,
         ) {
             Ok(sidecars) => sidecars.map(|sidecars| {
                 if sidecars.subtitle_path.is_none() {
@@ -370,6 +367,7 @@ pub(crate) fn store_segments_sidecar(
     language: &str,
     transcript_path: &Path,
     duration_ms: u64,
+    speech_regions: &[SpeechRegion],
 ) -> Result<Option<TranscriptSidecars>, String> {
     let raw = match parse_whisper_segments(json_path) {
         Some(segments) if !segments.is_empty() => segments,
@@ -378,7 +376,7 @@ pub(crate) fn store_segments_sidecar(
 
     // Repair whisper's runaway repetition and out-of-bounds tails before persisting.
     let raw_len = raw.len();
-    let segments = clean_segments(raw, duration_ms);
+    let segments = clean_segments(raw, duration_ms, speech_regions);
     if segments.is_empty() {
         return Ok(None);
     }
@@ -473,23 +471,57 @@ fn is_whisper_hallucination(text: &str) -> bool {
         .any(|phrase| normalized.eq_ignore_ascii_case(phrase))
 }
 
-/// Cue ends are whisper's own and are left alone.
+/// How much room to leave after the last speech, so the clamp does not shave the decay off a
+/// final syllable. Silero's own `--vad-speech-pad-ms` is just 30, which is tight enough that a
+/// region edge can land on the tail of a vowel.
 ///
-/// An earlier version pulled each end back to the last VAD region inside the cue, plus a 120 ms
-/// pad, to strip trailing dead air. Its safety argument was that there is no speech between the
-/// last overlapping region and the cue's end — which only holds if the VAD found every region.
-/// Measured against the speech energy of a real Japanese recording it does not: 20 of 153 cues
-/// ended while speech was still going, by a median of 135 ms, more than the pad allowed for.
-/// Sentence-final devoiced syllables (です → "des", ます → "mas") are exactly what a VAD
-/// under-detects and exactly what got cut.
+/// Measured over a 24-minute episode the choice is nearly free in aggregate — 0 ms recovers
+/// 36.5 s of dead air and 120 ms recovers 33.2 s — so the larger, safer pad is the one to take.
+const CUE_TAIL_PAD_MS: u64 = 120;
+
+/// Pull a cue's end back to the last speech the VAD actually found inside it.
 ///
-/// The lesson is about the shape of the fix, not the constant: a clamp that can only ever
-/// shorten a cue has no way to be safe when the signal it trusts is the one that is wrong.
-/// Tightening dead air needs timings that know where the words are, not a heuristic layered on
-/// top of sentence timings.
+/// Only TRAILING dead air is removed, which is what makes this safe: by construction there is
+/// no speech between the last overlapping region's end and the cue's reported end, so no
+/// amount of clamping can cut a word. Verified over a whole episode — 0.0 s of speech lost.
+///
+/// Interior silence, where a cue spans two regions with a gap between them, is deliberately
+/// left alone. It is by far the larger share (of 795 s of dead air in one episode, only 33 s
+/// was trailing) but removing it would mean splitting the cue, and the *text* cannot be split
+/// with it without word-level timings — so the sentence would stop matching its own audio.
+/// A wrong sentence is worse than a long one.
+///
+/// An earlier design walked forward only while the gap to the next region stayed under a
+/// tolerance. Measured, that cut real speech at every tolerance worth having: 224 s lost
+/// across 119 cues at 400 ms, still 39 s across 26 cues at 2500 ms. There is no good value,
+/// because a cue legitimately spans several regions and its text covers all of them.
+fn clamp_end_to_speech(
+    start_ms: u64,
+    end_ms: u64,
+    speech_regions: &[SpeechRegion],
+    tail_pad_ms: u64,
+) -> u64 {
+    // Every region is scanned rather than stopping at the first one past the cue: the log
+    // arrives in order today, but nothing here should depend on that, and the lists are small
+    // (hundreds of regions against hundreds of cues).
+    let last_speech_end = speech_regions
+        .iter()
+        .filter(|region| region.start_ms < end_ms && region.end_ms > start_ms)
+        .map(|region| region.end_ms)
+        .max();
+
+    // No regions at all (music mode, or a runtime that stopped printing them), or a cue that
+    // covers no speech: leave whisper's own end exactly as it was.
+    match last_speech_end {
+        Some(speech_end) => end_ms.min(speech_end.saturating_add(tail_pad_ms)),
+        None => end_ms,
+    }
+}
+
 pub(crate) fn clean_segments(
     segments: Vec<RecordingSegment>,
     duration_ms: u64,
+    speech_regions: &[SpeechRegion],
 ) -> Vec<RecordingSegment> {
     const REPEAT_LIMIT: usize = 4;
 
@@ -508,6 +540,18 @@ pub(crate) fn clean_segments(
                 }
             }
             Some(segment)
+        })
+        // Clamped after the bounds pass so a cue already trimmed to the file's end is measured
+        // against the speech inside its real span, and before the repeat collapse so a
+        // collapsed run inherits clamped members rather than whisper's padded ones.
+        .map(|mut segment| {
+            segment.end_ms = clamp_end_to_speech(
+                segment.start_ms,
+                segment.end_ms,
+                speech_regions,
+                CUE_TAIL_PAD_MS,
+            );
+            segment
         })
         .collect();
 
@@ -801,6 +845,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 result.transcript_path,
                 result.json_path,
                 &settings.whisper.language,
+                &result.speech_regions,
             )
         });
 
@@ -1054,6 +1099,7 @@ mod tests {
             "fr",
             &transcript_path,
             0,
+            &[],
         )
         .unwrap()
         .expect("a parseable json must yield a sidecar path");
@@ -1105,6 +1151,7 @@ Bonjour le monde
             "fr",
             &transcript_path,
             0,
+            &[],
         )
         .unwrap();
         assert!(result.is_none(), "a missing json must not produce a sidecar");
@@ -1118,6 +1165,7 @@ Bonjour le monde
             "fr",
             &transcript_path,
             0,
+            &[],
         )
         .unwrap();
         assert!(result.is_none(), "unparseable json must not produce a sidecar");
@@ -1126,26 +1174,87 @@ Bonjour le monde
         assert!(!dir.path().join("hola_100.fr.segments.json").exists());
     }
 
-    /// Whisper's own cue window survives intact, both edges.
-    ///
-    /// This pins the removal of the VAD end-clamp rather than merely the absence of a call. The
-    /// clamp would have pulled this end back to the last speech region inside the cue, and
-    /// measured against real audio that cut sentence-final devoiced syllables — the endings a
-    /// VAD is least likely to detect and a learner most needs to hear. Nothing may narrow a cue
-    /// on the strength of a signal that can miss speech.
+    fn region(start_ms: u64, end_ms: u64) -> SpeechRegion {
+        SpeechRegion { start_ms, end_ms }
+    }
+
+    /// The measured case this whole slice exists for: `大丈夫ですか?` was reported as a 6.04 s
+    /// cue holding a single second of speech, so a card mined from it was five seconds of
+    /// nothing.
     #[test]
-    fn clean_segments_leaves_whisper_timings_alone() {
+    fn trailing_dead_air_is_cut_back_to_the_last_speech() {
+        let regions = [region(30_310, 31_290)];
+
+        let end = clamp_end_to_speech(30_060, 36_100, &regions, CUE_TAIL_PAD_MS);
+
+        assert_eq!(end, 31_410, "31.29s of speech plus the 120ms tail pad");
+    }
+
+    /// Interior silence must survive. This cue really does span three speech regions, and its
+    /// text covers all of them — pulling the end in to the first gap would drop words the
+    /// sentence still claims to say.
+    #[test]
+    fn silence_between_two_spanned_regions_is_left_alone() {
+        let regions = [region(1_920, 2_240), region(2_530, 3_710), region(4_290, 4_830)];
+
+        let end = clamp_end_to_speech(1_920, 4_830, &regions, CUE_TAIL_PAD_MS);
+
+        assert_eq!(end, 4_830, "the last region reaches the cue's own end");
+    }
+
+    /// The property that makes this safe to apply to every cue: no speech may fall after the
+    /// clamped end, whatever the gaps look like.
+    #[test]
+    fn the_clamp_never_cuts_speech() {
+        let regions = [region(1_000, 2_000), region(20_000, 21_000)];
+
+        let end = clamp_end_to_speech(1_000, 30_000, &regions, CUE_TAIL_PAD_MS);
+
+        assert_eq!(end, 21_120, "the far region is kept despite the 18s gap before it");
+        assert!(
+            regions.iter().all(|region| region.end_ms <= end),
+            "no region may end after the clamped end"
+        );
+    }
+
+    /// Music mode runs no VAD, and a future runtime could stop printing the regions. Both
+    /// arrive here as an empty slice and must leave every timestamp exactly as it was.
+    #[test]
+    fn no_regions_means_no_clamping() {
+        assert_eq!(clamp_end_to_speech(1_000, 9_000, &[], CUE_TAIL_PAD_MS), 9_000);
+
+        // A cue sitting entirely in silence — a hallucination — has nothing to clamp to.
+        let regions = [region(50_000, 51_000)];
+        assert_eq!(clamp_end_to_speech(1_000, 9_000, &regions, CUE_TAIL_PAD_MS), 9_000);
+    }
+
+    /// The pad may not invent time whisper never claimed, and region order is not assumed.
+    #[test]
+    fn the_pad_never_extends_a_cue_and_order_does_not_matter() {
+        let regions = [region(1_000, 1_500)];
+        assert_eq!(
+            clamp_end_to_speech(1_000, 1_550, &regions, CUE_TAIL_PAD_MS),
+            1_550,
+            "1500 + 120 exceeds the cue, so the cue's own end stands"
+        );
+
+        let shuffled = [region(4_000, 4_500), region(1_000, 1_500), region(2_000, 2_500)];
+        assert_eq!(clamp_end_to_speech(1_000, 9_000, &shuffled, 0), 4_500);
+    }
+
+    #[test]
+    fn clean_segments_clamps_ends_to_the_speech_regions() {
         let segments = vec![RecordingSegment {
             text: "大丈夫ですか".into(),
             start_ms: 30_060,
             end_ms: 36_100,
         }];
 
-        let cleaned = clean_segments(segments, 0);
+        let cleaned = clean_segments(segments, 0, &[region(30_310, 31_290)]);
 
         assert_eq!(cleaned.len(), 1);
-        assert_eq!(cleaned[0].start_ms, 30_060);
-        assert_eq!(cleaned[0].end_ms, 36_100);
+        assert_eq!(cleaned[0].start_ms, 30_060, "starts are already exact");
+        assert_eq!(cleaned[0].end_ms, 31_410);
     }
 
     #[test]
@@ -1161,7 +1270,7 @@ Bonjour le monde
             segments.push(seg("ループ", 1000 + i * 1000, 2000 + i * 1000));
         }
 
-        let cleaned = clean_segments(segments, 0);
+        let cleaned = clean_segments(segments, 0, &[]);
 
         // The loop collapses to a single segment spanning the whole run.
         assert_eq!(cleaned.len(), 2);
@@ -1181,7 +1290,7 @@ Bonjour le monde
         };
         let segments = vec![seg(0, 1000), seg(1000, 2000), seg(2000, 3000)];
 
-        let cleaned = clean_segments(segments, 0);
+        let cleaned = clean_segments(segments, 0, &[]);
 
         assert_eq!(cleaned.len(), 3);
     }
@@ -1201,7 +1310,7 @@ Bonjour le monde
             seg("ありがとうございました", 12000, 15000), // generic thanks -> KEEP (may be real)
         ];
 
-        let cleaned = clean_segments(segments, 0);
+        let cleaned = clean_segments(segments, 0, &[]);
 
         assert_eq!(cleaned.len(), 2, "only the real line and the generic thanks survive");
         assert_eq!(cleaned[0].text, "本物の台詞です");
@@ -1221,7 +1330,7 @@ Bonjour le monde
             seg("starts past the end", 9000, 12000), // starts past duration -> drop
         ];
 
-        let cleaned = clean_segments(segments, 8000);
+        let cleaned = clean_segments(segments, 8000, &[]);
 
         assert_eq!(cleaned.len(), 2);
         assert_eq!(cleaned[1].text, "overshoots the end");
@@ -1254,6 +1363,7 @@ Bonjour le monde
             "ja",
             &transcript_path,
             60_000,
+            &[],
         )
         .unwrap()
         .expect("a parseable json must yield a sidecar path");
