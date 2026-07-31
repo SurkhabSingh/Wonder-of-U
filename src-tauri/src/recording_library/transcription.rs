@@ -376,7 +376,7 @@ pub(crate) fn store_segments_sidecar(
 
     // Repair whisper's runaway repetition and out-of-bounds tails before persisting.
     let raw_len = raw.len();
-    let segments = clean_segments(raw, duration_ms, envelope);
+    let segments = clean_segments(raw, duration_ms, CueTiming::TrimToSpeech(envelope));
     if segments.is_empty() {
         return Ok(None);
     }
@@ -518,10 +518,56 @@ fn trim_cue_to_speech(
     }
 }
 
+/// How much room the VAD clamp leaves after the last speech region. Silero's own
+/// `--vad-speech-pad-ms` is 30, tight enough that a region edge lands on the tail of a vowel.
+const CUE_TAIL_PAD_MS: u64 = 120;
+
+/// Pull a cue's end back to the last Silero speech region inside it.
+///
+/// This is the older rule, and it is kept for exactly one caller: generating subtitles for a
+/// watch session. It is not better — it cuts devoiced Japanese sentence endings, which is why
+/// the recording library no longer uses it. It is here because that path is verified working
+/// and the user asked for it frozen, and because the alternatives are both worse for it: the
+/// waveform trim moves cue STARTS, which is the one thing that would disturb subtitle sync,
+/// and dropping the rule entirely leaves each cue running to the next one, which bloats every
+/// card mined from a video.
+///
+/// Do not "unify" these two by deleting this. The divergence is the decision.
+fn clamp_end_to_vad_regions(start_ms: u64, end_ms: u64, speech_regions: &[SpeechRegion]) -> u64 {
+    // Every region is scanned rather than stopping at the first past the cue: the log arrives
+    // in order today, but nothing here should depend on that.
+    let last_speech_end = speech_regions
+        .iter()
+        .filter(|region| region.start_ms < end_ms && region.end_ms > start_ms)
+        .map(|region| region.end_ms)
+        .max();
+
+    // No regions at all (music mode, or a runtime that stopped printing them), or a cue
+    // covering no speech: leave whisper's own end exactly as it was.
+    match last_speech_end {
+        Some(speech_end) => end_ms.min(speech_end.saturating_add(CUE_TAIL_PAD_MS)),
+        None => end_ms,
+    }
+}
+
+/// Which rule decides a cue's boundaries.
+///
+/// An enum rather than an `Option` or a bool so the two callers have to say which they mean,
+/// and so the reason they differ has somewhere to live. They are NOT interchangeable: see
+/// `clamp_end_to_vad_regions` for why the watch path keeps the older one.
+pub(crate) enum CueTiming<'a> {
+    /// Pull both edges in to the speech in the waveform. What the recording library uses,
+    /// because a mined card is listened to and a few hundred ms of dead air is audible.
+    TrimToSpeech(Option<&'a SpeechEnvelope>),
+    /// Pull the end back to the last VAD region. What a watch session's generated subtitles
+    /// use, frozen deliberately.
+    ClampToVadRegions(&'a [SpeechRegion]),
+}
+
 pub(crate) fn clean_segments(
     segments: Vec<RecordingSegment>,
     duration_ms: u64,
-    envelope: Option<&SpeechEnvelope>,
+    timing: CueTiming<'_>,
 ) -> Vec<RecordingSegment> {
     const REPEAT_LIMIT: usize = 4;
 
@@ -545,14 +591,22 @@ pub(crate) fn clean_segments(
         // against the speech inside its real span, and before the repeat collapse so a
         // collapsed run inherits trimmed members rather than whisper's padded ones.
         .map(|mut segment| {
-            let (start_ms, end_ms) = trim_cue_to_speech(
-                segment.start_ms,
-                segment.end_ms,
-                envelope,
-                CUE_EDGE_PAD_MS,
-            );
-            segment.start_ms = start_ms;
-            segment.end_ms = end_ms;
+            match timing {
+                CueTiming::TrimToSpeech(envelope) => {
+                    let (start_ms, end_ms) = trim_cue_to_speech(
+                        segment.start_ms,
+                        segment.end_ms,
+                        envelope,
+                        CUE_EDGE_PAD_MS,
+                    );
+                    segment.start_ms = start_ms;
+                    segment.end_ms = end_ms;
+                }
+                CueTiming::ClampToVadRegions(regions) => {
+                    segment.end_ms =
+                        clamp_end_to_vad_regions(segment.start_ms, segment.end_ms, regions);
+                }
+            }
             segment
         })
         .collect();
@@ -1235,6 +1289,55 @@ Bonjour le monde
         assert_eq!((start_ms, end_ms), (0, 180), "both bursts are kept, gap and all");
     }
 
+    /// The watch path's rule, pinned separately because it is deliberately NOT the library's.
+    ///
+    /// Generating subtitles keeps the old VAD clamp: it is verified working and frozen on
+    /// request. This test exists so that "why are there two of these" is answered by a failing
+    /// test rather than by someone deleting one of them.
+    #[test]
+    fn the_watch_path_still_clamps_to_vad_regions() {
+        let segments = vec![RecordingSegment {
+            text: "daijoubu".into(),
+            start_ms: 30_060,
+            end_ms: 36_100,
+        }];
+        let regions = [SpeechRegion {
+            start_ms: 30_310,
+            end_ms: 31_290,
+        }];
+
+        let cleaned = clean_segments(segments, 0, CueTiming::ClampToVadRegions(&regions));
+
+        assert_eq!(cleaned[0].start_ms, 30_060, "the clamp never moves a start");
+        assert_eq!(cleaned[0].end_ms, 31_410, "31.29s of speech plus the 120ms pad");
+    }
+
+    /// The two rules must actually differ. If they ever agree on this input, one of them has
+    /// been quietly changed into the other.
+    #[test]
+    fn the_two_timing_rules_are_not_interchangeable() {
+        let segment = || {
+            vec![RecordingSegment {
+                text: "daijoubu".into(),
+                start_ms: 0,
+                end_ms: 600,
+            }]
+        };
+        let sketch = envelope("..................########..................................");
+        let regions = [SpeechRegion {
+            start_ms: 0,
+            end_ms: 500,
+        }];
+
+        let trimmed = clean_segments(segment(), 0, CueTiming::TrimToSpeech(Some(&sketch)));
+        let clamped = clean_segments(segment(), 0, CueTiming::ClampToVadRegions(&regions));
+
+        assert_ne!(
+            (trimmed[0].start_ms, trimmed[0].end_ms),
+            (clamped[0].start_ms, clamped[0].end_ms)
+        );
+    }
+
     /// End to end through the real `CUE_EDGE_PAD_MS`, so the pad the app actually ships is
     /// the one under test. Speech runs 180ms..260ms inside a 600ms cue, leaving dead air at
     /// both ends for the trim to remove.
@@ -1248,7 +1351,7 @@ Bonjour le monde
 
         let sketch =
             envelope("..................########..................................");
-        let cleaned = clean_segments(segments, 0, Some(&sketch));
+        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(Some(&sketch)));
 
         assert_eq!(cleaned.len(), 1);
         assert_eq!(cleaned[0].start_ms, 30, "speech at 180ms, less the 150ms pad");
@@ -1268,7 +1371,7 @@ Bonjour le monde
             segments.push(seg("ループ", 1000 + i * 1000, 2000 + i * 1000));
         }
 
-        let cleaned = clean_segments(segments, 0, None);
+        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(None));
 
         // The loop collapses to a single segment spanning the whole run.
         assert_eq!(cleaned.len(), 2);
@@ -1288,7 +1391,7 @@ Bonjour le monde
         };
         let segments = vec![seg(0, 1000), seg(1000, 2000), seg(2000, 3000)];
 
-        let cleaned = clean_segments(segments, 0, None);
+        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(None));
 
         assert_eq!(cleaned.len(), 3);
     }
@@ -1308,7 +1411,7 @@ Bonjour le monde
             seg("ありがとうございました", 12000, 15000), // generic thanks -> KEEP (may be real)
         ];
 
-        let cleaned = clean_segments(segments, 0, None);
+        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(None));
 
         assert_eq!(cleaned.len(), 2, "only the real line and the generic thanks survive");
         assert_eq!(cleaned[0].text, "本物の台詞です");
@@ -1328,7 +1431,7 @@ Bonjour le monde
             seg("starts past the end", 9000, 12000), // starts past duration -> drop
         ];
 
-        let cleaned = clean_segments(segments, 8000, None);
+        let cleaned = clean_segments(segments, 8000, CueTiming::TrimToSpeech(None));
 
         assert_eq!(cleaned.len(), 2);
         assert_eq!(cleaned[1].text, "overshoots the end");

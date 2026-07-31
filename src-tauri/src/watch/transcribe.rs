@@ -17,7 +17,7 @@ use crate::{
     app_types::{transcript_language_key, SharedPersistedState},
     recording_library::transcription::{
         clean_segments, parse_whisper_segments, resolve_whisper_engine, CancelListener,
-        WhisperEngine,
+        CueTiming, WhisperEngine,
     },
     subtitles::segments_to_srt,
     transcription::{
@@ -121,7 +121,15 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
 
     let raw = parse_whisper_segments(&result.json_path)
         .ok_or_else(|| "Whisper produced no readable segments for this video.".to_string())?;
-    let segments = clean_segments(raw, duration_ms, result.speech_envelope.as_ref());
+    // Deliberately the OLD rule, not the waveform trim the recording library uses. This path
+    // is verified working and frozen on request: the trim moves cue starts, which is the one
+    // thing that could disturb subtitle sync, and no rule at all leaves each cue running to
+    // the next, which bloats every card mined from a video. See `clamp_end_to_vad_regions`.
+    let segments = clean_segments(
+        raw,
+        duration_ms,
+        CueTiming::ClampToVadRegions(&result.speech_regions),
+    );
     if segments.is_empty() {
         return Err("No speech was found in this video.".into());
     }
