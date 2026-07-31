@@ -121,7 +121,7 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
 
     let raw = parse_whisper_segments(&result.json_path)
         .ok_or_else(|| "Whisper produced no readable segments for this video.".to_string())?;
-    let segments = clean_segments(raw, duration_ms, &result.speech_regions);
+    let segments = clean_segments(raw, duration_ms, result.speech_envelope.as_ref());
     if segments.is_empty() {
         return Err("No speech was found in this video.".into());
     }

@@ -108,6 +108,144 @@ pub struct WhisperTranscriptionResult {
     /// Empty in music mode, which runs no VAD, and empty if a future runtime stops printing
     /// the lines. Both must degrade to leaving cue ends exactly as whisper reported them.
     pub speech_regions: Vec<SpeechRegion>,
+    /// Where the audio is loud enough to be speech, measured from the decoded WAV.
+    ///
+    /// `None` when the WAV could not be read, which must leave every timestamp exactly as
+    /// whisper reported it.
+    pub speech_envelope: Option<SpeechEnvelope>,
+}
+
+/// One bit per 10 ms of audio: was anyone speaking.
+///
+/// Deliberately measured from the waveform rather than taken from Silero. The VAD answers a
+/// harder question — *is this speech* — and on Japanese it answers "no" to a sentence-final
+/// です or ます, which are devoiced and quiet but are exactly the syllables a learner needs to
+/// hear. Loudness relative to this recording's own noise floor has no such opinion: it only
+/// asks whether there is signal, and a trailing syllable still has signal.
+///
+/// Used to pull a cue in to the speech it holds. It can only ever shrink a cue, so a wrong
+/// answer costs a little dead air, never a word.
+#[derive(Debug, Clone)]
+pub struct SpeechEnvelope {
+    /// One entry per `FRAME_MS` of audio, in order.
+    voiced: Vec<bool>,
+}
+
+/// The resolution of the envelope. 10 ms is far finer than any boundary we move and keeps a
+/// ten-minute recording's envelope under 60 KB.
+const FRAME_MS: usize = 10;
+
+/// Where to put the speech/silence line between the noise floor and the speech level.
+///
+/// Low enough to keep a devoiced syllable on the speech side — that is the whole reason this
+/// exists — and high enough that room tone does not read as talking. Both ends are taken from
+/// the recording itself, so a quiet lapel mic and a loud rip get the same treatment.
+const SPEECH_FRACTION: f32 = 0.45;
+
+impl SpeechEnvelope {
+    /// Reads the 16 kHz mono WAV whisper was given and measures per-frame loudness.
+    ///
+    /// The file is the one `decode_to_wav_16k` just wrote, so its format is known rather than
+    /// guessed; anything unexpected returns `None` and leaves timings untouched.
+    pub fn from_wav_16k_mono(path: &Path) -> Option<Self> {
+        let bytes = fs::read(path).ok()?;
+        // Walk the RIFF chunks to `data` rather than assuming the 44-byte canonical header —
+        // ffmpeg writes a LIST/INFO chunk ahead of it often enough to matter.
+        let mut offset = 12usize;
+        let data = loop {
+            if offset + 8 > bytes.len() {
+                return None;
+            }
+            let id = &bytes[offset..offset + 4];
+            let size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as usize;
+            let body = offset + 8;
+            if id == b"data" {
+                break bytes.get(body..(body + size).min(bytes.len()))?;
+            }
+            // Chunks are word-aligned, so an odd size carries a pad byte.
+            offset = body + size + (size & 1);
+        };
+
+        let samples_per_frame = 16 * FRAME_MS; // 16 kHz -> 16 samples per ms
+        let frame_bytes = samples_per_frame * 2;
+        if data.len() < frame_bytes {
+            return None;
+        }
+
+        let mut decibels: Vec<f32> = Vec::with_capacity(data.len() / frame_bytes);
+        for frame in data.chunks_exact(frame_bytes) {
+            let sum: f64 = frame
+                .chunks_exact(2)
+                .map(|pair| {
+                    let sample = i16::from_le_bytes([pair[0], pair[1]]) as f64 / 32768.0;
+                    sample * sample
+                })
+                .sum();
+            let rms = (sum / samples_per_frame as f64).sqrt().max(1e-6);
+            decibels.push(20.0 * rms.log10() as f32);
+        }
+
+        let noise = percentile(&decibels, 0.10);
+        let speech = percentile(&decibels, 0.85);
+        // A recording with no dynamic range at all — pure tone, pure silence — has no floor to
+        // measure against, and trimming it would be guesswork.
+        if speech - noise < 6.0 {
+            return None;
+        }
+        let threshold = noise + (speech - noise) * SPEECH_FRACTION;
+
+        Some(Self {
+            voiced: decibels.into_iter().map(|value| value > threshold).collect(),
+        })
+    }
+
+    /// Builds an envelope directly from per-frame flags, for tests that are about the
+    /// trimming rule rather than about decoding a WAV.
+    #[cfg(test)]
+    pub fn from_frames(voiced: Vec<bool>) -> Self {
+        Self { voiced }
+    }
+
+    /// Pulls `[start_ms, end_ms]` in to the speech inside it, keeping `pad_ms` either side.
+    ///
+    /// Shrink-only and total: the result is always within the window it was given, so a cue
+    /// can never grow into its neighbour and the text can never lose audio it did not already
+    /// lack. A window holding no detected speech is returned untouched — a hallucination over
+    /// silence keeps whisper's own timings rather than collapsing to nothing.
+    pub fn trim(&self, start_ms: u64, end_ms: u64, pad_ms: u64) -> (u64, u64) {
+        if end_ms <= start_ms {
+            return (start_ms, end_ms);
+        }
+        let first = (start_ms as usize / FRAME_MS).min(self.voiced.len());
+        let last = (end_ms as usize / FRAME_MS).min(self.voiced.len());
+        let window = self.voiced.get(first..last).unwrap_or(&[]);
+
+        let Some(first_voiced) = window.iter().position(|voiced| *voiced) else {
+            return (start_ms, end_ms);
+        };
+        let last_voiced = window
+            .iter()
+            .rposition(|voiced| *voiced)
+            .unwrap_or(first_voiced);
+
+        let speech_start = start_ms + (first_voiced * FRAME_MS) as u64;
+        let speech_end = start_ms + ((last_voiced + 1) * FRAME_MS) as u64;
+        (
+            start_ms.max(speech_start.saturating_sub(pad_ms)),
+            end_ms.min(speech_end.saturating_add(pad_ms)),
+        )
+    }
+}
+
+/// Nearest-rank percentile over a copy, so the caller's order is left alone.
+fn percentile(values: &[f32], fraction: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let index = ((sorted.len() - 1) as f32 * fraction).round() as usize;
+    sorted[index.min(sorted.len() - 1)]
 }
 
 /// A fixed ASCII output base for whisper's `--output-file`. We deliberately do NOT derive it
@@ -574,7 +712,12 @@ pub fn run_whisper_transcription(
     let wav_path = decode_to_wav_16k(&request.ffmpeg_path, &request.audio_path)?;
     temps.track(wav_path.clone());
 
-    run_whisper_once(
+    // Measured from the WAV whisper is about to read, so the cue timings and the loudness
+    // they get pulled in to describe the same decode. Reading it here also means the file is
+    // still on disk — it is a tracked temp and is gone by the time the caller sees a result.
+    let speech_envelope = SpeechEnvelope::from_wav_16k_mono(&wav_path);
+
+    let mut result = run_whisper_once(
         &request.cli_path,
         &request.model_path,
         &request.vad_model_path,
@@ -587,7 +730,9 @@ pub fn run_whisper_transcription(
         cancel,
         on_progress,
         on_segment,
-    )
+    )?;
+    result.speech_envelope = speech_envelope;
+    Ok(result)
 }
 
 /// One whisper-cli `--vad` pass over a single (already 16 kHz mono) WAV to
@@ -859,6 +1004,8 @@ fn run_whisper_once(
         transcript_path,
         json_path,
         speech_regions,
+        // Filled in by the caller, which is the layer that still has the decoded WAV.
+        speech_envelope: None,
     })
 }
 
@@ -882,6 +1029,112 @@ mod tests {
     static SLOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     use super::*;
+
+    /// Writes a 16 kHz mono WAV whose middle second is loud and whose edges are near-silent,
+    /// optionally behind an extra chunk before `data` — ffmpeg writes a LIST/INFO chunk often
+    /// enough that assuming the canonical 44-byte header would eventually read noise as audio.
+    fn write_test_wav(path: &Path, extra_chunk: bool) {
+        let sample_rate = 16_000u32;
+        let mut samples: Vec<i16> = Vec::new();
+        for index in 0..sample_rate * 3 {
+            let loud = index >= sample_rate && index < sample_rate * 2;
+            let amplitude = if loud { 8_000.0 } else { 8.0 };
+            let phase = index as f32 / sample_rate as f32 * 440.0 * std::f32::consts::TAU;
+            samples.push((phase.sin() * amplitude) as i16);
+        }
+        let audio: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WAVE");
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&16u32.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        body.extend_from_slice(&1u16.to_le_bytes()); // mono
+        body.extend_from_slice(&sample_rate.to_le_bytes());
+        body.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&16u16.to_le_bytes());
+        if extra_chunk {
+            body.extend_from_slice(b"LIST");
+            body.extend_from_slice(&5u32.to_le_bytes());
+            body.extend_from_slice(b"INFOx");
+            body.push(0); // odd size carries a pad byte
+        }
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&(audio.len() as u32).to_le_bytes());
+        body.extend_from_slice(&audio);
+
+        let mut file = Vec::new();
+        file.extend_from_slice(b"RIFF");
+        file.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        file.extend_from_slice(&body);
+        fs::write(path, file).expect("write test wav");
+    }
+
+    /// The envelope must find the loud second and call the quiet edges silence, so a cue
+    /// spanning the whole file trims to the speech inside it.
+    #[test]
+    fn the_envelope_finds_the_loud_stretch_in_a_wav() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tone.wav");
+        write_test_wav(&path, false);
+
+        let envelope = SpeechEnvelope::from_wav_16k_mono(&path).expect("an envelope");
+        let (start_ms, end_ms) = envelope.trim(0, 3_000, 100);
+
+        assert!(
+            (900..=1_000).contains(&start_ms),
+            "speech starts at 1000ms, less the 100ms pad, got {start_ms}"
+        );
+        assert!(
+            (2_000..=2_100).contains(&end_ms),
+            "speech ends at 2000ms, plus the 100ms pad, got {end_ms}"
+        );
+    }
+
+    /// The `data` chunk is found by walking the chunk list, not by assuming its offset.
+    #[test]
+    fn a_wav_with_an_extra_chunk_before_data_still_parses() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tagged.wav");
+        write_test_wav(&path, true);
+
+        let envelope = SpeechEnvelope::from_wav_16k_mono(&path).expect("an envelope");
+        let (start_ms, _) = envelope.trim(0, 3_000, 100);
+
+        assert!(
+            (900..=1_000).contains(&start_ms),
+            "a LIST chunk before the audio must not shift the envelope, got {start_ms}"
+        );
+    }
+
+    /// Audio with no dynamic range gives nothing to measure against, and guessing at a
+    /// threshold there would trim real speech. It must decline instead.
+    #[test]
+    fn flat_audio_yields_no_envelope() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("flat.wav");
+        let audio: Vec<u8> = (0..16_000u32 * 2)
+            .flat_map(|_| 1_000i16.to_le_bytes())
+            .collect();
+        let mut file = Vec::new();
+        file.extend_from_slice(b"RIFF");
+        file.extend_from_slice(&(36 + audio.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"WAVEfmt ");
+        file.extend_from_slice(&16u32.to_le_bytes());
+        file.extend_from_slice(&1u16.to_le_bytes());
+        file.extend_from_slice(&1u16.to_le_bytes());
+        file.extend_from_slice(&16_000u32.to_le_bytes());
+        file.extend_from_slice(&32_000u32.to_le_bytes());
+        file.extend_from_slice(&2u16.to_le_bytes());
+        file.extend_from_slice(&16u16.to_le_bytes());
+        file.extend_from_slice(b"data");
+        file.extend_from_slice(&(audio.len() as u32).to_le_bytes());
+        file.extend_from_slice(&audio);
+        fs::write(&path, file).expect("write flat wav");
+
+        assert!(SpeechEnvelope::from_wav_16k_mono(&path).is_none());
+    }
 
     #[test]
     fn transcript_output_base_is_ascii_without_stem() {
