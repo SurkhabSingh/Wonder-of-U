@@ -19,7 +19,7 @@ use crate::{
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
     subtitles::segments_to_srt,
     transcription::{
-        run_whisper_transcription, transcription_thread_count, SpeechRegion,
+        run_whisper_transcription, transcription_thread_count, SpeechRegion, WhisperSlotGuard,
         WhisperTranscriptionRequest, TRANSCRIPTION_CANCELLED,
     },
 };
@@ -704,6 +704,25 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     };
     let language = transcript_language_key(&settings.whisper.language);
 
+    // Claim the one whisper slot before doing anything. This batch used to check nothing at
+    // all, so starting the video library's subtitle generation and then pressing Transcribe
+    // ran two whisper-cli processes at once — each asking for the full thread count, and both
+    // listening to the one cancel event. Reported as `unavailable` rather than an error,
+    // because that is what the queue already knows how to show.
+    let _whisper_slot = match WhisperSlotGuard::acquire(
+        "Subtitles are being generated for a video. Wait for that to finish, or cancel it first.",
+    ) {
+        Ok(slot) => slot,
+        Err(message) => {
+            return Ok(RecordingBatchResult {
+                status: "unavailable".into(),
+                message,
+                items: Vec::new(),
+                bootstrap: build_app_bootstrap(app)?,
+            });
+        }
+    };
+
     // The engine decodes with ffmpeg, then runs whisper-cli with its built-in Silero VAD, so
     // the managed Whisper runtime + ggml model, ffmpeg, and the VAD model must all be present.
     let engine = match resolve_whisper_engine(app, &settings) {
@@ -897,9 +916,20 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     let success_count = items.iter().filter(|item| item.status == "success").count();
     let skipped_count = items.iter().filter(|item| item.status == "skipped").count();
     let failed_count = items.iter().filter(|item| item.status == "failed").count();
-    let message = format!(
-        "Transcription finished: {success_count} created, {skipped_count} skipped, {failed_count} failed."
-    );
+    // Counted, because it was not. A cancelled item landed in none of the three counters, so a
+    // run the user stopped reported "0 created, 0 skipped, 0 failed" — indistinguishable from a
+    // batch that ran and had nothing to do — and, with no failures, a status of "completed".
+    // This string is also what the shell writes into `status_text`, which the frontend shows in
+    // a toast, so an unnamed cancel became a green success notification.
+    let cancelled_count = items.iter().filter(|item| item.status == "cancelled").count();
+
+    let message = if cancelled_count > 0 {
+        format!("Transcription cancelled: {success_count} created before stopping.")
+    } else {
+        format!(
+            "Transcription finished: {success_count} created, {skipped_count} skipped, {failed_count} failed."
+        )
+    };
 
     update_shell_snapshot(app, |shell| {
         shell.phase = "idle".into();
@@ -910,7 +940,10 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     })?;
 
     Ok(RecordingBatchResult {
-        status: if failed_count == 0 {
+        // A stop the user asked for is its own outcome, not a completion and not a failure.
+        status: if cancelled_count > 0 {
+            "cancelled"
+        } else if failed_count == 0 {
             "completed"
         } else {
             "partial"

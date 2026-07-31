@@ -31,17 +31,21 @@ export function useRecordingActions({
 }: UseRecordingActionsOptions) {
   const confirm = useConfirm();
 
-  // A batch that could not run at all ("unavailable") or only partly ran
-  // ("partial") is not a success. Reporting it with a green check is how
-  // "the browser extension is not connected" ended up looking like good news.
+  // A batch that could not run at all ("unavailable"), only partly ran ("partial"), or was
+  // stopped by the user ("cancelled") is not a success. Reporting one with a green check is
+  // how "the browser extension is not connected" ended up looking like good news.
+  //
+  // A denylist rather than an allowlist was the original mistake: "cancelled" was added to
+  // the backend later and inherited the green check by simply not being listed. Asking what
+  // DID go right instead means a status invented tomorrow is quiet by default.
   const notifyBatchResult = useCallback(
     (result: RecordingBatchResult, message: string) => {
-      if (result.status === "unavailable" || result.status === "partial") {
-        showWarning(message);
+      if (result.status === "completed") {
+        showSuccess(message);
         return;
       }
 
-      showSuccess(message);
+      showWarning(message);
     },
     [showSuccess, showWarning],
   );
@@ -117,7 +121,7 @@ export function useRecordingActions({
         });
         applyBootstrap(result.bootstrap);
         setRecordingActionMessage(result.message);
-        showSuccess(result.message);
+        notifyBatchResult(result, result.message);
       } catch (error) {
         setLoadError(
           errorMessage(error, "The selected recordings could not be deleted."),
@@ -126,7 +130,13 @@ export function useRecordingActions({
         setBusyAction(null);
       }
     },
-    [applyBootstrap, setBusyAction, setLoadError, setRecordingActionMessage, showSuccess],
+    [
+      applyBootstrap,
+      notifyBatchResult,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+    ],
   );
 
   const pushRecordingsToAnki = useCallback(
@@ -439,11 +449,7 @@ export function useRecordingActions({
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("convert", result);
         setRecordingActionMessage(message);
-        if (result.status === "partial") {
-          showWarning(message);
-        } else {
-          showSuccess(message);
-        }
+        notifyBatchResult(result, message);
       } catch (error) {
         const message = errorMessage(
           error,
@@ -457,10 +463,10 @@ export function useRecordingActions({
     },
     [
       applyBootstrap,
+      notifyBatchResult,
       setBusyAction,
       setLoadError,
       setRecordingActionMessage,
-      showSuccess,
       showWarning,
     ],
   );

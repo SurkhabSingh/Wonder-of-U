@@ -25,6 +25,45 @@ const VAD_MAX_SPEECH_SECONDS: &str = "20";
 /// against it to treat a Cancel as a clean stop rather than a failure.
 pub const TRANSCRIPTION_CANCELLED: &str = "transcription cancelled.";
 
+/// The one whisper-cli slot, and the single fact that decides whether a run may start.
+///
+/// There are two entry points — the library batch and the video library's subtitle generator —
+/// and until this existed neither actually excluded the other. The generator READ `shell.phase`
+/// but never wrote it; the batch WROTE it but never read it. So starting a generation and then
+/// pressing Transcribe refused nothing: two whisper-cli processes, each asking for the full
+/// `-t` thread count, so the CPU-usage setting quietly doubled. Worse, both register a listener
+/// for the same global `transcription-cancel` event — Tauri's `once` means "fires once then
+/// unregisters", not "only one listener" — so one Cancel killed both runs.
+///
+/// A flag rather than a mutex because the answer wanted is "is one already running", not "wait
+/// until it is not": the second request is refused and told why, rather than parked on a lock
+/// where the UI would look frozen.
+static WHISPER_SLOT_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Claims the whisper slot for as long as it is alive.
+///
+/// Released on `Drop`, so every early return, `?`, and panic unwind puts it back — the failure
+/// this shape prevents is a refused claim that never gets released, which would wedge every
+/// later transcription until the app restarts. Mirrors `DownloadSlotGuard`, which owns the
+/// download slot for exactly the same reason.
+pub struct WhisperSlotGuard;
+
+impl WhisperSlotGuard {
+    /// Claims the slot, or reports what is already using it.
+    pub fn acquire(busy_message: &str) -> Result<Self, String> {
+        WHISPER_SLOT_BUSY
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| Self)
+            .map_err(|_| busy_message.to_string())
+    }
+}
+
+impl Drop for WhisperSlotGuard {
+    fn drop(&mut self) {
+        WHISPER_SLOT_BUSY.store(false, Ordering::SeqCst);
+    }
+}
+
 /// How often the wait wakes to re-read the cancel flag while whisper-cli's pipes are silent.
 /// This bounds how long Cancel can appear to do nothing. Mirrors the yt-dlp downloader.
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -839,6 +878,9 @@ fn kill_process_tree(_pid: u32) {}
 
 #[cfg(test)]
 mod tests {
+    /// The slot is process-wide, and cargo runs tests in parallel.
+    static SLOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use super::*;
 
     #[test]
@@ -956,6 +998,43 @@ mod tests {
 
         assert_eq!(log.into_regions(), vec![probe]);
         assert!(VadRegionLog::default().into_regions().is_empty());
+    }
+
+    /// The whole point: a second claim is refused while the first is alive.
+    ///
+    /// Serialised against the other slot test by a mutex, because the slot is process-wide
+    /// state and cargo runs tests in parallel — two of them racing it would make both flaky
+    /// for a reason that has nothing to do with the code under test.
+    #[test]
+    fn the_whisper_slot_admits_one_run_at_a_time() {
+        let _serialise = SLOT_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+
+        let first = WhisperSlotGuard::acquire("busy").expect("the slot starts free");
+
+        let second = WhisperSlotGuard::acquire("a transcription is already running");
+        assert_eq!(
+            second.err().as_deref(),
+            Some("a transcription is already running"),
+            "the second claim is refused, and told why"
+        );
+
+        drop(first);
+        // Released on drop, so a refused claim cannot wedge every later run until restart.
+        WhisperSlotGuard::acquire("busy").expect("the slot is free again");
+    }
+
+    /// An early return, a `?`, or a panic must all put the slot back.
+    #[test]
+    fn the_whisper_slot_is_released_by_a_panicking_run() {
+        let _serialise = SLOT_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+
+        let panicked = std::panic::catch_unwind(|| {
+            let _slot = WhisperSlotGuard::acquire("busy").expect("free");
+            panic!("whisper blew up mid-pass");
+        });
+
+        assert!(panicked.is_err());
+        WhisperSlotGuard::acquire("busy").expect("an unwind still released the slot");
     }
 
     #[test]

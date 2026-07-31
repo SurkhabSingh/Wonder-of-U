@@ -112,8 +112,26 @@ export function useAppBootstrap() {
           previousPhase === "transcribing" ||
           previousPhase === "recording")
       ) {
-        toast.success("Recording saved", {
-          description: nextBootstrap.shell.statusText,
+        const detail = nextBootstrap.shell.statusText;
+        // A transcription is not a recording, and this fires for both. Titling every
+        // return to idle "Recording saved" told a user who had just transcribed that
+        // something had been recorded and saved, neither of which happened.
+        const title =
+          previousPhase === "transcribing" ? "Transcription finished" : "Recording saved";
+
+        // A stop the user asked for is not good news. The backend now names it in the same
+        // status line, so read it rather than inventing a second source of truth: a green
+        // check on a cancelled run is exactly the report that was wrong before.
+        if (detail.toLowerCase().includes("cancelled")) {
+          toast(previousPhase === "transcribing" ? "Transcription cancelled" : "Cancelled", {
+            description: detail,
+            duration: 3500,
+          });
+          return;
+        }
+
+        toast.success(title, {
+          description: detail,
           duration: 3500,
         });
         return;

@@ -242,9 +242,15 @@ input::placeholder {
 }
 
 /* No border and no fill: the dismiss is a glyph, not a control competing with the toast's
-   own message. It reads as a button from position and hover alone. */
+   own message. It reads as a button from position and hover alone.
+   
+   `--space-4`, not `--space-sm`. This project's scale is `--space-0`…`--space-9`; there has
+   never been a `-sm`. An undefined custom property makes the whole `inset` invalid at
+   computed-value time, so all four sides fall back to `auto` and the absolutely-positioned
+   button lands at its static position — on top of the message. The border removal and that
+   typo shipped in one hunk; only the border was meant to change. */
 .app-toast [data-close-button] {
-  inset: var(--space-sm) var(--space-sm) auto auto !important;
+  inset: var(--space-4) var(--space-4) auto auto !important;
   width: 20px !important;
   height: 20px !important;
   display: grid !important;
@@ -253,7 +259,6 @@ input::placeholder {
   border-radius: var(--radius-sm) !important;
   background: transparent !important;
   color: var(--text-muted) !important;
-  transform: none !important;
 }
 
 .app-toast [data-close-button]:hover {

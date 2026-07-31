@@ -93,6 +93,21 @@ function App() {
     toast.error(message, { duration: 5000 });
   }
 
+  // The engine reports a user Cancel as an ordinary Err carrying this exact string, so
+  // without recognising it a deliberate stop arrived as a red failure toast reading
+  // "transcription cancelled." — lowercase, an internal constant shown verbatim.
+  const TRANSCRIPTION_CANCELLED = "transcription cancelled.";
+
+  function reportCancellable(caught: unknown, fallback: string, cancelledMessage: string) {
+    const message =
+      caught instanceof Error ? caught.message : String(caught ?? fallback);
+    if (message.trim().toLowerCase() === TRANSCRIPTION_CANCELLED) {
+      toast(cancelledMessage, { duration: 3500 });
+      return;
+    }
+    showError(message);
+  }
+
   // Deep-link into the single Settings page and scroll a specific section into
   // view. Used by the Setup checklist rows and by post-download navigation.
   const openSettingsSection = useCallback((section: SettingsSection) => {
@@ -231,10 +246,10 @@ function App() {
           )}. Realign it if the timings look off.`,
         );
       } catch (caught) {
-        showError(
-          caught instanceof Error
-            ? caught.message
-            : String(caught ?? "Subtitles could not be generated."),
+        reportCancellable(
+          caught,
+          "Subtitles could not be generated.",
+          "Subtitle generation cancelled.",
         );
       } finally {
         setIsGeneratingSubtitles(false);
@@ -328,6 +343,7 @@ function App() {
       }
       setIsSyncingSubtitles(true);
       setWatchSyncResult(null);
+      const pending = toast.loading("Realigning subtitles…");
       try {
         const synced = await invoke<{ path: string; summary: string }>(
           "sync_watch_subtitles",
@@ -347,6 +363,7 @@ function App() {
             : String(caught ?? "The subtitles could not be realigned."),
         );
       } finally {
+        toast.dismiss(pending);
         setIsSyncingSubtitles(false);
       }
     },
@@ -363,6 +380,7 @@ function App() {
 
   const addWatchedVideo = useCallback(
     async (videoPath: string) => {
+      const pending = toast.loading("Adding video…");
       try {
         applyBootstrap(
           await invoke<AppBootstrap>("add_watched_video", { videoPath }),
@@ -373,6 +391,8 @@ function App() {
             ? caught.message
             : String(caught ?? "The video could not be added."),
         );
+      } finally {
+        toast.dismiss(pending);
       }
     },
     [applyBootstrap],

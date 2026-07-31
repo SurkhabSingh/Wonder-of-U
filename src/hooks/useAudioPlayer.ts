@@ -27,6 +27,14 @@ export type AudioPlayerState = {
   isRepeating: boolean;
 };
 
+// How far before a sentence's reported start playback actually begins.
+//
+// Small enough to be heard as the same sentence, large enough to cover the 30ms of speech
+// padding whisper.cpp's VAD leaves at a region edge. Playback is the only consumer of these
+// timestamps that seeks to an exact sample with nothing to absorb that — the subtitle path
+// draws text (where being early is invisible) and mined clips already pad by 250ms.
+const SEGMENT_LEAD_IN_MS = 150;
+
 const INITIAL_STATE: AudioPlayerState = {
   filePath: null,
   fileName: "",
@@ -222,15 +230,25 @@ export function useAudioPlayer(): AudioPlayer {
       if (!audio) {
         return;
       }
-      const startSeconds = Math.max(0, startMs / 1000);
+      // Start a fraction early. A subtitle drawn 30ms late is invisible; an audio seek 30ms
+      // late has already eaten the first consonant — and the VAD region start these
+      // timestamps come from carries only whisper.cpp's default 30ms of speech padding.
+      // This is the whole reason the same numbers sound clipped here and look perfect as
+      // subtitles in mpv, and mined clips already pad by 250ms for exactly this reason.
+      //
+      // The END is deliberately left alone: the boundary is checked on `timeupdate`, which
+      // fires about every 250ms, so playback already runs slightly past the end. That errs
+      // in the forgiving direction.
+      const seekMs = Math.max(0, startMs - SEGMENT_LEAD_IN_MS);
+      const startSeconds = seekMs / 1000;
       boundaryMsRef.current = endMs;
-      segmentStartMsRef.current = startMs;
+      segmentStartMsRef.current = seekMs;
 
       if (loadedPathRef.current !== recording.filePath || !audio.src) {
         // Fresh source: the seek can't land until metadata is known, so defer
         // it to loadedmetadata.
         loadedPathRef.current = recording.filePath;
-        pendingSeekMsRef.current = startMs;
+        pendingSeekMsRef.current = seekMs;
         audio.src = convertFileSrc(recording.filePath);
         setState((prev) => ({
           ...prev,

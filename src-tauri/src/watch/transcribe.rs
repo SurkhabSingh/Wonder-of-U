@@ -14,14 +14,15 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
     app_runtime::log_event,
-    app_types::{transcript_language_key, SharedPersistedState, SharedShellState},
+    app_types::{transcript_language_key, SharedPersistedState},
     recording_library::transcription::{
         clean_segments, parse_whisper_segments, resolve_whisper_engine, CancelListener,
         WhisperEngine,
     },
     subtitles::segments_to_srt,
     transcription::{
-        run_whisper_transcription, transcription_thread_count, WhisperTranscriptionRequest,
+        run_whisper_transcription, transcription_thread_count, WhisperSlotGuard,
+        WhisperTranscriptionRequest,
     },
     watch::subtitles::ffprobe_path_for,
 };
@@ -57,19 +58,13 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
         return Err(format!("The video is no longer at {}", video_path.display()));
     }
 
-    // One whisper pass at a time. The library batch and this share a single global
-    // `transcription-cancel` event, so two runs at once would cancel each other — and the
-    // shell phase is the existing gate every long job already respects.
-    {
-        let shell_state = app.state::<SharedShellState>();
-        let shell = shell_state
-            .0
-            .lock()
-            .map_err(|_| "Could not inspect the shell state.".to_string())?;
-        if shell.phase != "idle" && shell.phase != "error" {
-            return Err("Finish the current task before generating subtitles.".into());
-        }
-    }
+    // One whisper pass at a time, and this is what actually enforces it. The previous version
+    // read `shell.phase`, which this path never writes — so it excluded a recording or a
+    // download but not the library's own transcription, the one run it shares a cancel event
+    // with. Held for the whole pass and released on drop.
+    let _whisper_slot = WhisperSlotGuard::acquire(
+        "A transcription is already running. Wait for it to finish, or cancel it first.",
+    )?;
 
     let settings = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -89,10 +84,11 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
     } = resolve_whisper_engine(app, &settings)?;
 
     // A real cancel flag, not a placeholder. This listens to the same global
-    // `transcription-cancel` event the library batch uses, which is safe precisely because the
-    // shell-phase guard above means only one of the two can be running: one event, one owner.
-    // Registered before the pass so a Cancel pressed at any point during it lands, and
-    // unregistered on drop.
+    // `transcription-cancel` event the library batch uses, which is safe because the slot above
+    // genuinely means only one of the two can be running: one event, one owner. (Tauri's `once`
+    // is "fires once then unregisters", not "only one listener" — with both registered, one
+    // emit would set both flags and kill both runs.) Registered before the pass so a Cancel
+    // pressed at any point during it lands, and unregistered on drop.
     let cancel_listener = CancelListener::register(app);
     let app_progress = app.clone();
     let result = run_whisper_transcription(
