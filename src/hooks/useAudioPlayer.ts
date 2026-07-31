@@ -101,7 +101,14 @@ export function useAudioPlayer(): AudioPlayer {
       // Setting a fresh `src` resets playbackRate to 1; re-apply the chosen speed.
       audio.playbackRate = rateRef.current;
       const seconds = audio.duration;
-      if (Number.isFinite(seconds) && seconds > 0) {
+      // A sentence clip's own duration is a few seconds, and it is NOT the track length —
+      // the player is still showing the recording. Taking it here collapsed the transport
+      // to the length of whichever sentence was last clicked.
+      if (
+        clipOffsetMsRef.current === null &&
+        Number.isFinite(seconds) &&
+        seconds > 0
+      ) {
         setState((prev) => ({ ...prev, durationMs: Math.round(seconds * 1000) }));
       }
       const pending = pendingSeekMsRef.current;
