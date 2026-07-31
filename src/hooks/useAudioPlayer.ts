@@ -27,14 +27,6 @@ export type AudioPlayerState = {
   isRepeating: boolean;
 };
 
-// How far before a sentence's reported start playback actually begins.
-//
-// Small enough to be heard as the same sentence, large enough to cover the 30ms of speech
-// padding whisper.cpp's VAD leaves at a region edge. Playback is the only consumer of these
-// timestamps that seeks to an exact sample with nothing to absorb that — the subtitle path
-// draws text (where being early is invisible) and mined clips already pad by 250ms.
-const SEGMENT_LEAD_IN_MS = 150;
-
 const INITIAL_STATE: AudioPlayerState = {
   filePath: null,
   fileName: "",
@@ -48,7 +40,12 @@ const INITIAL_STATE: AudioPlayerState = {
 
 export type AudioPlayer = AudioPlayerState & {
   playRecording: (recording: RecentRecording) => void;
-  playSegment: (recording: RecentRecording, startMs: number, endMs: number) => void;
+  playSegment: (
+    recording: RecentRecording,
+    startMs: number,
+    endMs: number,
+    paddingMs?: number,
+  ) => void;
   toggle: () => void;
   pause: () => void;
   seekMs: (ms: number) => void;
@@ -221,7 +218,7 @@ export function useAudioPlayer(): AudioPlayer {
   }, []);
 
   const playSegment = useCallback(
-    (recording: RecentRecording, startMs: number, endMs: number) => {
+    (recording: RecentRecording, startMs: number, endMs: number, paddingMs?: number) => {
       // Never load audio for a recording whose local file has been removed.
       if (recording.audioDeleted) {
         return;
@@ -230,18 +227,18 @@ export function useAudioPlayer(): AudioPlayer {
       if (!audio) {
         return;
       }
-      // Start a fraction early. A subtitle drawn 30ms late is invisible; an audio seek 30ms
-      // late has already eaten the first consonant — and the VAD region start these
-      // timestamps come from carries only whisper.cpp's default 30ms of speech padding.
-      // This is the whole reason the same numbers sound clipped here and look perfect as
-      // subtitles in mpv, and mined clips already pad by 250ms for exactly this reason.
+      // The same padding the miner cuts with, on both sides — so playing a sentence
+      // previews the card it would make rather than approximating it.
       //
-      // The END is deliberately left alone: the boundary is checked on `timeupdate`, which
-      // fires about every 250ms, so playback already runs slightly past the end. That errs
-      // in the forgiving direction.
-      const seekMs = Math.max(0, startMs - SEGMENT_LEAD_IN_MS);
+      // This was a fixed 150ms lead-in, chosen to cover the 30ms of speech padding
+      // whisper's VAD leaves at a region edge. It turned out the timestamps did not need
+      // covering: with the padding setting at 0 a mined clip is exact, and a lead-in only
+      // this side applied made playback and the card disagree about the same sentence.
+      // Reading the one setting means they cannot disagree again.
+      const padding = Math.max(0, paddingMs ?? 0);
+      const seekMs = Math.max(0, startMs - padding);
       const startSeconds = seekMs / 1000;
-      boundaryMsRef.current = endMs;
+      boundaryMsRef.current = endMs + padding;
       segmentStartMsRef.current = seekMs;
 
       if (loadedPathRef.current !== recording.filePath || !audio.src) {

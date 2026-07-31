@@ -1083,6 +1083,7 @@ function App() {
               <TranscriptViewerPage
                 recording={viewingRecording}
                 transcriptionLanguage={settingsDraft.whisper.language}
+                clipPaddingMs={settingsDraft.anki.clipPaddingMs}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
                   enqueueTranscriptions([viewingRecording.filePath], force)
