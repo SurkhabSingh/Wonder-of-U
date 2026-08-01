@@ -9,11 +9,14 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
     app_config::APP_SNAPSHOT_EVENT,
+    anki::known_words_snapshot_from_state,
     app_types::{
-        AppBootstrap, AppPathsState, ModelDownloadState, SharedPersistedState, SharedShellState,
-        ShellSnapshot, WhisperDetectionState,
+        AppBootstrap, AppPathsState, KnownWordsBuild, ModelDownloadState, SharedPersistedState,
+        SharedShellState, ShellSnapshot, WhisperDetectionState,
     },
-    runtime_assets::{detect_local_ffmpeg, detect_local_alass, detect_local_ytdlp},
+    runtime_assets::{
+        detect_local_alass, detect_local_dictionary, detect_local_ffmpeg, detect_local_ytdlp,
+    },
 };
 
 pub(crate) fn now_ms() -> u64 {
@@ -83,6 +86,17 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         .lock()
         .map_err(|_| "Could not read the model download state.".to_string())?
         .clone();
+    let dictionary_detection = detect_local_dictionary(&persisted.settings);
+    // Judged against the settings just read, rather than re-locking them: this runs
+    // on every snapshot emit, and reading them twice is how the two halves of the
+    // answer end up describing different moments.
+    let known_words = known_words_snapshot_from_state(
+        app,
+        &KnownWordsBuild {
+            sources: persisted.settings.anki.vocabulary_sources.clone(),
+            mature_after_days: persisted.settings.anki.known_word_interval_days,
+        },
+    );
     let log_path = app
         .state::<AppPathsState>()
         .inner()
@@ -100,6 +114,8 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         ytdlp_detection,
         alass_detection,
         model_download,
+        dictionary_detection,
+        known_words,
         log_path,
     })
 }

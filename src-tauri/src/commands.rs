@@ -32,17 +32,18 @@ use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
         load_mined_sentences_inner, mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
-        push_recordings_to_anki_inner,
+        push_recordings_to_anki_inner, refresh_known_words_inner,
     },
-    app_runtime::build_app_bootstrap,
+    app_runtime::{build_app_bootstrap, emit_app_snapshot},
     app_types::{
-        AnkiCatalog, AppBootstrap, AppSettings, MinedSentences, RecordingBatchResult,
-        RecordingTexts, WhisperAssetUpdateResult,
+        AnkiCatalog, AppBootstrap, AppSettings, KnownWordsSnapshot, MinedSentences,
+        RecordingBatchResult, RecordingTexts, WhisperAssetUpdateResult,
     },
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
         download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
-        download_recommended_alass_inner, download_recommended_ytdlp_inner,
+        download_recommended_alass_inner, download_recommended_dictionary_inner,
+        download_recommended_ytdlp_inner,
         download_whisper_runtime_version_inner,
         toggle_whisper_model_download_pause_inner,
     },
@@ -194,6 +195,26 @@ pub(crate) async fn load_anki_catalog(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Rebuilds the known-word list from Anki. Manual by design — see
+/// `refresh_known_words_inner`.
+///
+/// Off the UI thread: a serious collection is tens of thousands of notes across a
+/// hundred round trips, and the whole point of a button is that the window stays
+/// alive while it runs.
+#[tauri::command]
+pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnapshot, String> {
+    let app_for_blocking = app.clone();
+    let snapshot = tauri::async_runtime::spawn_blocking(move || {
+        refresh_known_words_inner(&app_for_blocking)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    // The list the rest of the app sees has changed, so everything showing a count
+    // or an age is now wrong until it hears about it.
+    emit_app_snapshot(&app);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -614,6 +635,13 @@ pub(crate) async fn sync_watch_subtitles(
 #[tauri::command]
 pub(crate) fn download_recommended_alass(app: AppHandle) -> Result<AppBootstrap, String> {
     download_recommended_alass_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+/// Downloads the Japanese dictionary into the managed asset directory.
+#[tauri::command]
+pub(crate) fn download_recommended_dictionary(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_dictionary_inner(&app)?;
     build_app_bootstrap(&app)
 }
 

@@ -288,6 +288,21 @@ pub(crate) struct AnkiSettings {
     /// Milliseconds of audio padding added to each side of a mined sentence clip so it does
     /// not cut the first/last syllable. Clamped to the file start on the low side.
     pub(crate) clip_padding_ms: u64,
+    /// Where the known-word index is read from: note type plus the field holding the
+    /// word. A list, because known words come from more than one note type in practice —
+    /// a starter deck and a personal mining type — and the index is their union.
+    ///
+    /// Independent of the push `note_type` on purpose: the type cards are pushed INTO is
+    /// rarely the one vocabulary is read FROM.
+    #[serde(default)]
+    pub(crate) vocabulary_sources: Vec<VocabularySource>,
+    /// How long a card's interval must be before its word counts as known, in days.
+    ///
+    /// A word appearing on a card is NOT the same as knowing it — one added yesterday and
+    /// failed ever since would otherwise count in full. MorphMan and AnkiMorphs both judge
+    /// by interval for exactly this reason, and 21 days is the maturity both default to.
+    #[serde(default = "default_known_word_interval_days")]
+    pub(crate) known_word_interval_days: u32,
 }
 
 impl Default for AnkiSettings {
@@ -297,6 +312,8 @@ impl Default for AnkiSettings {
             note_type: String::new(),
             fields: AnkiFieldMapping::default(),
             clip_padding_ms: default_clip_padding_ms(),
+            vocabulary_sources: Vec::new(),
+            known_word_interval_days: default_known_word_interval_days(),
         }
     }
 }
@@ -697,6 +714,8 @@ pub(crate) struct AppBootstrap {
     pub(crate) ytdlp_detection: YtdlpDetection,
     pub(crate) alass_detection: AlassDetection,
     pub(crate) model_download: ModelDownloadSnapshot,
+    pub(crate) dictionary_detection: DictionaryDetection,
+    pub(crate) known_words: KnownWordsSnapshot,
     pub(crate) log_path: String,
 }
 
@@ -931,6 +950,10 @@ pub(crate) struct AppPathsState {
     pub(crate) state_file: PathBuf,
     pub(crate) log_file: PathBuf,
     pub(crate) assets_dir: PathBuf,
+    /// `known_words.json`, beside `state.json`. Its own file rather than a key in the
+    /// persisted state: a large word list has no business making every settings write
+    /// bigger, and a corrupt index must not be able to cost the recording library.
+    pub(crate) known_words_file: PathBuf,
 }
 
 pub(crate) struct SharedShellState(pub(crate) Mutex<ShellSnapshot>);
@@ -1099,4 +1122,106 @@ mod settings_default_tests {
         assert_eq!(decoded.whisper.decode_speed, "fast");
         assert!(decoded.features.transcription);
     }
+}
+
+/// One note type + field the known-word index is read from.
+///
+/// Named explicitly rather than inferred from a deck or from "the first field":
+/// a deck is a study schedule, not a vocabulary list, and a first field is as
+/// often a sentence or an id as it is a word. Independent of the push `note_type`
+/// on purpose — the note type cards are pushed INTO is rarely one vocabulary is
+/// read FROM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VocabularySource {
+    pub(crate) note_type: String,
+    pub(crate) field: String,
+}
+
+/// What one known-word refresh has to say for itself.
+///
+/// `word_count` and `built_at_ms` describe the index as it stands after the
+/// attempt, not what the attempt itself read — an offline refresh leaves the
+/// previous index in place and reports it, because it is still the best answer
+/// available. `status` is what happened: `ready`, `empty`, `offline`, or
+/// `unconfigured`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KnownWordsSnapshot {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) word_count: usize,
+    pub(crate) built_at_ms: Option<u64>,
+}
+
+/// Everything that decides what an index contains: which fields the words are read
+/// from, and how long one must have been held before it counts.
+///
+/// The two live in one type because they are one question. An index is only valid
+/// for the settings it was built under, and asking that in two places is asking for
+/// the day a third input is added and only one of them is updated — leaving an index
+/// that answers confidently for a rule it was never built with. Judged through
+/// `matches`, so there is exactly one definition of "still mine".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KnownWordsBuild {
+    #[serde(default)]
+    pub(crate) sources: Vec<VocabularySource>,
+    /// Zero only ever comes from a file written before the threshold existed, or a
+    /// hand-edited one. It matches no real setting, so such an index reads as stale
+    /// and is rebuilt — the safe direction.
+    #[serde(default)]
+    pub(crate) mature_after_days: u32,
+}
+
+impl KnownWordsBuild {
+    /// Whether an index built under `self` still answers for `other`.
+    ///
+    /// Sources compare as a multiset: reordering the rows in settings is not a
+    /// change and must not nag a needless Refresh. The threshold compares exactly —
+    /// a different number is a different set of words by definition.
+    pub(crate) fn matches(&self, other: &KnownWordsBuild) -> bool {
+        if self.mature_after_days != other.mature_after_days
+            || self.sources.len() != other.sources.len()
+        {
+            return false;
+        }
+        let key = |sources: &[VocabularySource]| {
+            let mut rows: Vec<(String, String)> = sources
+                .iter()
+                .map(|source| (source.note_type.clone(), source.field.clone()))
+                .collect();
+            rows.sort_unstable();
+            rows
+        };
+        key(&self.sources) == key(&other.sources)
+    }
+}
+
+/// Every word the user already knows, normalized to the form the transcript side
+/// asks in, with the moment it was read out of Anki and the settings it was built
+/// under.
+///
+/// `build` is what a loaded index is judged against on startup: if the settings
+/// have changed since, this index is for a rule the user no longer uses, and the UI
+/// is nudged to Refresh rather than shown a count that silently answers for the
+/// wrong decks or the wrong maturity.
+pub(crate) struct KnownWordIndex {
+    pub(crate) words: std::collections::HashSet<String>,
+    pub(crate) built_at_ms: u64,
+    pub(crate) build: KnownWordsBuild,
+}
+
+/// The in-memory known-word index, or `None` until one is built or loaded.
+///
+/// Backed by `known_words.txt`: the index is restored into here at startup and
+/// re-persisted on every successful Refresh, so ranking works on launch without a
+/// manual rebuild. It is still a cache of Anki's contents and can be stale, but the
+/// answer to that is to show its age (`built_at_ms`) and flag a settings change, not
+/// to discard it every launch and leave ranking silently unavailable.
+pub(crate) struct KnownWordsState(pub(crate) Mutex<Option<KnownWordIndex>>);
+
+/// Anki's own "mature" threshold, and the default both MorphMan and AnkiMorphs use.
+pub(crate) fn default_known_word_interval_days() -> u32 {
+    21
 }

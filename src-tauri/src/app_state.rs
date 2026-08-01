@@ -9,11 +9,11 @@ pub(crate) use history::{
     derive_transcript_language_from_path, is_japanese_transcript_language,
     reconcile_recording_history, transcript_looks_japanese,
 };
-pub(crate) use persistence::{build_app_paths, load_persisted_data, write_persisted_data};
+pub(crate) use persistence::{write_file_atomically, build_app_paths, load_persisted_data, write_persisted_data};
 use persistence::{default_asset_directory, default_output_directory};
 
 use crate::{
-    app_types::{
+    app_types::{VocabularySource, 
         default_translation_provider, default_translation_target_language, whisper_model_spec,
         AnkiFieldMapping, AnkiSettings, AppPathsState, AppSettings, FeatureSettings, PersistedData,
         ScannerSettings, TranslationSettings, WhisperSettings,
@@ -138,6 +138,22 @@ pub(crate) fn normalize_settings<R: Runtime>(
             // Clamp the mined-clip padding to a sane ceiling so a hand-edited value can't
             // produce a clip that swallows the neighbouring sentences.
             clip_padding_ms: settings.anki.clip_padding_ms.min(2000),
+            // A row is only a source once BOTH halves are filled. A half-filled row cannot
+            // be queried, and keeping it would mean the index silently answering for fewer
+            // decks than the settings appear to list.
+            vocabulary_sources: settings
+                .anki
+                .vocabulary_sources
+                .iter()
+                .map(|source| VocabularySource {
+                    note_type: source.note_type.trim().to_string(),
+                    field: source.field.trim().to_string(),
+                })
+                .filter(|source| !source.note_type.is_empty() && !source.field.is_empty())
+                .collect(),
+            // Zero would make every word ever added "known"; the ceiling stops a hand-edited
+            // value from making the index permanently empty.
+            known_word_interval_days: settings.anki.known_word_interval_days.clamp(1, 3650),
         },
         features: FeatureSettings {
             transcription: settings.features.transcription,

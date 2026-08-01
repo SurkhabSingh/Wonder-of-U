@@ -99,6 +99,8 @@ pub fn run() {
             start_recording,
             stop_recording,
             load_anki_catalog,
+            refresh_known_words,
+            download_recommended_dictionary,
             load_mined_sentences,
             start_watch_session,
             watch_snapshot,

@@ -40,6 +40,10 @@ tiny_http = "0.12"
 # from a path at runtime instead.
 lindera = "4"
 
+# NFKC for the known-word index. An Anki field and the tokenizer disagree on width and
+# half-width katakana, and a word differing only by width is the same word.
+unicode-normalization = "0.1"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10.1"
 windows-sys = { version = "0.61.2", features = [
