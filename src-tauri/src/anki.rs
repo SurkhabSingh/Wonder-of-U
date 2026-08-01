@@ -1,4 +1,5 @@
 mod known_words_store;
+mod vocabulary_scan;
 mod known_words;
 mod catalog;
 mod clip;
@@ -18,6 +19,7 @@ pub(crate) mod screenshot;
 pub(crate) use self::{
     catalog::load_anki_catalog_inner,
     known_words::refresh_known_words_inner,
+    vocabulary_scan::scan_vocabulary_sources_inner,
     known_words_store::{known_words_snapshot_from_state, restore_known_words_index},
     furigana_update::add_furigana_to_anki_inner,
     lookup::{lookup_term_inner, LookupResult},

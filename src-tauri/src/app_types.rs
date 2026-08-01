@@ -1138,6 +1138,31 @@ pub(crate) struct VocabularySource {
     pub(crate) field: String,
 }
 
+/// One proposed vocabulary source, with real values from the user's own cards.
+///
+/// `samples` is not decoration. The tests behind a suggestion cannot tell a deck of
+/// single kanji from a deck of words, or a Basic deck of vocabulary from one of
+/// trivia — and three real values answer that at a glance.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VocabularySuggestion {
+    pub(crate) note_type: String,
+    pub(crate) field: String,
+    pub(crate) mature_note_count: usize,
+    pub(crate) samples: Vec<String>,
+    pub(crate) already_added: bool,
+}
+
+/// The result of looking through the collection. `status` is `ready`, `none`
+/// (nothing read like vocabulary), `offline`, or `needsDictionary`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VocabularySuggestions {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) suggestions: Vec<VocabularySuggestion>,
+}
+
 /// What one known-word refresh has to say for itself.
 ///
 /// `word_count` and `built_at_ms` describe the index as it stands after the

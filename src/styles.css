@@ -1474,6 +1474,33 @@ input::placeholder {
   background: var(--warning-soft);
 }
 
+/* One proposed vocabulary source. The samples are the point of the row — they are
+   what tells a deck of words from a deck of kanji — so they get the width, and the
+   button is sized to its label rather than stretching. */
+.suggestion-row {
+  display: flex;
+  gap: var(--space-5);
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.suggestion-detail {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.suggestion-detail > .microcopy {
+  margin-top: 2px;
+}
+
+.suggestion-row > button {
+  flex: 0 0 auto;
+}
+
 .update-card.current,
 .update-card.installed {
   border-color: color-mix(in srgb, var(--success) 32%, var(--border));

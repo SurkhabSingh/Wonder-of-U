@@ -565,6 +565,7 @@ function App() {
     downloadRecommendedAlass,
     downloadRecommendedDictionary,
     refreshKnownWords,
+    scanVocabularySources,
     downloadRuntimeVersion,
     toggleDownloadPause,
     updateAnkiField,
@@ -1232,6 +1233,7 @@ function App() {
             onDownloadRecommendedAlass={downloadRecommendedAlass}
             onDownloadRecommendedDictionary={downloadRecommendedDictionary}
             onRefreshKnownWords={refreshKnownWords}
+            onScanVocabularySources={scanVocabularySources}
             onCheckYtdlpUpdate={checkYtdlpUpdate}
             onToggleDownloadPause={toggleDownloadPause}
             onCancelDownload={cancelDownload}

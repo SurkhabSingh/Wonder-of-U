@@ -8,6 +8,7 @@ import type {
   AutosaveState,
   BusyAction,
   SettingsSection,
+  VocabularySuggestions,
   WhisperAssetUpdateResult,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
@@ -61,6 +62,7 @@ export function SettingsPages({
   onDownloadRecommendedAlass,
   onDownloadRecommendedDictionary,
   onRefreshKnownWords,
+  onScanVocabularySources,
   onCheckYtdlpUpdate,
   onToggleDownloadPause,
   onCancelDownload,
@@ -101,6 +103,7 @@ export function SettingsPages({
   onDownloadRecommendedAlass: () => void | Promise<void>;
   onDownloadRecommendedDictionary: () => void | Promise<void>;
   onRefreshKnownWords: () => void | Promise<void>;
+  onScanVocabularySources: () => Promise<VocabularySuggestions | null>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
   onCancelDownload: () => void | Promise<void>;
@@ -229,6 +232,7 @@ export function SettingsPages({
             onCancelDownload={onCancelDownload}
             onDownloadRecommendedDictionary={onDownloadRecommendedDictionary}
             onRefreshKnownWords={onRefreshKnownWords}
+            onScanVocabularySources={onScanVocabularySources}
             onToggleDownloadPause={onToggleDownloadPause}
             onUpdateSettings={onUpdateSettings}
             settingsDraft={settingsDraft}

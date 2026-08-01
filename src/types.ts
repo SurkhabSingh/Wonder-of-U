@@ -321,6 +321,25 @@ export type DictionaryDetection = {
   message: string;
 };
 
+// One proposed vocabulary source. `samples` carries real values off the user's own
+// cards — the scan cannot tell a deck of single kanji from a deck of words, and
+// three samples answer that at a glance.
+export type VocabularySuggestion = {
+  noteType: string;
+  field: string;
+  matureNoteCount: number;
+  samples: string[];
+  alreadyAdded: boolean;
+};
+
+// `status` is "ready", "none" (nothing read like vocabulary), "offline", or
+// "needsDictionary".
+export type VocabularySuggestions = {
+  status: string;
+  message: string;
+  suggestions: VocabularySuggestion[];
+};
+
 // What the saved known-word list has to say for itself. `status` is one of
 // "unconfigured" (no sources chosen), "unbuilt" (nothing saved yet), "ready",
 // "stale" (the settings changed since it was built), "empty", or "offline".
@@ -525,6 +544,7 @@ export type BusyAction =
   | "downloadYtdlp"
   | "downloadDictionary"
   | "refreshKnownWords"
+  | "scanVocabulary"
   | "importYoutube"
   | "checkYtdlpUpdate"
   | "checkRuntimeUpdate"

@@ -12,6 +12,7 @@ import type {
   BusyAction,
   KnownWordsSnapshot,
   SettingsSection,
+  VocabularySuggestions,
   WhisperAssetUpdateResult,
 } from "../types";
 
@@ -158,6 +159,28 @@ export function useSetupActions({
       setBusyAction(null);
     }
   }, [persistSettingsIfNeeded, setBusyAction, setLoadError]);
+
+  /**
+   * Looks through the collection for note types that hold vocabulary.
+   *
+   * Returns the suggestions rather than applying them. Writing them straight into
+   * settings would be the one thing this feature must not do: a wrong field fails
+   * silently, so the user has to see the samples and choose.
+   */
+  const scanVocabularySources =
+    useCallback(async (): Promise<VocabularySuggestions | null> => {
+      try {
+        setBusyAction("scanVocabulary");
+        return await invoke<VocabularySuggestions>("scan_vocabulary_sources");
+      } catch (error) {
+        setLoadError(
+          errorMessage(error, "Your Anki collection could not be searched."),
+        );
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    }, [setBusyAction, setLoadError]);
 
   const checkYtdlpUpdate = useCallback(async () => {
     try {
@@ -345,6 +368,7 @@ export function useSetupActions({
     downloadRecommendedDictionary,
     downloadRuntimeVersion,
     refreshKnownWords,
+    scanVocabularySources,
     toggleDownloadPause,
     updateAnkiField,
   };

@@ -32,12 +32,12 @@ use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
         load_mined_sentences_inner, mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
-        push_recordings_to_anki_inner, refresh_known_words_inner,
+        push_recordings_to_anki_inner, refresh_known_words_inner, scan_vocabulary_sources_inner,
     },
     app_runtime::{build_app_bootstrap, emit_app_snapshot},
     app_types::{
         AnkiCatalog, AppBootstrap, AppSettings, KnownWordsSnapshot, MinedSentences,
-        RecordingBatchResult, RecordingTexts, WhisperAssetUpdateResult,
+        RecordingBatchResult, RecordingTexts, VocabularySuggestions, WhisperAssetUpdateResult,
     },
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
@@ -195,6 +195,23 @@ pub(crate) async fn load_anki_catalog(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Looks through the collection for note types that hold vocabulary.
+///
+/// Proposes; it never writes. The suggestions become settings only when the user
+/// accepts one, which is the point — a wrong field here fails silently, and the
+/// samples riding along with each suggestion are what make it checkable.
+///
+/// Off the UI thread: it walks every note type in the collection and tokenizes a
+/// sample of each candidate field.
+#[tauri::command]
+pub(crate) async fn scan_vocabulary_sources(
+    app: AppHandle,
+) -> Result<VocabularySuggestions, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_vocabulary_sources_inner(&app))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// Rebuilds the known-word list from Anki. Manual by design — see

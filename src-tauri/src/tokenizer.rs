@@ -32,6 +32,14 @@ const UNKNOWN_FIELD_VALUE: &str = "*";
 pub(crate) struct JapaneseToken {
     pub(crate) surface: String,
     pub(crate) base_form: String,
+    /// Whether IPADIC actually knows this as a word, rather than it being a run of
+    /// characters lindera grouped because it had nothing better to do with them.
+    ///
+    /// Worth keeping separate from `base_form`: an unknown token falls back to its
+    /// own surface, which is indistinguishable from a known word already in
+    /// dictionary form. A radical, a stray symbol and a novel proper noun are all
+    /// one token and none of them is vocabulary.
+    pub(crate) known_to_dictionary: bool,
 }
 
 /// Caches the loaded dictionary against the path it came from.
@@ -140,8 +148,15 @@ pub(crate) fn tokenize_japanese(
         .map(|token| {
             // Read the surface before `get`, which needs the token mutably.
             let surface = token.surface.to_string();
-            let base_form = resolve_base_form(&surface, token.get(BASE_FORM_FIELD));
-            JapaneseToken { surface, base_form }
+            let raw_base_form = token.get(BASE_FORM_FIELD);
+            JapaneseToken {
+                known_to_dictionary: matches!(
+                    raw_base_form,
+                    Some(value) if value != UNKNOWN_FIELD_VALUE && !value.is_empty()
+                ),
+                base_form: resolve_base_form(&surface, raw_base_form),
+                surface,
+            }
         })
         .collect())
 }

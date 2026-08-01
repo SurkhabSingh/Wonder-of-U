@@ -100,6 +100,7 @@ pub fn run() {
             stop_recording,
             load_anki_catalog,
             refresh_known_words,
+            scan_vocabulary_sources,
             download_recommended_dictionary,
             load_mined_sentences,
             start_watch_session,

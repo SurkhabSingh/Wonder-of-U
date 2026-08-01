@@ -7,6 +7,8 @@ import type {
   AppSettings,
   BusyAction,
   VocabularySource,
+  VocabularySuggestion,
+  VocabularySuggestions,
 } from "../../types";
 import { isDownloadBusy } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
@@ -66,6 +68,7 @@ export function StudyPicksSettingsPage({
   downloadIsActive,
   onDownloadRecommendedDictionary,
   onRefreshKnownWords,
+  onScanVocabularySources,
   onUpdateSettings,
   onCancelDownload,
   onToggleDownloadPause,
@@ -77,6 +80,7 @@ export function StudyPicksSettingsPage({
   downloadIsActive: boolean;
   onDownloadRecommendedDictionary: () => void | Promise<void>;
   onRefreshKnownWords: () => void | Promise<void>;
+  onScanVocabularySources: () => Promise<VocabularySuggestions | null>;
   onUpdateSettings: (update: SettingsUpdate) => void;
   onCancelDownload: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
@@ -127,8 +131,43 @@ export function StudyPicksSettingsPage({
     }
   }, [sources, fieldsByNoteType, loadFieldsFor]);
 
+  const [scan, setScan] = useState<VocabularySuggestions | null>(null);
+
   const updateSources = (nextSources: VocabularySource[]) => {
     onUpdateSettings({ anki: { vocabularySources: nextSources } });
+  };
+
+  const handleScan = async () => {
+    const result = await onScanVocabularySources();
+    if (result) {
+      setScan(result);
+      // The suggestions name note types not otherwise chosen, so their fields have
+      // not been fetched — do it now, or accepting one shows a dropdown with only
+      // the saved value in it.
+      for (const suggestion of result.suggestions) {
+        void loadFieldsFor(suggestion.noteType);
+      }
+    }
+  };
+
+  // Compared against the live draft rather than the flag the scan came back with:
+  // a suggestion accepted a moment ago is already a source, and the scan's own
+  // answer is from before that.
+  const isAlreadyASource = (suggestion: VocabularySuggestion) =>
+    sources.some(
+      (source) =>
+        source.noteType === suggestion.noteType &&
+        source.field === suggestion.field,
+    );
+
+  const addSuggestion = (suggestion: VocabularySuggestion) => {
+    if (isAlreadyASource(suggestion)) {
+      return;
+    }
+    updateSources([
+      ...sources,
+      { noteType: suggestion.noteType, field: suggestion.field },
+    ]);
   };
 
   const updateSourceAt = (index: number, change: Partial<VocabularySource>) => {
@@ -205,6 +244,66 @@ export function StudyPicksSettingsPage({
             description="The note types you learn words from, and which field on each holds the word itself. This is separate from the note type cards are pushed to — the deck you mine INTO is rarely the one you read your vocabulary FROM."
           />
         </span>
+
+        <p className="microcopy">
+          {sources.length === 0
+            ? "Nothing set up yet. Look through your collection, or add a source by hand below."
+            : "Look through your collection again for anything not listed here."}
+        </p>
+        <div className="action-row inline-actions">
+          <button
+            type="button"
+            className={sources.length === 0 ? undefined : "secondary"}
+            onClick={() => void handleScan()}
+            disabled={busyAction === "scanVocabulary"}
+          >
+            {busyAction === "scanVocabulary"
+              ? "Looking through your collection…"
+              : "Find my vocabulary decks"}
+          </button>
+        </div>
+
+        {scan ? (
+          <div
+            className={`update-card ${
+              scan.status === "ready"
+                ? "available"
+                : scan.status === "offline"
+                  ? "error"
+                  : ""
+            }`}
+          >
+            <strong>{scan.message}</strong>
+            {/* Each row carries real values off the user's own cards. The scan can
+                tell a word field from a sentence field, but not a deck of single
+                kanji from a deck of words — and one look at the samples can. */}
+            {scan.suggestions.map((suggestion) => (
+              <div
+                className="suggestion-row"
+                key={`${suggestion.noteType} ${suggestion.field}`}
+              >
+                <div className="suggestion-detail">
+                  <strong>
+                    {suggestion.noteType} &rarr; {suggestion.field}
+                  </strong>
+                  <p className="microcopy">
+                    {suggestion.matureNoteCount.toLocaleString()} words you have
+                    held on to &mdash; {suggestion.samples.join("  ·  ")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => addSuggestion(suggestion)}
+                  disabled={isAlreadyASource(suggestion)}
+                >
+                  {isAlreadyASource(suggestion) ? "Added" : "Use this"}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         {sources.length === 0 ? (
           <p className="microcopy">
             No sources yet. Add one to switch this on.

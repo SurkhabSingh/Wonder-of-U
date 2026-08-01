@@ -15,7 +15,7 @@ pub(super) fn anki_offline_message(error: &str) -> String {
     )
 }
 
-pub(super) fn anki_connect_request(
+pub(in crate::anki) fn anki_connect_request(
     action: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {

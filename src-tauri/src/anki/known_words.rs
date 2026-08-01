@@ -55,7 +55,7 @@ const BLOCK_TAGS: [&str; 6] = ["br", "div", "p", "li", "tr", "td"];
 /// BOTH sides must be passed through this — the transcript token as well as the
 /// Anki field. A comparison is only as honest as its least normalized operand, and
 /// the cost of forgetting is silent: words simply look new forever.
-pub(crate) fn normalize_expression(value: &str) -> String {
+pub(super) fn normalize_expression(value: &str) -> String {
     let value = strip_sound_tags(value);
     let value = strip_html(&value);
     // After the tags are gone, so an escaped `&lt;b&gt;` stays the literal text it
