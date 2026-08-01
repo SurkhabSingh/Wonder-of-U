@@ -23,6 +23,13 @@ type UseTranscriptionQueueOptions = {
   // Flush any pending settings edits before the invoke so a just-changed
   // language / model / CPU-usage value is on disk when whisper-cli reads it.
   persistSettingsIfNeeded: () => Promise<void>;
+  // Report a run that did not produce a transcript.
+  //
+  // The queue used to raise nothing at all: a refused batch became a row reading "failed"
+  // with the reason hidden in a `title` tooltip, so a transcription blocked because a video
+  // was already being transcribed looked like it had simply done nothing. A cancel stays
+  // silent here — the user just asked for it, and the phase toast already names it.
+  onFailure: (message: string) => void;
 };
 
 // The backend transcribe command is single-file and single-flight on the one
@@ -38,6 +45,7 @@ type UseTranscriptionQueueOptions = {
 export function useTranscriptionQueue({
   applyBootstrap,
   persistSettingsIfNeeded,
+  onFailure,
 }: UseTranscriptionQueueOptions) {
   const [items, setItems] = useState<TranscriptionQueueItem[]>([]);
   // Percent for the single active file, or null when nothing is active.
@@ -70,8 +78,10 @@ export function useTranscriptionQueue({
   // closure and the effects don't re-fire because a parent re-rendered.
   const applyBootstrapRef = useRef(applyBootstrap);
   const persistSettingsIfNeededRef = useRef(persistSettingsIfNeeded);
+  const onFailureRef = useRef(onFailure);
   applyBootstrapRef.current = applyBootstrap;
   persistSettingsIfNeededRef.current = persistSettingsIfNeeded;
+  onFailureRef.current = onFailure;
 
   // Mirror of `items` the async loop reads between iterations without capturing
   // a stale render closure. Kept in sync by the effect below.
@@ -289,11 +299,15 @@ export function useTranscriptionQueue({
                 return item;
               }
               if (!result) {
+                onFailureRef.current(failureMessage);
                 return { ...item, status: "failed", message: failureMessage };
               }
               const outcome = result.items[0];
-              // A result with no item is a real failure — keep the batch message.
+              // A batch with no item never ran — the engine was unavailable, or another
+              // transcription already holds the whisper slot. That reason only lived in a
+              // tooltip, so a refusal looked exactly like nothing happening.
               if (!outcome) {
+                onFailureRef.current(result.message);
                 return { ...item, status: "failed", message: result.message };
               }
               if (outcome.status === "success") {
@@ -306,6 +320,7 @@ export function useTranscriptionQueue({
               }
               // "failed" | "skipped" | anything else — a row that did not land a
               // transcript, kept with the backend's own reason.
+              onFailureRef.current(outcome.message);
               return { ...item, status: "failed", message: outcome.message };
             }),
           );

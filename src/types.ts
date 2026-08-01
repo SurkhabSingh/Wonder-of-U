@@ -170,6 +170,29 @@ export type DeepPartial<T> = {
 
 export type SettingsUpdate = DeepPartial<AppSettings>;
 
+// Where a video's subtitle came from. Labels a chip and nothing else — the backend keeps the
+// stored value to these four, and anything else arrives as null and simply draws no chip.
+export type SubtitleOrigin = "picked" | "jimaku" | "generated" | "synced";
+
+// A video in the video library, and the subtitle it is paired with.
+//
+// Separate from RecentRecording on purpose: a video is watched, subtitled and realigned; a
+// recording is transcribed, translated and mined. They share no actions.
+export type WatchedVideo = {
+  videoPath: string;
+  title: string | null;
+  // The remembered subtitle. Null means none has been chosen, which is not the same as none
+  // existing — the container may still carry an embedded track.
+  subtitlePath: string | null;
+  subtitleOrigin: SubtitleOrigin | null;
+  thumbnailPath: string | null;
+  durationMs: number;
+  bytes: number;
+  addedAtMs: number;
+  // Null until the video has actually been played once.
+  lastOpenedAtMs: number | null;
+};
+
 export type RecentRecording = {
   fileName: string;
   filePath: string;
@@ -293,6 +316,7 @@ export type AppBootstrap = {
   shell: ShellSnapshot;
   settings: AppSettings;
   recentRecordings: RecentRecording[];
+  watchedVideos: WatchedVideo[];
   whisperDetection: WhisperDetection;
   ffmpegDetection: FfmpegDetection;
   ytdlpDetection: YtdlpDetection;

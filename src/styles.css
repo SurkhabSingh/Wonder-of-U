@@ -242,9 +242,15 @@ input::placeholder {
 }
 
 /* No border and no fill: the dismiss is a glyph, not a control competing with the toast's
-   own message. It reads as a button from position and hover alone. */
+   own message. It reads as a button from position and hover alone.
+   
+   `--space-4`, not `--space-sm`. This project's scale is `--space-0`…`--space-9`; there has
+   never been a `-sm`. An undefined custom property makes the whole `inset` invalid at
+   computed-value time, so all four sides fall back to `auto` and the absolutely-positioned
+   button lands at its static position — on top of the message. The border removal and that
+   typo shipped in one hunk; only the border was meant to change. */
 .app-toast [data-close-button] {
-  inset: var(--space-sm) var(--space-sm) auto auto !important;
+  inset: var(--space-4) var(--space-4) auto auto !important;
   width: 20px !important;
   height: 20px !important;
   display: grid !important;
@@ -253,11 +259,11 @@ input::placeholder {
   border-radius: var(--radius-sm) !important;
   background: transparent !important;
   color: var(--text-muted) !important;
-  transform: none !important;
 }
 
+/* Colour only on hover, no fill. The button sits at the toast's very corner, so a
+   background paints over the rounded edge and spills past it. */
 .app-toast [data-close-button]:hover {
-  background: var(--surface-active) !important;
   color: var(--text-strong) !important;
 }
 
@@ -326,6 +332,9 @@ input::placeholder {
 }
 
 .confirm-title {
+  /* The UA gives a `p` a 1em block margin, which stacked on top of the panel's own gap and
+     left the heading sitting low in its own dialog. */
+  margin: 0;
   font-size: var(--text-lg);
   color: var(--text-strong);
 }
@@ -3528,6 +3537,10 @@ input::placeholder {
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   overflow-y: auto;
+  /* Explicit, and load-bearing: setting only one axis makes the other compute to `auto`,
+     so this box was a horizontal scroll container as well. Subtitle file names are long
+     and often unbreakable, so it always found something to scroll. */
+  overflow-x: hidden;
 }
 
 .jimaku-results-header {
@@ -3539,11 +3552,31 @@ input::placeholder {
   border-bottom: 1px solid var(--border);
 }
 
+/* Flex items default to `min-width: auto`, so a long anime title refused to shrink and
+   widened the whole list. Same treatment `.themed-select-trigger > span` already uses. */
+.jimaku-results-header > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The header's title is a span, which flex blockifies — so `.microcopy`'s 10px top margin
+   applied and pushed it off the Back link's baseline. */
+.jimaku-results-header .microcopy {
+  margin-top: 0;
+}
+
 .jimaku-result {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  min-width: 0;
+  /* A file name like `[SubsPlease]_Grand_Blue_S3_-_01_(1080p)_[F6B8A2C1].ass` has no break
+     opportunity at all — underscores and mid-word dots are not break points — so without
+     this it is one ~430px token in ~378px of room, and the list scrolls sideways. */
+  overflow-wrap: anywhere;
   padding: var(--space-2) var(--space-3);
   border: none;
   border-radius: var(--radius-sm);
@@ -3571,4 +3604,129 @@ input::placeholder {
   font: inherit;
   cursor: pointer;
   text-decoration: underline;
+}
+
+/* ---- Video library -------------------------------------------------------
+   Its own rules rather than reuse of `.recording-item`: audio and video share a
+   look, not a component, and a row that had to satisfy both would constrain
+   whichever one changed second. Copied from the audio row so they match today,
+   free to diverge tomorrow. */
+.video-list {
+  display: grid;
+  gap: var(--space-5);
+  align-content: start;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.video-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-4);
+  align-items: center;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+/* A video whose file has moved is dimmed, not hidden — the row still carries the
+   subtitle mapping, which is the part that would be expensive to lose. */
+.video-item.is-missing .video-thumb,
+.video-item.is-missing .video-item-text {
+  opacity: 0.55;
+}
+
+.video-thumb {
+  width: 76px;
+  height: 43px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-active);
+}
+
+.video-thumb-empty {
+  border: 1px solid var(--border);
+}
+
+.video-item-text {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.video-name {
+  font-size: var(--text-base);
+  font-weight: var(--weight-mid);
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The paired subtitle's file name, beside its chip. Muted and truncating: it is
+   confirmation of which file, not something to read. */
+.video-subtitle-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Progress sits in the row it belongs to, in place of that row's metadata, so
+   there is never a question about which video is being worked on. */
+.video-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.video-progress-text {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.video-progress-bar {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.video-progress-cancel {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px var(--space-3);
+  font-size: var(--text-xs);
+}
+
+/* The Jimaku dialog borrows the confirm modal's shell, and has to be told its own size.
+   `.confirm-panel` sets no max-height and the overlay centres with `place-items: center`
+   under `body { overflow: hidden }` — so a panel taller than the viewport is clipped at BOTH
+   ends with nothing able to scroll to what was cut. Bounding the panel and letting one
+   region inside it scroll is what keeps the dialog still while its contents change.
+
+   The width matches `.confirm-panel`'s own `min(30rem, 100%)`; the first version of this
+   rule said 440px, which made the "wide" dialog 40px NARROWER than a plain one. */
+.modal-panel-wide {
+  width: min(30rem, calc(100vw - 48px));
+  max-height: min(560px, calc(100vh - 48px));
+  overflow: hidden;
+}
+
+/* Inside the dialog the results take the leftover height instead of a fixed 260px, so the
+   panel is the same size whether a search returns one file or forty. */
+.modal-panel-wide .jimaku-panel {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.modal-panel-wide .jimaku-results {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
 }

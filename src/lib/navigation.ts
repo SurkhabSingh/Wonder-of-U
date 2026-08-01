@@ -15,19 +15,25 @@ export type RecordingFilterTab = {
   count: number;
 };
 
-export function createWorkflowPages(recordingCount: number): PageNavigationItem[] {
+// The two libraries are named for what they hold. "Library" alone promised everything and
+// held only audio, which is exactly why a video felt like it belonged there.
+export function createWorkflowPages(
+  recordingCount: number,
+  videoCount: number,
+): PageNavigationItem[] {
   return [
     { id: "home", label: "Home", description: "Your work at a glance" },
     {
       id: "recordings",
-      label: "Library",
+      label: "Audio library",
       description: "",
       count: String(recordingCount),
     },
     {
       id: "watch",
-      label: "Watch",
+      label: "Video library",
       description: "Play a video and mine as you go",
+      count: String(videoCount),
     },
   ];
 }

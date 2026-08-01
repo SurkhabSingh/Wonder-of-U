@@ -159,7 +159,10 @@ export function useAppViewState({
     (bootstrap.whisperDetection.modelManaged
       ? bootstrap.whisperDetection.modelPath ?? ""
       : "");
-  const workflowPages = createWorkflowPages(bootstrap.recentRecordings.length);
+  const workflowPages = createWorkflowPages(
+    bootstrap.recentRecordings.length,
+    bootstrap.watchedVideos.length,
+  );
   const modelLabel =
     MODEL_OPTIONS.find(
       (option) => option.id === settingsDraft.whisper.modelChoice,

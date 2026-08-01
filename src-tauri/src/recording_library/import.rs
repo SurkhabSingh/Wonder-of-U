@@ -148,7 +148,7 @@ fn parse_ffprobe_duration_ms(stdout: &str) -> Option<u64> {
 /// Best-effort duration probe. A missing or failing ffprobe is never an import
 /// failure — the recording simply lands with `duration_ms = 0`, exactly as an
 /// unprobeable file recovered from disk does.
-fn probe_duration_ms(ffmpeg_executable: Option<&str>, audio_path: &Path) -> u64 {
+pub(crate) fn probe_duration_ms(ffmpeg_executable: Option<&str>, audio_path: &Path) -> u64 {
     if let Some(ffmpeg_executable) = ffmpeg_executable {
         let ffprobe = ffprobe_path_for(ffmpeg_executable);
         let mut command = Command::new(&ffprobe);
@@ -786,6 +786,21 @@ fn ytdlp_fetch_args(
         "-x".into(),
         "--audio-format".into(),
         "mp3".into(),
+        // A CONSTANT bitrate, matching what this app's own conversions produce, and the
+        // reason is seeking rather than quality.
+        //
+        // yt-dlp's default is `--audio-quality 5`, which is LAME VBR. In a variable-bitrate
+        // MP3 there is no fixed relationship between a byte offset and a moment in time, so
+        // the webview's audio element estimates one — and the error grows the further into
+        // the file you seek. That is why per-sentence playback drifted late in a recording
+        // while the transcript's own timestamps were exact: mining cuts with ffmpeg, which
+        // decodes forward to the real position, but playback can only ask the browser.
+        //
+        // Measured on this library: YouTube imports probe at 109 and 116 kbps, neither of
+        // them a nominal rate. At a constant 128k the byte offset is exactly proportional to
+        // time and the estimate cannot be wrong.
+        "--audio-quality".into(),
+        "128K".into(),
     ];
     if let Some(location) = ffmpeg_location {
         args.push("--ffmpeg-location".into());
@@ -1620,6 +1635,24 @@ mod tests {
         let without_ffmpeg =
             ytdlp_fetch_args("out.%(ext)s", None, "https://youtu.be/abc");
         assert!(!without_ffmpeg.iter().any(|arg| arg == "--ffmpeg-location"));
+    }
+
+    /// A constant bitrate, because seeking depends on it.
+    ///
+    /// yt-dlp defaults to VBR, and in a VBR mp3 a byte offset does not map to a fixed moment
+    /// — the browser estimates one, and the estimate drifts further the later you seek. That
+    /// is the difference between a mined clip (cut by ffmpeg, decoded forward to the real
+    /// position) and per-sentence playback (which can only ask the audio element).
+    #[test]
+    fn youtube_audio_is_fetched_at_a_constant_bitrate() {
+        let args = ytdlp_fetch_args("out.%(ext)s", None, "https://youtu.be/abc");
+
+        let quality = args
+            .iter()
+            .position(|arg| arg == "--audio-quality")
+            .expect("an explicit audio quality, not yt-dlp's VBR default");
+        // A bare number would be a VBR quality level; a bitrate is what asks for CBR.
+        assert_eq!(args[quality + 1], "128K");
     }
 
     #[test]

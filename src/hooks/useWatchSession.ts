@@ -29,7 +29,10 @@ const POLL_INTERVAL_MS = 250;
 // back disconnected and the poll winds down.
 export function useWatchSession() {
   const [snapshot, setSnapshot] = useState<WatchSnapshot>(DISCONNECTED);
-  const [isStarting, setIsStarting] = useState(false);
+  // The video being opened, not merely "an open is in flight". A bare boolean was read once
+  // per row by the video library, so opening one video put every row into a disabled
+  // "Opening…" state at the same time.
+  const [startingPath, setStartingPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isMining, setIsMining] = useState(false);
   const [mineResult, setMineResult] = useState<{ ok: boolean; message: string } | null>(
@@ -94,7 +97,7 @@ export function useWatchSession() {
 
   const start = useCallback(
     async (videoPath: string, subtitlePath: string | null) => {
-      setIsStarting(true);
+      setStartingPath(videoPath);
       setError(null);
       try {
         const next = await invoke<WatchSnapshot>("start_watch_session", {
@@ -113,7 +116,7 @@ export function useWatchSession() {
         }
       } finally {
         if (mountedRef.current) {
-          setIsStarting(false);
+          setStartingPath(null);
         }
       }
     },
@@ -232,7 +235,9 @@ export function useWatchSession() {
   return {
     snapshot,
     setSubtitleDelay,
-    isStarting,
+    startingPath,
+    // Kept so every existing consumer of "is an open in flight" reads the same as before.
+    isStarting: startingPath !== null,
     error,
     start,
     stop,

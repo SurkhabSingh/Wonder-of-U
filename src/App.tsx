@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { HomePage } from "./components/home/HomePage";
@@ -10,6 +10,8 @@ import { SettingsPages } from "./components/settings/SettingsPages";
 import { SetupChecklist } from "./components/settings/SetupChecklist";
 import { TranscriptViewerPage } from "./components/transcripts/TranscriptViewerPage";
 import { WatchPage } from "./components/watch/WatchPage";
+import { JimakuDialog } from "./components/watch/JimakuDialog";
+import { useConfirm } from "./components/ui/ConfirmDialogProvider";
 import { LookupPopup } from "./components/scanner/LookupPopup";
 import { useWordScanner } from "./hooks/useWordScanner";
 import { BusyOverlay } from "./components/ui/BusyOverlay";
@@ -29,13 +31,16 @@ import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import { useYoutubeQueue } from "./hooks/useYoutubeQueue";
 import { fileNameFromPath } from "./lib/format";
 import type {
+  AppBootstrap,
   AppPage,
   BusyAction,
   SettingsSection,
+  SubtitleOrigin,
   WhisperAssetUpdateResult,
 } from "./types";
 
 function App() {
+  const confirmDialog = useConfirm();
   const {
     applyBootstrap,
     autosaveMessage,
@@ -78,6 +83,29 @@ function App() {
 
   function showSuccess(message: string) {
     toast.success(message, { duration: 3500 });
+  }
+
+  // Errors from the video library are notices about one action, not conditions of the app.
+  // As cards they sat on the page until something else replaced them; as a toast the report
+  // arrives, can be dismissed, and leaves. Longer than a success because a failure is worth
+  // reading.
+  function showError(message: string) {
+    toast.error(message, { duration: 5000 });
+  }
+
+  // The engine reports a user Cancel as an ordinary Err carrying this exact string, so
+  // without recognising it a deliberate stop arrived as a red failure toast reading
+  // "transcription cancelled." — lowercase, an internal constant shown verbatim.
+  const TRANSCRIPTION_CANCELLED = "transcription cancelled.";
+
+  function reportCancellable(caught: unknown, fallback: string, cancelledMessage: string) {
+    const message =
+      caught instanceof Error ? caught.message : String(caught ?? fallback);
+    if (message.trim().toLowerCase() === TRANSCRIPTION_CANCELLED) {
+      toast(cancelledMessage, { duration: 3500 });
+      return;
+    }
+    showError(message);
   }
 
   // Deep-link into the single Settings page and scroll a specific section into
@@ -192,6 +220,235 @@ function App() {
   // Realign the subtitle file against the video's own audio, then reload the corrected
   // file into both mpv (done in Rust, so the player never shows subtitles the app thinks
   // it has fixed) and the app's cue list.
+  // Transcribe the picked video's own audio into a subtitle file, then adopt it as the
+  // session's sidecar. Adopting it is the point: from there it is an ordinary subtitle file,
+  // so the alass Sync button below applies to it exactly like a downloaded one — which is
+  // what makes the transcribe-time-realign chain testable end to end.
+  const [isGeneratingSubtitles, setIsGeneratingSubtitles] = useState(false);
+  const generateWatchSubtitles = useCallback(
+    async (videoPath: string) => {
+      setIsGeneratingSubtitles(true);
+      setGeneratingPath(videoPath);
+      setWatchSyncResult(null);
+      try {
+        const generated = await invoke<{
+          path: string;
+          cueCount: number;
+          language: string;
+        }>("generate_watch_subtitles", { videoPath });
+        setWatchSubtitlePath(generated.path);
+        if (watch.snapshot.path === videoPath) {
+          await watchSubtitles.load(videoPath, generated.path, null);
+        }
+        showSuccess(
+          `${generated.cueCount} lines written to ${fileNameFromPath(
+            generated.path,
+          )}. Realign it if the timings look off.`,
+        );
+      } catch (caught) {
+        reportCancellable(
+          caught,
+          "Subtitles could not be generated.",
+          "Subtitle generation cancelled.",
+        );
+      } finally {
+        setIsGeneratingSubtitles(false);
+        setGeneratingPath(null);
+      }
+    },
+    [watch.snapshot.path, watchSubtitles],
+  );
+
+  // The video library. Selection and the generate-progress live here rather than in WatchPage
+  // so they survive leaving the page — the whole point of remembering a pairing is that it
+  // outlives the visit that made it.
+  const [generateProgress, setGenerateProgress] = useState<number | null>(null);
+  const [missingVideoPaths, setMissingVideoPaths] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const watchedVideos = bootstrap.watchedVideos;
+
+  // Check which remembered videos are still on disk, whenever the list changes. A missing file
+  // dims its row rather than removing it: the row carries the subtitle mapping, and a
+  // disconnected drive should not cost a pairing.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const missing = await invoke<string[]>("missing_watched_videos");
+        if (!cancelled) {
+          setMissingVideoPaths(new Set(missing));
+        }
+      } catch {
+        // A failed check must not dim every row — better to show them all as present than
+        // to tell the user their whole library has vanished because one call failed.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [watchedVideos]);
+
+  // The generator reuses the library's transcription-progress channel, so the bar is fed by
+  // the same event the queue uses. Only listened to while a generation is in flight, so a
+  // library batch running elsewhere cannot paint this bar.
+  useEffect(() => {
+    if (!isGeneratingSubtitles) {
+      setGenerateProgress(null);
+      return;
+    }
+    const unlisten = listen<number>("transcription-progress", (event) => {
+      setGenerateProgress(event.payload);
+    });
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, [isGeneratingSubtitles]);
+
+  const setWatchedVideoOpened = useCallback(
+    async (videoPath: string) => {
+      try {
+        applyBootstrap(
+          await invoke<AppBootstrap>("mark_watched_video_opened", { videoPath }),
+        );
+      } catch {
+        // Playback has already started. Failing to note the timestamp is not worth an error
+        // in front of someone who just pressed play.
+      }
+    },
+    [applyBootstrap],
+  );
+
+  const [videoSearch, setVideoSearch] = useState("");
+  const [openVideoMenuPath, setOpenVideoMenuPath] = useState<string | null>(null);
+  const [jimakuDialogPath, setJimakuDialogPath] = useState<string | null>(null);
+  const [generatingPath, setGeneratingPath] = useState<string | null>(null);
+
+  // Filtering on the title the row actually shows, so what you type matches what you read.
+  const visibleVideos = useMemo(() => {
+    const query = videoSearch.trim().toLowerCase();
+    if (!query) {
+      return watchedVideos;
+    }
+    return watchedVideos.filter((video) =>
+      (video.title ?? video.videoPath).toLowerCase().includes(query),
+    );
+  }, [watchedVideos, videoSearch]);
+
+  const realignWatchedVideo = useCallback(
+    async (videoPath: string) => {
+      const video = watchedVideos.find((entry) => entry.videoPath === videoPath);
+      if (!video?.subtitlePath) {
+        return;
+      }
+      setIsSyncingSubtitles(true);
+      setWatchSyncResult(null);
+      const pending = toast.loading("Realigning subtitles…");
+      try {
+        const synced = await invoke<{ path: string; summary: string }>(
+          "sync_watch_subtitles",
+          { videoPath, subtitlePath: video.subtitlePath },
+        );
+        // The backend has already repointed the mapping; this refreshes the list from it.
+        applyBootstrap(await invoke<AppBootstrap>("get_app_bootstrap"));
+        showSuccess(
+          `Realigned as ${fileNameFromPath(synced.path)}.${
+            synced.summary ? ` ${synced.summary}` : ""
+          }`,
+        );
+      } catch (caught) {
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The subtitles could not be realigned."),
+        );
+      } finally {
+        toast.dismiss(pending);
+        setIsSyncingSubtitles(false);
+      }
+    },
+    [applyBootstrap, watchedVideos],
+  );
+
+  useEffect(() => {
+    if (watch.error) {
+      showError(watch.error);
+    }
+    // Deliberately keyed on the message only: the same failure twice in a row is two
+    // attempts and deserves to be reported twice.
+  }, [watch.error]);
+
+  const addWatchedVideo = useCallback(
+    async (videoPath: string) => {
+      const pending = toast.loading("Adding video…");
+      try {
+        applyBootstrap(
+          await invoke<AppBootstrap>("add_watched_video", { videoPath }),
+        );
+      } catch (caught) {
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The video could not be added."),
+        );
+      } finally {
+        toast.dismiss(pending);
+      }
+    },
+    [applyBootstrap],
+  );
+
+  const setWatchedVideoSubtitle = useCallback(
+    async (videoPath: string, subtitlePath: string | null, origin: string | null) => {
+      try {
+        applyBootstrap(
+          await invoke<AppBootstrap>("set_watched_video_subtitle", {
+            videoPath,
+            subtitlePath,
+            origin,
+          }),
+        );
+      } catch (caught) {
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The subtitle could not be saved."),
+        );
+      }
+    },
+    [applyBootstrap],
+  );
+
+  const forgetWatchedVideo = useCallback(
+    async (videoPath: string) => {
+      try {
+        // Inside the try, not before it: the previous version awaited outside, so a rejected
+        // confirm escaped as an unhandled promise and the whole action looked like a no-op.
+        const confirmed = await confirmDialog({
+          title: "Remove this video?",
+          message:
+            "Remove this video from the list, along with the subtitles it is paired with. The video file itself is not deleted.",
+          okLabel: "Remove",
+          cancelLabel: "Keep",
+          danger: true,
+        });
+        if (!confirmed) {
+          return;
+        }
+        applyBootstrap(
+          await invoke<AppBootstrap>("forget_watched_video", { videoPath }),
+        );
+      } catch (caught) {
+        showError(
+          caught instanceof Error
+            ? caught.message
+            : String(caught ?? "The video could not be removed."),
+        );
+      }
+    },
+    [applyBootstrap, confirmDialog],
+  );
+
   const syncWatchSubtitles = useCallback(async () => {
     const videoPath = watch.snapshot.path;
     if (!watchSubtitlePath || !videoPath) {
@@ -371,6 +628,9 @@ function App() {
   const transcriptionQueue = useTranscriptionQueue({
     applyBootstrap,
     persistSettingsIfNeeded,
+    // A refusal — the whisper slot already taken, the engine not ready — used to reach the
+    // user only as a "failed" chip with the reason in a tooltip.
+    onFailure: showWarning,
   });
 
   // Adapt the shared `(filePaths, force)` action shape the Transcribe buttons use
@@ -669,23 +929,59 @@ function App() {
             />
           ) : null}
 
-          {activePage === "watch" ? (
+          {jimakuDialogPath ? (
+        <JimakuDialog
+          videoPath={jimakuDialogPath}
+          hasApiKey={settingsDraft.jimakuApiKey.trim().length > 0}
+          onDownloaded={(subtitlePath) =>
+            void setWatchedVideoSubtitle(jimakuDialogPath, subtitlePath, "jimaku")
+          }
+          onClose={() => setJimakuDialogPath(null)}
+          onOpenSettings={() => openSettingsSection("scanner")}
+        />
+      ) : null}
+
+      {activePage === "watch" ? (
             <WatchPage
               snapshot={watch.snapshot}
-              isStarting={watch.isStarting}
-              error={watch.error}
+              startingPath={watch.startingPath}
               onStart={(videoPath, subtitlePath) => {
                 setWatchMinedKeys(new Set());
                 setWatchSubtitlePath(subtitlePath);
                 setWatchSyncResult(null);
                 void watch.start(videoPath, subtitlePath);
                 void watchSubtitles.load(videoPath, subtitlePath, null);
+                // Records the open, and re-records the pairing this session actually used —
+                // so the list's "opened" line is true and the mapping matches what played.
+                void setWatchedVideoOpened(videoPath);
               }}
               onSetSubtitleDelay={(delayMs) => void watch.setSubtitleDelay(delayMs)}
               hasJimakuKey={settingsDraft.jimakuApiKey.trim().length > 0}
-              onOpenScannerSettings={() => openSettingsSection("scanner")}
               isSyncing={isSyncingSubtitles}
               syncResult={watchSyncResult}
+              videos={visibleVideos}
+              onAddVideo={(videoPath) => void addWatchedVideo(videoPath)}
+              onSearchJimaku={setJimakuDialogPath}
+              onRealign={(videoPath) => void realignWatchedVideo(videoPath)}
+              generatingPath={generatingPath}
+              openMenuPath={openVideoMenuPath}
+              onOpenMenuChange={setOpenVideoMenuPath}
+              searchQuery={videoSearch}
+              onSearchChange={setVideoSearch}
+              onSubtitleChosen={(videoPath, subtitlePath, origin: SubtitleOrigin) =>
+                void setWatchedVideoSubtitle(videoPath, subtitlePath, origin)
+              }
+              onForgetVideo={(videoPath) => void forgetWatchedVideo(videoPath)}
+              missingVideoPaths={missingVideoPaths}
+              generateProgress={generateProgress}
+              onCancelGenerate={() => {
+                void emit("transcription-cancel");
+              }}
+              // Available for any picked video, playing or not — a subtitle-free file is
+              // usually discovered before pressing play.
+              onGenerateSubtitles={(videoPath) =>
+                void generateWatchSubtitles(videoPath)
+              }
               // Only a sidecar file can be realigned: alass rewrites a subtitle file, and an
               // embedded track has none of its own.
               onSyncSubtitles={
@@ -787,6 +1083,7 @@ function App() {
               <TranscriptViewerPage
                 recording={viewingRecording}
                 transcriptionLanguage={settingsDraft.whisper.language}
+                clipPaddingMs={settingsDraft.anki.clipPaddingMs}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
                   enqueueTranscriptions([viewingRecording.filePath], force)

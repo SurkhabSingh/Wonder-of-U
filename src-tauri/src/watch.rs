@@ -28,7 +28,9 @@ use std::os::windows::process::CommandExt;
 
 use serde::Serialize;
 
+pub(crate) mod library;
 pub(crate) mod subtitles;
+pub(crate) mod transcribe;
 pub(crate) mod sync;
 #[cfg(target_os = "windows")]
 pub(crate) mod window;
@@ -546,17 +548,23 @@ pub(crate) fn set_watch_subtitle_delay(delay_ms: i64) -> Result<(), String> {
 /// Needed because syncing writes a NEW file: without this, alass would produce a corrected
 /// subtitle that the player never loads, and the user would watch the old one while the app
 /// claimed success. `sub-add` with `select` both adds and switches in one command.
-pub(crate) fn add_watch_subtitle_file(subtitle_path: &str) -> Result<(), String> {
-    let mut session_guard = SESSION
-        .lock()
-        .map_err(|_| "Could not reach the watch session.".to_string())?;
+/// Load a subtitle into the player if one is running, and say whether it landed.
+///
+/// Returns `false` rather than an error when nothing is playing, because for its one caller
+/// that is an ordinary outcome: realigning a subtitle from the video library happens with mpv
+/// closed. The caller has already written the file and recorded the pairing; a player that
+/// is not there to be updated should not undo either.
+pub(crate) fn add_watch_subtitle_file_if_playing(subtitle_path: &str) -> bool {
+    let Ok(mut session_guard) = SESSION.lock() else {
+        return false;
+    };
     let Some(session) = session_guard.as_mut() else {
-        return Err("No video is playing.".into());
+        return false;
     };
     session
         .connection
         .request(&["sub-add", subtitle_path, "select"])
-        .map(|_| ())
+        .is_ok()
 }
 
 /// mpv's process id, for finding its window.

@@ -14,7 +14,9 @@ mod recording_library;
 mod recording_session;
 mod runtime_assets;
 mod scanner_overlay;
+mod segment_preview;
 mod settings;
+mod subtitles;
 mod transcription;
 mod translation_bridge;
 mod watch;
@@ -29,7 +31,7 @@ use desktop_shell::{
     StartupVisibility,
 };
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use tauri::{webview::PageLoadEvent, Manager};
 
@@ -109,6 +111,12 @@ pub fn run() {
             set_scanner_popup,
             set_watch_subtitle_delay,
             sync_watch_subtitles,
+            generate_watch_subtitles,
+            add_watched_video,
+            set_watched_video_subtitle,
+            forget_watched_video,
+            missing_watched_videos,
+            mark_watched_video_opened,
             download_recommended_alass,
             jimaku_search,
             jimaku_files,
@@ -121,6 +129,7 @@ pub fn run() {
             push_recordings_to_anki,
             push_recordings_to_anki_deck,
             mine_segment_to_anki,
+            preview_segment_clip,
             add_furigana_to_anki,
             translate_recordings,
             transcribe_recordings,
@@ -134,11 +143,10 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Widen the asset-protocol scope to the directories where recordings live so
-/// the webview can stream local audio through `convertFileSrc`. The static scope
-/// in `tauri.conf.json` is intentionally empty; we confine it to the configured
-/// recordings folder at runtime rather than a broad glob. Failures are logged,
-/// never fatal.
+/// Widen the asset-protocol scope to the few directories the webview genuinely reads through
+/// `convertFileSrc`. The static scope in `tauri.conf.json` is intentionally empty; the real
+/// scope is assembled at runtime from the configured folders rather than a broad glob.
+/// Failures are logged, never fatal.
 fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
     let directories = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -157,10 +165,28 @@ fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
             }
         };
 
-        // Only the recordings directory needs to stream through the asset
-        // protocol. The managed asset directory (whisper/ffmpeg binaries and
-        // models) is deliberately NOT allowed — the player never serves from it.
-        vec![guard.settings.output_directory.clone()]
+        // Three directories, and no more. Recordings stream to the audio player, video
+        // thumbnails are drawn in the video library, and sentence previews are the clips
+        // playback plays instead of seeking a VBR file it cannot seek accurately.
+        //
+        // Deliberately `{asset}/thumbnails` and NOT the asset directory itself: that folder
+        // also holds the whisper and ffmpeg binaries and the ggml models, and nothing the
+        // webview does should be able to read those. The thumbnails subfolder holds only
+        // stills this app generated.
+        //
+        // The preview folder is likewise its own, never the miner's scratch directory — the
+        // webview has no business reading files a mine is about to hand to Anki.
+        let mut directories = vec![
+            guard.settings.output_directory.clone(),
+            Path::new(&guard.settings.asset_directory)
+                .join("thumbnails")
+                .display()
+                .to_string(),
+        ];
+        if let Some(previews) = crate::segment_preview::preview_scope_dir() {
+            directories.push(previews.display().to_string());
+        }
+        directories
     };
 
     let scope = app.asset_protocol_scope();
@@ -169,6 +195,10 @@ fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
             continue;
         }
 
+        // This runs at startup, before the first thumbnail exists. Creating the folder up
+        // front keeps a fresh install from logging a scope warning it can do nothing about.
+        let _ = std::fs::create_dir_all(&directory);
+
         if let Err(error) = scope.allow_directory(&directory, true) {
             log_event(
                 app,
@@ -176,7 +206,7 @@ fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
                 "asset.scope",
                 serde_json::json!({
                     "directory": directory,
-                    "message": format!("Could not allow recordings directory in asset scope: {error}")
+                    "message": format!("Could not allow this directory in the asset scope: {error}")
                 }),
             );
         }
@@ -348,6 +378,7 @@ mod tests {
             .unwrap(),
             recent_recordings: Vec::new(),
             untitled_counter: 0,
+            ..PersistedData::default()
         };
 
         assert_eq!(state.untitled_counter, 0);
@@ -411,6 +442,7 @@ mod tests {
             .unwrap(),
             recent_recordings: vec![existing],
             untitled_counter: 1,
+            ..PersistedData::default()
         };
 
         reconcile_recording_history(&mut state);

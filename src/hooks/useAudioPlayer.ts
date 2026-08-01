@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { RecentRecording } from "../types";
 
 // The half-open time window of a per-sentence playback. `null` when nothing is
@@ -40,7 +40,13 @@ const INITIAL_STATE: AudioPlayerState = {
 
 export type AudioPlayer = AudioPlayerState & {
   playRecording: (recording: RecentRecording) => void;
-  playSegment: (recording: RecentRecording, startMs: number, endMs: number) => void;
+  playSegment: (
+    recording: RecentRecording,
+    startMs: number,
+    endMs: number,
+    paddingMs?: number,
+    onError?: (message: string) => void,
+  ) => void;
   toggle: () => void;
   pause: () => void;
   seekMs: (ms: number) => void;
@@ -63,9 +69,6 @@ export function useAudioPlayer(): AudioPlayer {
   // currentTime writes on an unloaded element, so we replay the seek once
   // loadedmetadata fires.
   const pendingSeekMsRef = useRef<number | null>(null);
-  // The path currently attached to the element, so playSegment can decide
-  // whether it needs to reload the source or can seek the loaded track.
-  const loadedPathRef = useRef<string | null>(null);
   // The chosen playback speed, mirrored in a ref so the once-registered
   // loadedmetadata handler can re-apply it after a fresh src resets the element to 1.
   const rateRef = useRef(1);
@@ -73,6 +76,18 @@ export function useAudioPlayer(): AudioPlayer {
   // read from the once-registered timeupdate handler, so they must be refs, not state.
   const repeatRef = useRef(false);
   const segmentStartMsRef = useRef<number | null>(null);
+  // Where the loaded clip starts inside the recording, or null when the element holds the
+  // whole file. A sentence plays from an ffmpeg-cut clip rather than by seeking (see
+  // `playSegment`), so the element's own clock starts at zero and every position reported
+  // to the UI has to be put back on the recording's timeline.
+  const clipOffsetMsRef = useRef<number | null>(null);
+  // Cutting a clip is asynchronous, so a second click can land while the first is still in
+  // ffmpeg. Each request takes a token and only the newest one is allowed to touch the
+  // element — otherwise the slower cut wins and plays the sentence you clicked away from.
+  const segmentRequestRef = useRef(0);
+  // The recording the player is bound to, so a scrub can go back to the whole file after a
+  // sentence has replaced it with a clip.
+  const recordingRef = useRef<RecentRecording | null>(null);
   const [state, setState] = useState<AudioPlayerState>(INITIAL_STATE);
 
   useEffect(() => {
@@ -83,7 +98,14 @@ export function useAudioPlayer(): AudioPlayer {
       // Setting a fresh `src` resets playbackRate to 1; re-apply the chosen speed.
       audio.playbackRate = rateRef.current;
       const seconds = audio.duration;
-      if (Number.isFinite(seconds) && seconds > 0) {
+      // A sentence clip's own duration is a few seconds, and it is NOT the track length —
+      // the player is still showing the recording. Taking it here collapsed the transport
+      // to the length of whichever sentence was last clicked.
+      if (
+        clipOffsetMsRef.current === null &&
+        Number.isFinite(seconds) &&
+        seconds > 0
+      ) {
         setState((prev) => ({ ...prev, durationMs: Math.round(seconds * 1000) }));
       }
       const pending = pendingSeekMsRef.current;
@@ -92,7 +114,18 @@ export function useAudioPlayer(): AudioPlayer {
         audio.currentTime = Math.max(0, pending / 1000);
       }
     };
+    // The element's clock is clip-relative while a sentence clip is loaded; everything the
+    // UI shows is on the recording's timeline, so put it back.
+    const positionMs = () =>
+      Math.round(audio.currentTime * 1000) + (clipOffsetMsRef.current ?? 0);
+
     const handleTimeUpdate = () => {
+      // A clip needs no boundary — it *is* the sentence, and stops by running out. The
+      // boundary only exists for the seek-and-stop path the whole-file player still uses.
+      if (clipOffsetMsRef.current !== null) {
+        setState((prev) => ({ ...prev, currentTimeMs: positionMs() }));
+        return;
+      }
       const boundaryMs = boundaryMsRef.current;
       if (boundaryMs !== null && audio.currentTime * 1000 >= boundaryMs) {
         const repeatStart =
@@ -125,6 +158,25 @@ export function useAudioPlayer(): AudioPlayer {
       }));
     };
     const handleEnded = () => {
+      // A sentence clip always ends here, since it holds nothing but the sentence.
+      if (clipOffsetMsRef.current !== null) {
+        if (repeatRef.current) {
+          audio.currentTime = 0;
+          void audio.play().catch(() => {
+            setState((prev) => ({ ...prev, isPlaying: false }));
+          });
+          setState((prev) => ({ ...prev, currentTimeMs: positionMs() }));
+          return;
+        }
+        audio.currentTime = 0;
+        setState((prev) => ({
+          ...prev,
+          isPlaying: false,
+          currentTimeMs: clipOffsetMsRef.current ?? 0,
+          activeSegment: null,
+        }));
+        return;
+      }
       // A segment whose end sits at the very end of the file finishes via `ended`
       // rather than the timeupdate boundary; honour repeat here too so the last
       // sentence loops like any other. The `start < end` guard also stops a
@@ -189,10 +241,14 @@ export function useAudioPlayer(): AudioPlayer {
     if (!audio) {
       return;
     }
-    // A plain play detaches from any segment boundary in effect.
+    // A plain play detaches from any segment boundary in effect, and from a sentence clip:
+    // the element goes back to holding the recording itself. Bumping the request token
+    // stops a clip still being cut from stealing the element out from under this.
     boundaryMsRef.current = null;
     pendingSeekMsRef.current = null;
-    loadedPathRef.current = recording.filePath;
+    clipOffsetMsRef.current = null;
+    segmentRequestRef.current += 1;
+    recordingRef.current = recording;
     audio.src = convertFileSrc(recording.filePath);
     audio.currentTime = 0;
     // Seed the total from the known recording duration; loadedmetadata refines
@@ -213,7 +269,13 @@ export function useAudioPlayer(): AudioPlayer {
   }, []);
 
   const playSegment = useCallback(
-    (recording: RecentRecording, startMs: number, endMs: number) => {
+    (
+      recording: RecentRecording,
+      startMs: number,
+      endMs: number,
+      paddingMs?: number,
+      onError?: (message: string) => void,
+    ) => {
       // Never load audio for a recording whose local file has been removed.
       if (recording.audioDeleted) {
         return;
@@ -222,40 +284,64 @@ export function useAudioPlayer(): AudioPlayer {
       if (!audio) {
         return;
       }
-      const startSeconds = Math.max(0, startMs / 1000);
-      boundaryMsRef.current = endMs;
-      segmentStartMsRef.current = startMs;
 
-      if (loadedPathRef.current !== recording.filePath || !audio.src) {
-        // Fresh source: the seek can't land until metadata is known, so defer
-        // it to loadedmetadata.
-        loadedPathRef.current = recording.filePath;
-        pendingSeekMsRef.current = startMs;
-        audio.src = convertFileSrc(recording.filePath);
-        setState((prev) => ({
-          ...prev,
-          filePath: recording.filePath,
-          fileName: recording.fileName,
-          isPlaying: false,
-          currentTimeMs: startMs,
-          durationMs: recording.durationMs,
-          activeSegment: { startMs, endMs },
-        }));
-      } else {
-        // Same track already loaded — seek immediately.
-        pendingSeekMsRef.current = null;
-        audio.currentTime = startSeconds;
-        setState((prev) => ({
-          ...prev,
-          currentTimeMs: startMs,
-          activeSegment: { startMs, endMs },
-        }));
-      }
+      // Playback used to seek this timestamp in the original file. For an MP3 the WebView
+      // seeks by interpolating between the 100 points of the file's Xing index, which on a
+      // variable-bitrate recording is an estimate — measured against a real library file it
+      // lands up to a second out, in either direction, worse further in. That is the whole
+      // reason a sentence sounded clipped, or played the line before it, while the card made
+      // from the very same timestamps was exact: a mined clip is cut by ffmpeg, which reads
+      // frames instead of guessing.
+      //
+      // So the sentence is cut, not sought, and played whole. Same tool, same window, same
+      // padding as the miner — the preview and the card cannot disagree, because they are
+      // the same operation.
+      const padding = Math.max(0, paddingMs ?? 0);
+      const clipStartMs = Math.max(0, startMs - padding);
+      const request = ++segmentRequestRef.current;
+      recordingRef.current = recording;
 
-      void audio.play().catch(() => {
-        boundaryMsRef.current = null;
-        setState((prev) => ({ ...prev, isPlaying: false, activeSegment: null }));
-      });
+      setState((prev) => ({
+        ...prev,
+        filePath: recording.filePath,
+        fileName: recording.fileName,
+        currentTimeMs: startMs,
+        durationMs: recording.durationMs,
+        activeSegment: { startMs, endMs },
+      }));
+
+      void invoke<string>("preview_segment_clip", {
+        filePath: recording.filePath,
+        startMs,
+        endMs,
+      })
+        .then((clipPath) => {
+          // A newer click already went out: that one owns the element now.
+          if (request !== segmentRequestRef.current) {
+            return;
+          }
+          boundaryMsRef.current = null;
+          pendingSeekMsRef.current = null;
+          segmentStartMsRef.current = null;
+          clipOffsetMsRef.current = clipStartMs;
+          audio.src = convertFileSrc(clipPath);
+          audio.currentTime = 0;
+          void audio.play().catch(() => {
+            setState((prev) => ({ ...prev, isPlaying: false, activeSegment: null }));
+          });
+        })
+        .catch((error: unknown) => {
+          if (request !== segmentRequestRef.current) {
+            return;
+          }
+          // Deliberately no fall back to seeking the original file. That is the inaccurate
+          // path this replaced, and silently using it would put back the very bug being
+          // fixed while looking like it worked.
+          setState((prev) => ({ ...prev, isPlaying: false, activeSegment: null }));
+          onError?.(
+            typeof error === "string" ? error : "This sentence could not be played.",
+          );
+        });
     },
     [],
   );
@@ -265,12 +351,18 @@ export function useAudioPlayer(): AudioPlayer {
     if (!audio || !audio.src) {
       return;
     }
-    // The transport toggle is free playback: pressing it drops any segment
-    // boundary and its highlight so audio runs to the end from here.
-    boundaryMsRef.current = null;
-    setState((prev) =>
-      prev.activeSegment === null ? prev : { ...prev, activeSegment: null },
-    );
+    // While a sentence clip is loaded the transport governs that sentence and nothing else —
+    // the element holds only those few seconds. Dropping the highlight here would take it off
+    // the very row being played, and the "runs to the end of the file" the next line assumes
+    // is not available to reach.
+    if (clipOffsetMsRef.current === null) {
+      // Free playback: pressing this drops any segment boundary and its highlight so audio
+      // runs to the end from here.
+      boundaryMsRef.current = null;
+      setState((prev) =>
+        prev.activeSegment === null ? prev : { ...prev, activeSegment: null },
+      );
+    }
     if (audio.paused) {
       void audio.play().catch(() => {
         setState((prev) => ({ ...prev, isPlaying: false }));
@@ -293,8 +385,22 @@ export function useAudioPlayer(): AudioPlayer {
     // no longer pauses at the old segment end, and drop the row highlight.
     boundaryMsRef.current = null;
     pendingSeekMsRef.current = null;
+    segmentRequestRef.current += 1;
     const seconds = Math.max(0, ms / 1000);
-    audio.currentTime = seconds;
+
+    // Scrubbing while a sentence clip is loaded means leaving that sentence, so the whole
+    // recording comes back first — the clip holds only a few seconds and has no such
+    // position to seek to. The element cannot accept the seek until the new source has
+    // metadata, which is what `pendingSeekMsRef` is for.
+    const recording = recordingRef.current;
+    if (clipOffsetMsRef.current !== null && recording) {
+      clipOffsetMsRef.current = null;
+      pendingSeekMsRef.current = Math.max(0, ms);
+      audio.src = convertFileSrc(recording.filePath);
+    } else {
+      audio.currentTime = seconds;
+    }
+
     setState((prev) => ({
       ...prev,
       currentTimeMs: Math.round(seconds * 1000),
@@ -311,8 +417,10 @@ export function useAudioPlayer(): AudioPlayer {
     }
     boundaryMsRef.current = null;
     pendingSeekMsRef.current = null;
-    loadedPathRef.current = null;
     segmentStartMsRef.current = null;
+    clipOffsetMsRef.current = null;
+    segmentRequestRef.current += 1;
+    recordingRef.current = null;
     // Closing the player is a full reset — clear the speed/repeat prefs and their
     // refs together so the two never drift out of sync.
     repeatRef.current = false;

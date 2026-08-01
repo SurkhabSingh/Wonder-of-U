@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use super::{
     client::{anki_connect_request, anki_offline_message},
     fields::{
-        anki_media_file_name, html_escape, prepend_anki_field_value,
+        anki_media_file_name, html_escape, prepend_anki_field_value, MediaPart,
         recording_pushed_to_anki_target, user_friendly_anki_error,
     },
     furigana::{
@@ -83,7 +83,14 @@ fn push_single_recording_to_anki<R: Runtime>(
         return Err("The audio file is missing from disk.".into());
     }
 
-    let media_file_name = anki_media_file_name(&audio_path);
+    let media_file_name = anki_media_file_name(
+        &audio_path,
+        MediaPart::WholeRecording,
+        audio_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("wav"),
+    );
     anki_connect_request(
         "storeMediaFile",
         serde_json::json!({

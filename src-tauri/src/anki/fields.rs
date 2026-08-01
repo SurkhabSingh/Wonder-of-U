@@ -5,8 +5,47 @@ use crate::{
     app_types::{AnkiSettings, RecentRecording},
 };
 
-pub(super) fn anki_media_file_name(path: &Path) -> String {
-    let stem = path
+/// Which piece of a recording a media file holds.
+///
+/// Passed as data rather than read back out of a filename, because the whole defect this
+/// exists to prevent was the part that identifies a line being lost while the name still
+/// looked plausible.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum MediaPart {
+    /// The recording itself, pushed whole.
+    WholeRecording,
+    /// One line's audio, still or video clip, identified by where the line starts.
+    Line { label: &'static str, start_ms: u64 },
+}
+
+impl MediaPart {
+    fn suffix(&self) -> String {
+        match self {
+            MediaPart::WholeRecording => String::new(),
+            MediaPart::Line { label, start_ms } => format!("_{label}{start_ms}"),
+        }
+    }
+}
+
+/// Names the file Anki stores, from parts, so the piece that makes it unique cannot be lost.
+///
+/// The title is capped, the suffix never is. That ordering is the entire fix. Previously this
+/// took the temp clip's path — whose stem already ended in `_seg{start_ms}` — and ran the lot
+/// through `sanitize_recording_name`, which caps at 80 characters by truncating the END. The
+/// end is where the timestamp lives.
+///
+/// Found on a real library: `…XdmYsZnYXRI]_seg514420.mp3` reached Anki as `…_seg51442.mp3`,
+/// one digit short at 81 characters against the cap. Worse further up — a source stem of 88
+/// characters left no room for the suffix at all, so every clip from that video AND the whole
+/// recording resolved to one identical name, and `storeMediaFile` overwrote each with the next.
+/// Confirmed: one media file on disk serving every card mined from an entire video, each one
+/// playing the last sentence mined rather than its own.
+///
+/// Truncating a title is fine — two recordings sharing a name is cosmetic. Truncating the
+/// suffix silently destroys cards, so the two can no longer be truncated by the same rule.
+pub(super) fn anki_media_file_name(source_path: &Path, part: MediaPart, extension: &str) -> String {
+    let suffix = part.suffix();
+    let title = source_path
         .file_stem()
         .and_then(|value| value.to_str())
         .map(sanitize_recording_name)
@@ -20,12 +59,25 @@ pub(super) fn anki_media_file_name(path: &Path) -> String {
         // the media reference is sanitized, and it stays consistent with storeMediaFile
         // (which is given this same name), so the stored file and the tag still match.
         .replace(|character: char| character == '[' || character == ']', "_");
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("wav");
-    format!("wonder_of_u_{stem}.{extension}")
+
+    // Leave the suffix room before capping, rather than capping and hoping it fits. A title
+    // long enough to consume the whole budget yields a short title and an intact suffix, which
+    // is the right way round: the suffix is what keeps two cards apart.
+    let room = MAX_ANKI_TITLE_CHARS.saturating_sub(suffix.chars().count());
+    let capped: String = title.chars().take(room).collect();
+    let capped = capped.trim_end_matches('.').trim_end_matches('_');
+    let title = if capped.is_empty() { "recording" } else { capped };
+
+    format!("wonder_of_u_{title}{suffix}.{extension}")
 }
+
+/// Budget for the title part of an Anki media name.
+///
+/// Matches `MAX_RECORDING_NAME_CHARS`, which this used to borrow by calling
+/// `sanitize_recording_name` and letting it cap. That function caps a *recording* name, where
+/// the end carries nothing; applying it here cost the timestamp. The number is the same and
+/// the meaning is not, so it is stated separately rather than shared.
+const MAX_ANKI_TITLE_CHARS: usize = 80;
 
 pub(super) fn html_escape(value: &str) -> String {
     value
@@ -172,12 +224,20 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    const SEG: MediaPart = MediaPart::Line {
+        label: "seg",
+        start_ms: 1000,
+    };
+
     #[test]
     fn media_file_name_strips_brackets_so_sound_tags_parse() {
-        // A YouTube import's mined clip is named `Title [id]_seg….mp3`. The brackets
-        // must not survive into the media name, or the `[sound:...]` tag truncates.
-        let name =
-            anki_media_file_name(&PathBuf::from("Rust in 100 Seconds [abC-1]_seg1000.mp3"));
+        // A YouTube import is named `Title [id]`. The brackets must not survive into the
+        // media name, or the `[sound:...]` tag truncates at the first one.
+        let name = anki_media_file_name(
+            &PathBuf::from("Rust in 100 Seconds [abC-1].mp3"),
+            SEG,
+            "mp3",
+        );
         assert!(!name.contains('['), "media name must not contain '[': {name}");
         assert!(!name.contains(']'), "media name must not contain ']': {name}");
 
@@ -192,7 +252,88 @@ mod tests {
     #[test]
     fn media_file_name_leaves_plain_names_unchanged() {
         // A mic recording has no brackets and must be untouched apart from the prefix.
-        let name = anki_media_file_name(&PathBuf::from("recording_1_seg1000.mp3"));
+        let name = anki_media_file_name(&PathBuf::from("recording_1.mp3"), SEG, "mp3");
         assert_eq!(name, "wonder_of_u_recording_1_seg1000.mp3");
+    }
+
+    /// The defect this was rewritten for. An 88-character source stem previously left no room
+    /// for the suffix, so every line mined from that video — and the whole recording — resolved
+    /// to one identical name and `storeMediaFile` overwrote each with the next. Confirmed on a
+    /// real library: one media file serving every card from an entire video.
+    #[test]
+    fn a_long_title_cannot_cost_a_line_its_identity() {
+        let long = PathBuf::from(
+            "Connecting with Japanese, one conversation at a time #japanese #learnjapanese.mp3",
+        );
+
+        let first = anki_media_file_name(
+            &long,
+            MediaPart::Line {
+                label: "seg",
+                start_ms: 1_000,
+            },
+            "mp3",
+        );
+        let second = anki_media_file_name(
+            &long,
+            MediaPart::Line {
+                label: "seg",
+                start_ms: 2_000,
+            },
+            "mp3",
+        );
+
+        assert_ne!(first, second, "two lines must never share a media name");
+        assert!(first.ends_with("_seg1000.mp3"), "suffix intact: {first}");
+        assert!(second.ends_with("_seg2000.mp3"), "suffix intact: {second}");
+    }
+
+    /// The same title, at the length that used to shave exactly one digit off the timestamp:
+    /// `…_seg514420.mp3` reached Anki as `…_seg51442.mp3`.
+    #[test]
+    fn a_six_digit_timestamp_survives_a_borderline_title() {
+        let name = anki_media_file_name(
+            &PathBuf::from("Can you survive in Japan Cafe Japanese conversation [#54] [XdmYsZnYXRI].mp3"),
+            MediaPart::Line {
+                label: "seg",
+                start_ms: 514_420,
+            },
+            "mp3",
+        );
+
+        assert!(name.ends_with("_seg514420.mp3"), "not one digit short: {name}");
+    }
+
+    /// A line's media and the whole recording's must never collide either — they did once the
+    /// title alone filled the budget.
+    #[test]
+    fn a_line_and_its_whole_recording_get_different_names() {
+        let long = PathBuf::from(
+            "England fans and MESSI haters FUME after dramatic late comeback in the final.mp3",
+        );
+
+        let whole = anki_media_file_name(&long, MediaPart::WholeRecording, "mp3");
+        let line = anki_media_file_name(&long, SEG, "mp3");
+
+        assert_ne!(whole, line);
+    }
+
+    /// Every name still fits the budget the cap exists to enforce.
+    #[test]
+    fn the_name_stays_within_the_cap() {
+        let name = anki_media_file_name(
+            &PathBuf::from("a".repeat(400) + ".mp3"),
+            MediaPart::Line {
+                label: "seg",
+                start_ms: 999_999,
+            },
+            "mp3",
+        );
+
+        let stem = name
+            .trim_start_matches("wonder_of_u_")
+            .trim_end_matches(".mp3");
+        assert!(stem.chars().count() <= MAX_ANKI_TITLE_CHARS, "{name}");
+        assert!(name.ends_with("_seg999999.mp3"), "suffix still intact: {name}");
     }
 }

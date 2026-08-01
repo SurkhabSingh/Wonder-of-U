@@ -311,6 +311,7 @@ export function TranscriptViewerPage({
   onCancelTranscription,
   lastTranscriptionOutcome,
   transcriptionLanguage,
+  clipPaddingMs,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -358,6 +359,9 @@ export function TranscriptViewerPage({
   /// whichever variant happened to be first in the list, which is how the two came to
   /// disagree without either being obviously wrong.
   transcriptionLanguage: string;
+  // Milliseconds the miner pads a clip by on each side. Playback uses the same value so a
+  // previewed sentence and the card made from it cannot drift apart.
+  clipPaddingMs: number;
   // Set when the most recent transcription of this recording ended badly, so the viewer
   // can say which of "you cancelled it", "it failed" and "there is no transcript" the
   // empty screen actually means. Null when the last run succeeded or none has run.
@@ -374,17 +378,23 @@ export function TranscriptViewerPage({
     changeSignature,
   });
 
-  // A re-transcribe in the same language overwrites the same sidecar paths, so
-  // `changeSignature` is unchanged and the fetch effect won't re-fire on its own. Force a
-  // reload when this recording's re-transcription finishes, so the viewer shows the new
-  // transcript rather than the stale one.
-  const wasReTranscribingRef = useRef(false);
+  // `changeSignature` is built from sidecar PATHS, and every writer here overwrites the
+  // path it already used — so a re-run is invisible to it by construction. That was known
+  // for re-transcription and handled; re-translation has exactly the same shape and was
+  // not, which is why a successful re-translate left the previous translation on screen.
+  // The first translation did update, because the path went from null to set.
+  //
+  // So this watches every writer at once rather than growing a ref per writer: any work
+  // that can rewrite this recording's text forces the re-read as it finishes, and a
+  // future writer joins by being named in this one expression.
+  const isRewritingText = isReTranscribing || isReTranslating;
+  const wasRewritingTextRef = useRef(false);
   useEffect(() => {
-    if (wasReTranscribingRef.current && !isReTranscribing) {
+    if (wasRewritingTextRef.current && !isRewritingText) {
       reload();
     }
-    wasReTranscribingRef.current = isReTranscribing;
-  }, [isReTranscribing, reload]);
+    wasRewritingTextRef.current = isRewritingText;
+  }, [isRewritingText, reload]);
 
   // Whole-file playback for this recording, driven by the compact top bar.
   // Gated on audioDeleted below so a transcript-only entry never tries to load.
@@ -411,7 +421,12 @@ export function TranscriptViewerPage({
   const handlePlaySegment = recording.audioDeleted
     ? undefined
     : (startMs: number, endMs: number) =>
-        player.playSegment(recording, startMs, endMs);
+        // The miner's own padding, so what you hear here is what the card will hold.
+        // A sentence that cannot be cut says so rather than falling back to the
+        // inaccurate seek it replaced.
+        player.playSegment(recording, startMs, endMs, clipPaddingMs, (message) =>
+          toast.error(message),
+        );
   const activeSegment = isActiveTrack ? player.activeSegment : null;
 
   const transcripts = data?.transcripts ?? [];
@@ -540,6 +555,15 @@ export function TranscriptViewerPage({
             return next;
           });
         }
+      })
+      .catch((error: unknown) => {
+        // The handler catches its own Anki errors and answers `null`, so nothing reaches here
+        // today. It is here because `.finally` clears the spinner either way: without this, a
+        // throw introduced upstream would look exactly like a mine that quietly did nothing —
+        // button returns to normal, no card, no message.
+        toast.error(
+          typeof error === "string" ? error : "This sentence could not be mined.",
+        );
       })
       .finally(() => {
         setMiningKey((current) => (current === key ? null : current));

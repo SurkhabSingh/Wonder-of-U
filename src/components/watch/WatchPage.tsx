@@ -1,12 +1,18 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { formatDuration, fileNameFromPath } from "../../lib/format";
+import { formatDuration } from "../../lib/format";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { SubtitleListPane } from "./SubtitleListPane";
 import { ScannableText } from "../scanner/ScannableText";
 import { SubtitleOffsetField } from "./SubtitleOffsetField";
-import { JimakuSearchPanel } from "./JimakuSearchPanel";
-import type { RecordingSegment, ScannerSettings, WatchSnapshot } from "../../types";
+import { VideoLibraryList } from "./VideoLibraryList";
+import type {
+  RecordingSegment,
+  ScannerSettings,
+  SubtitleOrigin,
+  WatchSnapshot,
+  WatchedVideo,
+} from "../../types";
 
 // How the scan gesture reads in the user's own configuration.
 const MODIFIER_LABELS: Record<string, string> = {
@@ -41,8 +47,7 @@ const PADDING_OPTIONS = [
 
 export function WatchPage({
   snapshot,
-  isStarting,
-  error,
+  startingPath,
   onStart,
   onStop,
   onMine,
@@ -67,14 +72,28 @@ export function WatchPage({
   onToggleOverlay,
   onSetSubtitleDelay,
   hasJimakuKey,
-  onOpenScannerSettings,
   onSyncSubtitles,
   isSyncing,
+  onGenerateSubtitles,
+  videos,
+  onAddVideo,
+  onSubtitleChosen,
+  onForgetVideo,
+  onSearchJimaku,
+  onRealign,
+  missingVideoPaths,
+  generatingPath,
+  generateProgress,
+  onCancelGenerate,
+  openMenuPath,
+  onOpenMenuChange,
+  searchQuery,
+  onSearchChange,
   syncResult,
 }: {
   snapshot: WatchSnapshot;
-  isStarting: boolean;
-  error: string | null;
+  // The video being opened, so only its row says so.
+  startingPath: string | null;
   onStart: (videoPath: string, subtitlePath: string | null) => void;
   onStop: () => void;
   onMine: () => void;
@@ -102,15 +121,41 @@ export function WatchPage({
   onToggleOverlay: (enabled: boolean) => void;
   onSetSubtitleDelay: (delayMs: number) => void;
   hasJimakuKey: boolean;
-  onOpenScannerSettings: () => void;
   /// Undefined when there is no sidecar file to realign — an embedded track has no file of
   /// its own, and alass needs one to rewrite.
   onSyncSubtitles: (() => void) | undefined;
   isSyncing: boolean;
+  // Transcribe the chosen video's own audio into a subtitle file beside it, for material
+  // nothing has subtitles for. The result is adopted as the chosen sidecar, so Sync below
+  // can then realign it exactly like a downloaded file.
+  onGenerateSubtitles: (videoPath: string) => void;
+  // The remembered videos, newest first. This page owns none of it — the list, the mapping
+  // and the selection all live in App so they survive leaving the page, which is the entire
+  // point of the feature.
+  videos: WatchedVideo[];
+  onAddVideo: (videoPath: string) => void;
+  onSubtitleChosen: (
+    videoPath: string,
+    subtitlePath: string,
+    origin: SubtitleOrigin,
+  ) => void;
+  onForgetVideo: (videoPath: string) => void;
+  onSearchJimaku: (videoPath: string) => void;
+  onRealign: (videoPath: string) => void;
+  // Videos whose file could not be found. Listed and dimmed rather than hidden.
+  missingVideoPaths: ReadonlySet<string>;
+  // The video being transcribed, so its own row carries the bar.
+  generatingPath: string | null;
+  // 0-100 while subtitles are being written, null before the first tick arrives.
+  generateProgress: number | null;
+  onCancelGenerate: () => void;
+  // Lifted so only one row's menu is open at a time.
+  openMenuPath: string | null;
+  onOpenMenuChange: (videoPath: string | null) => void;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
   syncResult: { ok: boolean; message: string } | null;
 }) {
-  const [videoPath, setVideoPath] = useState<string | null>(null);
-  const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // The line on screen changes as the video plays. Keying the owner to the cue's start
   // means a highlight never survives onto a different line.
@@ -122,88 +167,76 @@ export function WatchPage({
       filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
     });
     if (typeof picked === "string") {
-      setVideoPath(picked);
+      onAddVideo(picked);
     }
   };
 
-  const pickSubtitle = async () => {
+  const pickSubtitle = async (videoPath: string) => {
     const picked = await open({
       multiple: false,
       filters: [{ name: "Subtitles", extensions: SUBTITLE_EXTENSIONS }],
     });
     if (typeof picked === "string") {
-      setSubtitlePath(picked);
+      onSubtitleChosen(videoPath, picked, "picked");
     }
   };
 
   if (!snapshot.connected) {
     return (
-      <>
-        <header className="panel-header">
-          <div>
-            <p className="panel-kicker">Watch &amp; Mine</p>
-            <h2>Open a video</h2>
-          </div>
-        </header>
+      <div className="recorder-view">
+        <article className="panel recent-panel">
+          <header className="panel-header">
+            <div>
+              <p className="panel-kicker">Watch &amp; Mine</p>
+              <h2>Video library</h2>
+            </div>
+            <div className="panel-actions">
+              {videos.length > 0 ? (
+                <input
+                  type="search"
+                  className="library-search"
+                  value={searchQuery}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder="Search by name"
+                  aria-label="Search videos by name"
+                />
+              ) : null}
+              <button type="button" onClick={() => void pickVideo()}>
+                Add a video
+              </button>
+            </div>
+          </header>
 
-        <div className="info-note">
           <p className="microcopy">
-            The video plays in <strong>mpv</strong>, not in this window &mdash; mpv handles
-            MKV, H.265 and everything else this app&rsquo;s built-in player cannot. Wonder
-            of U reads the position and the subtitles from it, so you can mine the line you
-            are hearing.
+            Videos play in mpv. Whatever subtitles you pair with one are remembered.
           </p>
-        </div>
 
-        <div className="settings-grid">
-          <label className="field">
-            <span>Video</span>
-            <button type="button" className="secondary" onClick={() => void pickVideo()}>
-              {videoPath ? fileNameFromPath(videoPath) : "Choose a video…"}
-            </button>
-          </label>
-
-          <label className="field">
-            <span>Subtitles (optional)</span>
-            <button type="button" className="secondary" onClick={() => void pickSubtitle()}>
-              {subtitlePath ? fileNameFromPath(subtitlePath) : "Choose a subtitle file…"}
-            </button>
-          </label>
-        </div>
-
-        <p className="microcopy">
-          Leave subtitles empty if the file already has them built in &mdash; the track is
-          read straight out of the container.
-        </p>
-
-        <JimakuSearchPanel
-          hasApiKey={hasJimakuKey}
-          videoPath={videoPath}
-          onDownloaded={setSubtitlePath}
-          onOpenSettings={onOpenScannerSettings}
-        />
-
-        <div className="panel-actions">
-          <button
-            type="button"
-            onClick={() => videoPath && onStart(videoPath, subtitlePath)}
-            disabled={!videoPath || isStarting}
-          >
-            {isStarting ? "Opening…" : "Open in mpv"}
-          </button>
-        </div>
-
-        {error ? (
-          <div className="update-card error">
-            <strong>{error}</strong>
-          </div>
-        ) : null}
-      </>
+          <VideoLibraryList
+            videos={videos}
+            onOpen={(video) => onStart(video.videoPath, video.subtitlePath)}
+            onChooseSubtitle={(video) => void pickSubtitle(video.videoPath)}
+            onSearchJimaku={(video) => onSearchJimaku(video.videoPath)}
+            onGenerateSubtitles={(video) => onGenerateSubtitles(video.videoPath)}
+            onRealign={(video) => onRealign(video.videoPath)}
+            onForget={(video) => onForgetVideo(video.videoPath)}
+            missingPaths={missingVideoPaths}
+            hasJimakuKey={hasJimakuKey}
+            generatingPath={generatingPath}
+            generateProgress={generateProgress}
+            onCancelGenerate={onCancelGenerate}
+            openMenuPath={openMenuPath}
+            onOpenMenuChange={onOpenMenuChange}
+            startingPath={startingPath}
+            searchQuery={searchQuery}
+          />
+        </article>
+      </div>
     );
   }
 
   return (
-    <>
+    <div className="recorder-view">
+      <article className="panel recent-panel">
       <header className="panel-header">
         <div>
           <p className="panel-kicker">Watch &amp; Mine</p>
@@ -368,7 +401,7 @@ export function WatchPage({
           scanHint={scanHintFor(scanner)}
         />
       </div>
-
-    </>
+      </article>
+    </div>
   );
 }

@@ -59,6 +59,17 @@ export function SelectionActionBar({
     configuredDeckMenuOptions.length > 0 &&
     selectedTranscribedRecordings.some((recording) => !recording.audioDeleted);
 
+  // Acting on a selection ends it. Leaving the rows ticked meant the next selection was
+  // added to the last one — pick three, transcribe, pick three more, and the bar reports six,
+  // three of which were already dealt with. The action is the end of that selection's life.
+  //
+  // Only the batch bar does this. A single row's own button acts on that row alone and has no
+  // business clearing a selection the user made for something else.
+  const runOnSelection = (action: () => void | Promise<void>) => {
+    void action();
+    onClearSelection();
+  };
+
   return (
     <div
       className="recording-toolbar recording-toolbar-selected recording-toolbar-select-mode"
@@ -74,7 +85,7 @@ export function SelectionActionBar({
           <ActionButton
             label="Transcribe"
             count={selectedUntranscribedRecordings.length}
-            onClick={() => void onTranscribe(paths(selectedUntranscribedRecordings))}
+            onClick={() => runOnSelection(() => onTranscribe(paths(selectedUntranscribedRecordings)))}
           />
         ) : null}
         {selectedUntranslatedRecordings.length > 0 ? (
@@ -82,7 +93,7 @@ export function SelectionActionBar({
             label="Translate"
             count={selectedUntranslatedRecordings.length}
             disabled={busyAction === "translateRecording"}
-            onClick={() => void onTranslate(paths(selectedUntranslatedRecordings))}
+            onClick={() => runOnSelection(() => onTranslate(paths(selectedUntranslatedRecordings)))}
           />
         ) : null}
         {selectedPushableRecordings.length > 0 ? (
@@ -90,7 +101,7 @@ export function SelectionActionBar({
             label="Push to Anki"
             count={selectedPushableRecordings.length}
             disabled={busyAction === "pushAnki"}
-            onClick={() => void onPushToAnki(paths(selectedPushableRecordings))}
+            onClick={() => runOnSelection(() => onPushToAnki(paths(selectedPushableRecordings)))}
           />
         ) : null}
         {selectedFuriganaRecordings.length > 0 ? (
@@ -112,7 +123,7 @@ export function SelectionActionBar({
             count={selectedConvertibleRecordings.length}
             title={MP3_CONVERSION_WARNING}
             disabled={busyAction === "convertMp3"}
-            onClick={() => void onConvertToMp3(paths(selectedConvertibleRecordings))}
+            onClick={() => runOnSelection(() => onConvertToMp3(paths(selectedConvertibleRecordings)))}
           />
         ) : null}
         {canPushToAnotherDeck ? (
@@ -142,7 +153,7 @@ export function SelectionActionBar({
                     <DropdownMenuPrimitive.Item
                       key={deck}
                       className="action-menu-item"
-                      onSelect={() => void onPushToAnki(paths(deckPushable), deck)}
+                      onSelect={() => runOnSelection(() => onPushToAnki(paths(deckPushable), deck))}
                       disabled={
                         deckPushable.length === 0 || busyAction === "pushAnki"
                       }
@@ -166,7 +177,7 @@ export function SelectionActionBar({
           count={visibleSelectedPaths.length}
           danger
           disabled={busyAction === "deleteRecording"}
-          onClick={() => void onDelete(visibleSelectedPaths)}
+          onClick={() => runOnSelection(() => onDelete(visibleSelectedPaths))}
         />
         <button
           type="button"

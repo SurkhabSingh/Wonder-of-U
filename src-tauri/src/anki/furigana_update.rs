@@ -13,7 +13,7 @@ use crate::{
 
 use super::{
     client::{anki_connect_request, anki_note_field_value, anki_offline_message},
-    fields::{anki_media_file_name, user_friendly_anki_error},
+    fields::{anki_media_file_name, user_friendly_anki_error, MediaPart},
     furigana::{insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html},
     references::refresh_recording_anki_reference,
 };
@@ -193,7 +193,15 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
                 ),
             )
         })?;
-    let media_file_name = anki_media_file_name(&PathBuf::from(&recording.file_path));
+    let audio_path = PathBuf::from(&recording.file_path);
+    let media_file_name = anki_media_file_name(
+        &audio_path,
+        MediaPart::WholeRecording,
+        audio_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("wav"),
+    );
 
     // The SAME writer the mine and push paths use, seeded with what Anki already holds.
     //

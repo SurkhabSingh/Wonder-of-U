@@ -60,7 +60,7 @@ pub(super) fn screenshot_ffmpeg_args(at_ms: u64, input: &str, output: &str) -> V
 /// the source video is a reference to the user's own file and may have been moved,
 /// renamed, or deleted since the import, and a missing screenshot must not cost them the
 /// card.
-pub(super) fn capture_screenshot(
+pub(crate) fn capture_screenshot(
     ffmpeg_path: &Path,
     video_path: &Path,
     at_ms: u64,
