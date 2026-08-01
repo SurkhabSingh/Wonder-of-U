@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { formatDuration } from "../../lib/format";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { SubtitleListPane } from "./SubtitleListPane";
@@ -161,23 +162,42 @@ export function WatchPage({
   // means a highlight never survives onto a different line.
   const currentLineKey = `current:${snapshot.subtitleStartMs ?? 0}`;
 
+  // Both pickers report a failed dialog rather than returning quietly.
+  //
+  // `open` is a plugin call across the IPC boundary: it rejects when its permission is not
+  // granted, and both of these are invoked as `void pickVideo()`, so a rejection would go
+  // nowhere. The button would appear dead — no dialog, no error, nothing to explain it. That
+  // exact failure has happened in this app before, on the Remove button, and cost a session
+  // to find because a working-looking button that does nothing gives no thread to pull.
   const pickVideo = async () => {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
-    });
-    if (typeof picked === "string") {
-      onAddVideo(picked);
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
+      });
+      if (typeof picked === "string") {
+        onAddVideo(picked);
+      }
+    } catch (error) {
+      toast.error(
+        typeof error === "string" ? error : "The file picker could not be opened.",
+      );
     }
   };
 
   const pickSubtitle = async (videoPath: string) => {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "Subtitles", extensions: SUBTITLE_EXTENSIONS }],
-    });
-    if (typeof picked === "string") {
-      onSubtitleChosen(videoPath, picked, "picked");
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Subtitles", extensions: SUBTITLE_EXTENSIONS }],
+      });
+      if (typeof picked === "string") {
+        onSubtitleChosen(videoPath, picked, "picked");
+      }
+    } catch (error) {
+      toast.error(
+        typeof error === "string" ? error : "The file picker could not be opened.",
+      );
     }
   };
 

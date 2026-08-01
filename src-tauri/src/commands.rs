@@ -407,13 +407,21 @@ pub(crate) async fn add_watched_video(
             return Err(format!("The video is no longer at {}", path.display()));
         }
 
-        let settings = {
+        // One lock for both facts. The second one decides whether to spend an ffmpeg call
+        // below, so reading it here keeps that decision out of the closure — which runs while
+        // the state is locked, and is no place to be shelling out to ffmpeg.
+        let (settings, already_has_thumbnail) = {
             let persisted_state = app.state::<SharedPersistedState>();
             let persisted = persisted_state
                 .0
                 .lock()
                 .map_err(|_| "Could not read the app settings.".to_string())?;
-            persisted.settings.clone()
+            let has_thumbnail = persisted
+                .watched_videos
+                .iter()
+                .find(|video| video.video_path == video_path)
+                .is_some_and(|video| video.thumbnail_path.is_some());
+            (persisted.settings.clone(), has_thumbnail)
         };
 
         // Both are best-effort. ffmpeg missing is a perfectly ordinary state for a new install,
@@ -422,15 +430,25 @@ pub(crate) async fn add_watched_video(
         let duration_ms = probe_duration_ms(ffmpeg.as_deref(), &path);
         let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
         let added_at_ms = now_ms();
-        let thumbnail = ffmpeg.as_ref().and_then(|ffmpeg| {
-            capture_thumbnail(
-                Path::new(ffmpeg),
-                &path,
-                Path::new(&settings.asset_directory),
-                duration_ms,
-                added_at_ms,
-            )
-        });
+        // Skipped when one is already stored, because the update below keeps the existing
+        // thumbnail. `capture_thumbnail` names its file after the moment it ran, so an
+        // unconditional capture wrote a fresh .jpg that nothing would reference and
+        // `remove_watched_video` — which deletes only the path it has stored — would never
+        // clean up. Re-adding a video is ordinary rather than exceptional (it is how its
+        // duration gets refreshed), so those accumulated one per add, forever.
+        let thumbnail = if already_has_thumbnail {
+            None
+        } else {
+            ffmpeg.as_ref().and_then(|ffmpeg| {
+                capture_thumbnail(
+                    Path::new(ffmpeg),
+                    &path,
+                    Path::new(&settings.asset_directory),
+                    duration_ms,
+                    added_at_ms,
+                )
+            })
+        };
 
         upsert_watched_video(&app, &video_path, |video| {
             video.duration_ms = duration_ms;
