@@ -556,6 +556,15 @@ export function TranscriptViewerPage({
           });
         }
       })
+      .catch((error: unknown) => {
+        // The handler catches its own Anki errors and answers `null`, so nothing reaches here
+        // today. It is here because `.finally` clears the spinner either way: without this, a
+        // throw introduced upstream would look exactly like a mine that quietly did nothing —
+        // button returns to normal, no card, no message.
+        toast.error(
+          typeof error === "string" ? error : "This sentence could not be mined.",
+        );
+      })
       .finally(() => {
         setMiningKey((current) => (current === key ? null : current));
       });

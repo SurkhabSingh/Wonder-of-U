@@ -151,9 +151,29 @@ pub(crate) fn resolve_whisper_engine<R: Runtime>(
         );
     }
 
+    // Detection only reports "ready" when both of these are present, so this is the invariant
+    // restated rather than a new check — but restated where it is USED. `unwrap_or_default()`
+    // stood here before, and an empty PathBuf is not a missing value to anything downstream:
+    // whisper would have been spawned with "" and the user told the CLI produced no stdout.
+    // If that invariant ever moves, this says which piece is gone instead of guessing.
+    let cli_path = whisper_detection
+        .executable_path
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            "Whisper reported itself ready but no CLI path came back. Re-run detection in Setup."
+                .to_string()
+        })?;
+    let model_path = whisper_detection
+        .model_path
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            "Whisper reported itself ready but no model path came back. Re-run detection in Setup."
+                .to_string()
+        })?;
+
     Ok(WhisperEngine {
-        cli_path: PathBuf::from(whisper_detection.executable_path.unwrap_or_default()),
-        model_path: PathBuf::from(whisper_detection.model_path.unwrap_or_default()),
+        cli_path,
+        model_path,
         vad_model_path,
         ffmpeg_path,
     })
