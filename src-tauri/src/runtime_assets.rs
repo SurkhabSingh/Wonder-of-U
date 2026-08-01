@@ -1,3 +1,4 @@
+mod dictionary;
 mod alass;
 mod ffmpeg;
 mod mpv;
@@ -6,6 +7,10 @@ mod updates;
 mod whisper;
 mod ytdlp;
 
+pub(crate) use dictionary::{
+    detect_local_dictionary, find_managed_dictionary_root,
+    managed_dictionary_install_directory,
+};
 pub(crate) use ffmpeg::{
     collect_managed_ffmpeg_candidates, detect_local_ffmpeg, managed_ffmpeg_install_directory,
     verify_ffmpeg_binary,

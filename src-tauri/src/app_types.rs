@@ -702,6 +702,32 @@ pub(crate) struct AppBootstrap {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct DictionaryDetection {
+    pub(crate) status: String,
+    pub(crate) dictionary_path: Option<String>,
+    pub(crate) managed: bool,
+    pub(crate) message: String,
+}
+
+/// Not-installed is the resting state, so it is what `Default` means here.
+///
+/// Deriving this instead would make the default an empty status string, which reads as neither
+/// installed nor missing — and detection returns this value on every path that finds nothing.
+impl Default for DictionaryDetection {
+    fn default() -> Self {
+        Self {
+            status: "notFound".into(),
+            dictionary_path: None,
+            managed: false,
+            message:
+                "Install the Japanese dictionary to analyse transcript sentences word by word."
+                    .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct WhisperDetection {
     pub(crate) status: String,
     pub(crate) executable_path: Option<String>,

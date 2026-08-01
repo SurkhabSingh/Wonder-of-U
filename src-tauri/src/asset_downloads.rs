@@ -1,3 +1,4 @@
+mod dictionary;
 mod control;
 mod alass;
 mod ffmpeg;

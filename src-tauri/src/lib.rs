@@ -17,6 +17,7 @@ mod scanner_overlay;
 mod segment_preview;
 mod settings;
 mod subtitles;
+mod tokenizer;
 mod transcription;
 mod translation_bridge;
 mod watch;
