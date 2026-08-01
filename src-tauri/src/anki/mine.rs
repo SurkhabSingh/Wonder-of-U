@@ -13,6 +13,7 @@ use super::{
     client::{anki_connect_request, anki_offline_message},
     fields::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
+        MediaPart,
     },
     furigana::{
         insert_furigana_field, request_furigana_html,
@@ -191,8 +192,23 @@ fn slice_segment_clip(
 /// media collection, so a 400 KB clip costs no more over the wire than a 30 KB still. The
 /// `TempMedia` is borrowed rather than consumed — it still owns the file, and still deletes
 /// it when the mine ends.
-fn store_media_with_anki(file: &TempMedia) -> Result<String, String> {
-    let media_file_name = anki_media_file_name(file.path());
+/// `source_path` names the recording the media came from, and `label`/`start_ms` say which
+/// line — deliberately NOT read back out of `file`, whose own name is a scratch detail. The
+/// name Anki files this under has to survive a long title, and the only way to guarantee that
+/// is to build it from the parts rather than re-derive them.
+fn store_media_with_anki(
+    file: &TempMedia,
+    source_path: &Path,
+    label: &'static str,
+    start_ms: u64,
+) -> Result<String, String> {
+    let extension = file
+        .path()
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("wav");
+    let media_file_name =
+        anki_media_file_name(source_path, MediaPart::Line { label, start_ms }, extension);
     anki_connect_request(
         "storeMediaFile",
         serde_json::json!({
@@ -447,7 +463,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
     }
 
     // The audio is the one a card cannot do without, so a failure here fails the mine.
-    let clip_media_file_name = match store_media_with_anki(&clip) {
+    let clip_media_file_name = match store_media_with_anki(&clip, &source.media_path, "seg", start_ms) {
         Ok(name) => name,
         Err(error) => return failed(format!("Anki could not store the audio clip. {error}")),
     };
@@ -455,14 +471,14 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
     // The still and the clip are optional: a store failure demotes the card rather than
     // losing it, and says so in the result.
     let screenshot_media_file_name = screenshot.as_ref().and_then(|shot| {
-        store_media_with_anki(shot)
+        store_media_with_anki(shot, &source.media_path, "shot", start_ms)
             .map_err(|error| {
                 screenshot_problem = Some(format!("Anki could not store the screenshot. {error}"));
             })
             .ok()
     });
     let video_media_file_name = video_clip.as_ref().and_then(|video| {
-        store_media_with_anki(video)
+        store_media_with_anki(video, &source.media_path, "clip", start_ms)
             .map_err(|error| {
                 video_problem = Some(format!("Anki could not store the video clip. {error}"));
             })
