@@ -2166,6 +2166,33 @@ input::placeholder {
   letter-spacing: 0.02em;
 }
 
+/* How many words in a line are still new. In the gutter under the timestamp so a
+   column of them reads straight down while scrolling — which is how you spot the
+   lines worth mining without stopping at each one. */
+.transcript-segment-newness {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  color: var(--text-muted);
+}
+
+/* The one state worth interrupting a scroll for: everything known but one word. */
+.transcript-segment-newness.is-within-reach {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  font-weight: 600;
+}
+
+/* Deliberately quiet. A line you already know is not a result, and marking it as
+   loudly as an i+1 line would bury the ones that matter. */
+.transcript-segment-newness.is-known {
+  color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+}
+
 /* Watch & Mine. The video is in mpv, so this page is a read-out of what the player is
    doing plus the line currently on screen — the thing a mine will act on. */
 .watch-transport {

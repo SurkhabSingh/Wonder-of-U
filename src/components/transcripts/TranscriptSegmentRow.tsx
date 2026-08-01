@@ -1,5 +1,7 @@
 import { useState, type MouseEvent } from "react";
 import { formatDuration } from "../../lib/format";
+import type { LineRanking } from "../../types";
+import { isWithinReach } from "../../hooks/useSentenceRanking";
 import { ScannableText } from "../scanner/ScannableText";
 import { highlightMatches } from "./transcriptText";
 
@@ -27,6 +29,7 @@ export function TranscriptSegmentRow({
   canMerge = false,
   onSplit,
   canSplit = false,
+  ranking = null,
 }: {
   segmentKey: string;
   text: string;
@@ -63,6 +66,10 @@ export function TranscriptSegmentRow({
   canMerge?: boolean;
   onSplit?: () => void;
   canSplit?: boolean;
+  // How many words in this line are still new. Null when nothing has ranked it —
+  // no vocabulary sources, no dictionary, no list built yet — in which case the row
+  // simply carries no badge.
+  ranking?: LineRanking | null;
 }) {
   const [copied, setCopied] = useState(false);
   const hasTiming = startMs !== null && endMs !== null;
@@ -100,6 +107,9 @@ export function TranscriptSegmentRow({
       onMouseEnter={onActivate}
       onMouseLeave={onDeactivate}
     >
+      {/* The badge sits in the gutter beside the timestamp rather than in the
+          aside, so a column of them can be read straight down while scrolling —
+          which is how you find the lines worth mining. */}
       <span
         className={`transcript-segment-gutter ${hasTiming ? "has-timing" : ""}`}
       >
@@ -120,6 +130,28 @@ export function TranscriptSegmentRow({
         {hasTiming ? (
           <span className="transcript-segment-time">
             {formatDuration(startMs)}
+          </span>
+        ) : null}
+        {ranking && ranking.contentWordCount > 0 ? (
+          <span
+            className={`transcript-segment-newness ${
+              isWithinReach(ranking)
+                ? "is-within-reach"
+                : ranking.unknownWords.length === 0
+                  ? "is-known"
+                  : ""
+            }`}
+            // The words themselves, not just how many. On a line one word away,
+            // that word is the entire reason to mine it.
+            title={
+              ranking.unknownWords.length === 0
+                ? "You know every word in this line."
+                : `New here: ${ranking.unknownWords.join("、")}`
+            }
+          >
+            {ranking.unknownWords.length === 0
+              ? "✓"
+              : `+${ranking.unknownWords.length}`}
           </span>
         ) : null}
       </span>

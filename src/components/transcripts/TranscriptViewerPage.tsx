@@ -18,7 +18,8 @@ import type {
 import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { TranscriptLanguageTabs } from "./TranscriptLanguageTabs";
 import type { TranscriptLanguageTab } from "./TranscriptLanguageTabs";
-import { TranscriptReadingPane } from "./TranscriptReadingPane";
+import { TranscriptReadingPane, buildRows } from "./TranscriptReadingPane";
+import { useSentenceRanking } from "../../hooks/useSentenceRanking";
 import {
   countMatches,
   normalizeSegmentText,
@@ -312,6 +313,7 @@ export function TranscriptViewerPage({
   lastTranscriptionOutcome,
   transcriptionLanguage,
   clipPaddingMs,
+  knownWordsBuiltAtMs,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -362,6 +364,10 @@ export function TranscriptViewerPage({
   // Milliseconds the miner pads a clip by on each side. Playback uses the same value so a
   // previewed sentence and the card made from it cannot drift apart.
   clipPaddingMs: number;
+  // When the known-word list was last read from Anki. Only a re-rank trigger: a
+  // Refresh has to update the badges on a transcript already open, or the words
+  // learned this morning would not show until the page was left and returned to.
+  knownWordsBuiltAtMs: number | null;
   // Set when the most recent transcription of this recording ended badly, so the viewer
   // can say which of "you cancelled it", "it failed" and "there is no transcript" the
   // empty screen actually means. Null when the last run succeeded or none has run.
@@ -470,6 +476,19 @@ export function TranscriptViewerPage({
   // Merge/split rewrite this copy only; nothing is persisted, and switching
   // language or reloading the transcript resets it from the source segments.
   const [editedSegments, setEditedSegments] = useState<RecordingSegment[]>([]);
+  // Narrows the transcript to the lines a single word from being readable.
+  const [withinReachOnly, setWithinReachOnly] = useState(false);
+  // The same rows the transcript pane will build, so entry N of the ranking
+  // describes row N. Merging or splitting a sentence changes these and re-ranks,
+  // which is the point of ranking the lines rather than the sidecar.
+  const transcriptLines = useMemo(
+    () =>
+      activeTranscript
+        ? buildRows(activeTranscript, editedSegments).map((row) => row.text)
+        : [],
+    [activeTranscript, editedSegments],
+  );
+  const ranking = useSentenceRanking(transcriptLines, knownWordsBuiltAtMs);
   // Rows already mined, tracked by content key so the marker survives re-renders
   // but not a merge/split (which makes a new sentence). Seeded below from the
   // cards actually in Anki, so it covers earlier sessions too, then extended as
@@ -806,6 +825,18 @@ export function TranscriptViewerPage({
             ))}
           </div>
 
+          {ranking?.status === "ready" ? (
+            <button
+              type="button"
+              className={`transcript-mode ${withinReachOnly ? "is-active" : ""}`}
+              aria-pressed={withinReachOnly}
+              onClick={() => setWithinReachOnly((current) => !current)}
+              title={ranking.message}
+            >
+              One word away
+            </button>
+          ) : null}
+
           <div className="transcript-find">
             <input
               type="search"
@@ -1045,6 +1076,8 @@ export function TranscriptViewerPage({
               miningKey={miningKey}
               isMining={isMining}
               mineDisabledReason={mineDisabledReason}
+              ranking={ranking}
+              withinReachOnly={withinReachOnly}
             />
           ) : null}
 

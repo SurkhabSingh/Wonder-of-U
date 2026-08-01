@@ -1138,6 +1138,38 @@ pub(crate) struct VocabularySource {
     pub(crate) field: String,
 }
 
+/// What one transcript line asks of the reader.
+///
+/// `unknown_words` rather than a bare count, because the count alone leaves the
+/// user to work out WHICH word is new — and on an i+1 line, that one word is the
+/// entire reason to mine it.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LineRanking {
+    pub(crate) unknown_words: Vec<String>,
+    /// How many words the line contains that count at all, known or not. A line of
+    /// pure grammar has none, and is not the same thing as a line you know every
+    /// word of — the badge has to be able to tell those apart.
+    pub(crate) content_word_count: usize,
+    /// Whether this is a line worth mining. Decided here rather than by whoever
+    /// draws the badge, so the count in the summary and the rows in the filter
+    /// cannot disagree — see `is_within_reach`.
+    pub(crate) within_reach: bool,
+}
+
+/// A ranking of every line handed in, in the same order.
+///
+/// `lines` always has one entry per input line, whatever `status` says. A short
+/// list on the unhappy paths would be a second shape for every caller to handle,
+/// and the one they forget.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TranscriptRanking {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) lines: Vec<LineRanking>,
+}
+
 /// One proposed vocabulary source, with real values from the user's own cards.
 ///
 /// `samples` is not decoration. The tests behind a suggestion cannot tell a deck of

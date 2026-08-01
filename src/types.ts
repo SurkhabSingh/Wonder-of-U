@@ -321,6 +321,27 @@ export type DictionaryDetection = {
   message: string;
 };
 
+// What one transcript line asks of the reader. `unknownWords` rather than a bare
+// count, because on an i+1 line that one word is the entire reason to mine it.
+export type LineRanking = {
+  unknownWords: string[];
+  // Words that count at all, known or not. A line of pure grammar has none, which
+  // is not the same as a line you know every word of.
+  contentWordCount: number;
+  // Whether this line is worth mining. Decided in Rust, never re-derived here: the
+  // summary count and the filtered rows have to be the same set, and two copies of
+  // the rule is how they stop being.
+  withinReach: boolean;
+};
+
+// Always one entry per line handed in, whatever `status` says: "ready",
+// "unconfigured", "unbuilt", or "needsDictionary".
+export type TranscriptRanking = {
+  status: string;
+  message: string;
+  lines: LineRanking[];
+};
+
 // One proposed vocabulary source. `samples` carries real values off the user's own
 // cards — the scan cannot tell a deck of single kanji from a deck of words, and
 // three samples answer that at a glance.

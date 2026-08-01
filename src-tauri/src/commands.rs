@@ -32,12 +32,14 @@ use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
         load_mined_sentences_inner, mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
-        push_recordings_to_anki_inner, refresh_known_words_inner, scan_vocabulary_sources_inner,
+        push_recordings_to_anki_inner, rank_transcript_lines_inner, refresh_known_words_inner,
+        scan_vocabulary_sources_inner,
     },
     app_runtime::{build_app_bootstrap, emit_app_snapshot},
     app_types::{
         AnkiCatalog, AppBootstrap, AppSettings, KnownWordsSnapshot, MinedSentences,
-        RecordingBatchResult, RecordingTexts, VocabularySuggestions, WhisperAssetUpdateResult,
+        RecordingBatchResult, RecordingTexts, TranscriptRanking, VocabularySuggestions,
+        WhisperAssetUpdateResult,
     },
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
@@ -195,6 +197,24 @@ pub(crate) async fn load_anki_catalog(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Counts the words in each line that are not yet known.
+///
+/// Takes the lines themselves rather than a recording, because the rows on screen
+/// are not always the rows on disk — the viewer can merge and split them, and a
+/// ranking keyed to the sidecar would describe the transcript's previous shape.
+///
+/// Off the UI thread: a long episode is several hundred lines, and the first call
+/// after launch also loads the dictionary.
+#[tauri::command]
+pub(crate) async fn rank_transcript_lines(
+    app: AppHandle,
+    lines: Vec<String>,
+) -> Result<TranscriptRanking, String> {
+    tauri::async_runtime::spawn_blocking(move || rank_transcript_lines_inner(&app, &lines))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// Looks through the collection for note types that hold vocabulary.

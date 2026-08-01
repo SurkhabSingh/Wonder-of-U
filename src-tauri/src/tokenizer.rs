@@ -23,6 +23,15 @@ use lindera::{
 /// the field order changes in a later dictionary build.
 const BASE_FORM_FIELD: &str = "base_form";
 
+/// IPADIC's part of speech, and the first of its three subcategories.
+///
+/// The pair is what separates vocabulary from grammar: 名詞 alone admits a
+/// character's name (名詞,固有名詞) and a counter (名詞,数) alongside a real noun, and
+/// those are not words anyone studies. Both are needed, and both are looked up by
+/// name through the dictionary's own schema rather than by index.
+const PART_OF_SPEECH_FIELD: &str = "part_of_speech";
+const PART_OF_SPEECH_SUBCATEGORY_FIELD: &str = "part_of_speech_subcategory_1";
+
 /// What IPADIC writes into any field it has no value for, including the base form
 /// of a word it does not know. `metadata.json` declares it as `default_field_value`.
 const UNKNOWN_FIELD_VALUE: &str = "*";
@@ -40,6 +49,13 @@ pub(crate) struct JapaneseToken {
     /// dictionary form. A radical, a stray symbol and a novel proper noun are all
     /// one token and none of them is vocabulary.
     pub(crate) known_to_dictionary: bool,
+    /// IPADIC's top-level part of speech: 名詞, 動詞, 助詞 and so on. `*` when the
+    /// word is unknown to the dictionary.
+    pub(crate) part_of_speech: String,
+    /// The first subcategory, which is where 固有名詞 (proper noun), 数 (numeral) and
+    /// 非自立 (dependent) live — the distinctions that decide whether a noun is
+    /// vocabulary or scaffolding.
+    pub(crate) part_of_speech_subcategory: String,
 }
 
 /// Caches the loaded dictionary against the path it came from.
@@ -149,12 +165,19 @@ pub(crate) fn tokenize_japanese(
             // Read the surface before `get`, which needs the token mutably.
             let surface = token.surface.to_string();
             let raw_base_form = token.get(BASE_FORM_FIELD);
+            let known_to_dictionary = matches!(
+                raw_base_form,
+                Some(value) if value != UNKNOWN_FIELD_VALUE && !value.is_empty()
+            );
+            let base_form = resolve_base_form(&surface, raw_base_form);
             JapaneseToken {
-                known_to_dictionary: matches!(
-                    raw_base_form,
-                    Some(value) if value != UNKNOWN_FIELD_VALUE && !value.is_empty()
-                ),
-                base_form: resolve_base_form(&surface, raw_base_form),
+                part_of_speech: token.get(PART_OF_SPEECH_FIELD).unwrap_or_default().to_string(),
+                part_of_speech_subcategory: token
+                    .get(PART_OF_SPEECH_SUBCATEGORY_FIELD)
+                    .unwrap_or_default()
+                    .to_string(),
+                known_to_dictionary,
+                base_form,
                 surface,
             }
         })
