@@ -165,14 +165,6 @@ fn sibling_subtitle_paths(recording: &RecentRecording) -> Vec<String> {
 }
 
 fn sibling_translation_paths(recording: &RecentRecording) -> Vec<String> {
-    let audio_path = Path::new(&recording.file_path);
-    let (Some(parent), Some(stem)) = (
-        audio_path.parent(),
-        audio_path.file_stem().and_then(|stem| stem.to_str()),
-    ) else {
-        return Vec::new();
-    };
-
     sibling_paths_with(recording, |name, stem| {
         name.starts_with(&format!("{stem}.translation.")) && name.ends_with(".txt")
     })

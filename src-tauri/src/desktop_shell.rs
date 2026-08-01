@@ -130,18 +130,37 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
                 "message": error
             }),
         );
-        // A hotkey-triggered start or stop fails while the window is hidden, so the
-        // in-app toast never surfaces — flash the global pill instead. `ShowWindow`
-        // has nothing to do with recording, so it stays silent.
-        if matches!(action, HotkeyAction::Start | HotkeyAction::Stop) {
-            signal_recording_indicator(app, IndicatorSignal::Failed);
+        // How a failure is shown depends on what failed, because `phase` and the fields
+        // beside it describe the RECORDING and nothing else.
+        match action {
+            // A hotkey-triggered start or stop fails while the window is hidden, so the
+            // in-app toast never surfaces — flash the global pill instead.
+            HotkeyAction::Start | HotkeyAction::Stop => {
+                signal_recording_indicator(app, IndicatorSignal::Failed);
+                let _ = update_shell_snapshot(app, |shell| {
+                    shell.phase = "error".into();
+                    shell.status_text = error.clone();
+                    shell.started_at_ms = None;
+                    shell.current_recording_name = None;
+                });
+            }
+            // Says what happened, and touches nothing else. Mining ran the recording
+            // branch before this: a mine that found no subtitle on screen would put the
+            // RECORDER into an error state and forget the name and start time of a
+            // recording that was still running. This app captures system audio, so
+            // recording while watching something is ordinary rather than exotic.
+            //
+            // The status line is the only surface a hotkey can reach anyway — the window
+            // is behind mpv — and the success path already reports there and only there.
+            HotkeyAction::Mine => {
+                let _ = update_shell_snapshot(app, |shell| {
+                    shell.status_text = error.clone();
+                });
+            }
+            // Showing a window has nothing to say about recording, and its failure has
+            // nowhere useful to say it.
+            HotkeyAction::ShowWindow => {}
         }
-        let _ = update_shell_snapshot(app, |shell| {
-            shell.phase = "error".into();
-            shell.status_text = error.clone();
-            shell.started_at_ms = None;
-            shell.current_recording_name = None;
-        });
     }
 }
 
