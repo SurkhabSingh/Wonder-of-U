@@ -19,7 +19,7 @@ use crate::{
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
     subtitles::segments_to_srt,
     transcription::{
-        run_whisper_transcription, transcription_thread_count, SpeechEnvelope, SpeechRegion,
+        run_whisper_transcription, transcription_thread_count, SpeechRegion, VadTimeline,
         WhisperSlotGuard, WhisperTranscriptionRequest, TRANSCRIPTION_CANCELLED,
     },
 };
@@ -104,6 +104,29 @@ fn log_speech_regions<R: Runtime>(
     );
 }
 
+/// Say so when word-level timings did not arrive.
+///
+/// Cue boundaries are placed on word edges from `--dtw` token timestamps, and `--dtw` does not
+/// fail — it prints a line to stderr, disables itself, and returns ordinary timestamps. Without
+/// this the only symptom would be cues quietly reverting to whisper's own boundaries, which is
+/// exactly the silent-miss shape that hid the furigana bug for eleven days.
+///
+/// Music mode runs no VAD, so an empty timeline is the correct outcome there and says nothing
+/// about DTW.
+fn log_word_timings<R: Runtime>(app: &AppHandle<R>, timeline: &VadTimeline, music_mode: bool) {
+    if music_mode || !timeline.is_empty() {
+        return;
+    }
+    log_event(
+        app,
+        "WARN",
+        "transcription.word_timings_missing",
+        serde_json::json!({
+            "message": "No VAD timeline was parsed, so token timestamps could not be placed                         and cue boundaries fall back to whisper's own segment bounds."
+        }),
+    );
+}
+
 /// Everything a transcription pass needs resolved from settings and detection.
 pub(crate) struct WhisperEngine {
     pub(crate) cli_path: PathBuf,
@@ -166,7 +189,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     transcript_path: PathBuf,
     json_path: PathBuf,
     requested_language: &str,
-    envelope: Option<&SpeechEnvelope>,
+    vad_timeline: &VadTimeline,
 ) -> Result<RecentRecording, String> {
     let language = transcript_language_key(requested_language);
     let audio_path = PathBuf::from(&recording.file_path);
@@ -272,7 +295,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
             &language,
             &final_transcript_path,
             recording.duration_ms,
-            envelope,
+            vad_timeline,
         ) {
             Ok(sidecars) => sidecars.map(|sidecars| {
                 if sidecars.subtitle_path.is_none() {
@@ -367,16 +390,31 @@ pub(crate) fn store_segments_sidecar(
     language: &str,
     transcript_path: &Path,
     duration_ms: u64,
-    envelope: Option<&SpeechEnvelope>,
+    vad_timeline: &VadTimeline,
 ) -> Result<Option<TranscriptSidecars>, String> {
-    let raw = match parse_whisper_segments(json_path) {
+    let parsed = match parse_whisper_output(json_path) {
         Some(segments) if !segments.is_empty() => segments,
         _ => return Ok(None),
     };
 
-    // Repair whisper's runaway repetition and out-of-bounds tails before persisting.
+    // Word positions first, while the list still matches whisper's own indexing one to one.
+    // `t_dtw` is stated against the compressed timeline whisper decoded, so it means nothing
+    // until the VAD log puts it back on the recording's.
+    let first_word_ms: Vec<Option<u64>> = parsed
+        .iter()
+        .map(|entry| {
+            entry
+                .first_token_dtw_ms
+                .and_then(|dtw_ms| vad_timeline.to_original_ms(dtw_ms))
+        })
+        .collect();
+    let mut raw: Vec<RecordingSegment> = parsed.into_iter().map(|entry| entry.segment).collect();
+    retime_cues_from_tokens(&mut raw, &first_word_ms);
+
+    // Repair whisper's runaway repetition and out-of-bounds tails before persisting. The cue
+    // bounds are already final by here, which is what `AsGiven` says.
     let raw_len = raw.len();
-    let segments = clean_segments(raw, duration_ms, CueTiming::TrimToSpeech(envelope));
+    let segments = clean_segments(raw, duration_ms, CueTiming::AsGiven);
     if segments.is_empty() {
         return Ok(None);
     }
@@ -471,50 +509,60 @@ fn is_whisper_hallucination(text: &str) -> bool {
         .any(|phrase| normalized.eq_ignore_ascii_case(phrase))
 }
 
-/// How much room to leave either side of the speech, so a trim never shaves the attack off a
-/// first syllable or the decay off a last one.
+/// Re-time each cue from the position of its own first word.
 ///
-/// 150 ms rather than the 120 ms the old VAD clamp used: this one moves cue *starts* too, and
-/// the cost of being generous is a little dead air while the cost of being tight is a lost
-/// syllable.
-const CUE_EDGE_PAD_MS: u64 = 150;
+/// Whisper's cues are butt-joined — `end of N == start of N+1`, exactly, every cue — so one
+/// boundary serves as both the end of a sentence and the start of the next. When that shared
+/// point lands inside a word, the earlier sentence loses it and the later one inherits it.
+/// That is a single defect wearing three faces: a sentence that starts mid-word, one that ends
+/// mid-word, and one that opens with the tail of its predecessor.
+///
+/// It is invisible while there are pauses to put boundaries in, and constant once there are
+/// not. Measured on a 550 s recording, the first half holds 94 pauses over 150 ms and the
+/// second holds 18; minute 5-6 has none at all. In that second half 68% of cues carry a
+/// boundary error over 200 ms, against 45% in the first. The boundaries did not get worse —
+/// the silence ran out, so whisper had nowhere to put them but inside speech.
+///
+/// Which is why nothing that looks for silence can fix this: not the VAD clamp, not a
+/// waveform-energy trim, not alass. `--dtw` aligns each token to the audio by dynamic time
+/// warping, so it can place a cut between two words with no pause between them. On the case
+/// this was built for, cue `345220` began 340 ms before its own first word and DTW showed the
+/// 340 ms was `なんだ`, the previous sentence's ending.
+///
+/// A cue therefore starts where its own first word does, and ends where the NEXT cue's first
+/// word does. Cues stay contiguous, but every seam now falls on a word edge, so no cut can
+/// land inside a word.
+///
+/// Not fixed here: a cue whose successor begins seconds later still ends seconds after its own
+/// last word. `t_dtw` gives one timestamp per token — a start, not a span — so there is no
+/// measurement of where a final word ends. Trailing dead air needs its own answer.
+fn retime_cues_from_tokens(
+    segments: &mut [RecordingSegment],
+    first_word_ms: &[Option<u64>],
+) {
+    debug_assert_eq!(segments.len(), first_word_ms.len());
 
-/// Pull each cue in to the speech it actually holds, at both edges.
-///
-/// Replaces a clamp that pulled the END back to the last Silero speech region inside the cue.
-/// That was wrong twice over. It trusted the VAD, which on Japanese ends a region before a
-/// devoiced sentence ending (です -> "des") and so cut real syllables; and it never touched the
-/// START, on the stated assumption that "starts are already exact", which measurement does not
-/// support — one recording carried 12.8 s of leading silence, including a five-second cue whose
-/// words did not begin until 3.7 s in.
-///
-/// Measured over that recording, against the audio's own speech energy:
-///
-/// ```text
-///                                 cues   cuts speech   dead air   leading silence
-///   VAD clamp (what this replaces) 153        20         74.8 s       12.8 s
-///   no clamp at all                153        11         93.3 s       12.8 s
-///   this                           153        11         72.1 s        2.6 s
-/// ```
-///
-/// Better than both on every count, and it keeps all 153 cues and all of their text — a
-/// tempting alternative, raising Silero's own speech padding to 300 ms, scored well on one
-/// sentence but merged the file down to 136 cues and dropped words out of them.
-///
-/// Interior silence is deliberately left alone. It is the larger share by far, but removing it
-/// would mean splitting the cue, and the text cannot be split with it without word timings — a
-/// sentence that no longer matches its own audio is worse than a long one.
-fn trim_cue_to_speech(
-    start_ms: u64,
-    end_ms: u64,
-    envelope: Option<&SpeechEnvelope>,
-    pad_ms: u64,
-) -> (u64, u64) {
-    // No envelope (unreadable WAV, or audio with no dynamic range to measure): leave whisper's
-    // own timings exactly as they are, which is what every caller did before this existed.
-    match envelope {
-        Some(envelope) => envelope.trim(start_ms, end_ms, pad_ms),
-        None => (start_ms, end_ms),
+    for index in 0..segments.len() {
+        // Without a word position for this cue, leave it exactly as whisper reported it. The
+        // same is true of a start that would run past the cue's own end, which would mean the
+        // mapping and the decode disagree about this segment.
+        let Some(start_ms) = first_word_ms[index] else {
+            continue;
+        };
+        if start_ms >= segments[index].end_ms {
+            continue;
+        }
+        segments[index].start_ms = start_ms;
+    }
+
+    // Ends come second and read the already-corrected starts, so a cue ends exactly where its
+    // successor begins and the pair cannot disagree about the seam between them. The last cue
+    // keeps whisper's end: there is no following word to take one from.
+    for index in 0..segments.len().saturating_sub(1) {
+        let next_start_ms = segments[index + 1].start_ms;
+        if next_start_ms > segments[index].start_ms {
+            segments[index].end_ms = next_start_ms;
+        }
     }
 }
 
@@ -556,9 +604,10 @@ fn clamp_end_to_vad_regions(start_ms: u64, end_ms: u64, speech_regions: &[Speech
 /// and so the reason they differ has somewhere to live. They are NOT interchangeable: see
 /// `clamp_end_to_vad_regions` for why the watch path keeps the older one.
 pub(crate) enum CueTiming<'a> {
-    /// Pull both edges in to the speech in the waveform. What the recording library uses,
-    /// because a mined card is listened to and a few hundred ms of dead air is audible.
-    TrimToSpeech(Option<&'a SpeechEnvelope>),
+    /// Take the cue bounds as given. What the recording library uses, because
+    /// `retime_cues_from_tokens` has already placed them on word edges — that needs each cue's
+    /// neighbours, so it runs over the whole list before this per-cue pass.
+    AsGiven,
     /// Pull the end back to the last VAD region. What a watch session's generated subtitles
     /// use, frozen deliberately.
     ClampToVadRegions(&'a [SpeechRegion]),
@@ -592,16 +641,7 @@ pub(crate) fn clean_segments(
         // collapsed run inherits trimmed members rather than whisper's padded ones.
         .map(|mut segment| {
             match timing {
-                CueTiming::TrimToSpeech(envelope) => {
-                    let (start_ms, end_ms) = trim_cue_to_speech(
-                        segment.start_ms,
-                        segment.end_ms,
-                        envelope,
-                        CUE_EDGE_PAD_MS,
-                    );
-                    segment.start_ms = start_ms;
-                    segment.end_ms = end_ms;
-                }
+                CueTiming::AsGiven => {}
                 CueTiming::ClampToVadRegions(regions) => {
                     segment.end_ms =
                         clamp_end_to_vad_regions(segment.start_ms, segment.end_ms, regions);
@@ -635,18 +675,58 @@ pub(crate) fn clean_segments(
 /// plus text into the clean segment array. Returns `None` for a missing or
 /// unparseable file so the caller can degrade to no segments.
 pub(crate) fn parse_whisper_segments(json_path: &Path) -> Option<Vec<RecordingSegment>> {
+    Some(
+        parse_whisper_output(json_path)?
+            .into_iter()
+            .map(|entry| entry.segment)
+            .collect(),
+    )
+}
+
+/// One segment plus, when whisper was asked for them, the position of its first word.
+pub(crate) struct ParsedSegment {
+    pub(crate) segment: RecordingSegment,
+    /// The DTW timestamp of the first real token, on whisper's COMPRESSED timeline. `None`
+    /// when DTW produced nothing for this segment.
+    pub(crate) first_token_dtw_ms: Option<u64>,
+}
+
+/// Reads whisper's json, keeping the per-token DTW timestamps when they are there.
+pub(crate) fn parse_whisper_output(json_path: &Path) -> Option<Vec<ParsedSegment>> {
     let raw = fs::read_to_string(json_path).ok()?;
     let parsed: WhisperJson = serde_json::from_str(&raw).ok()?;
-    let segments = parsed
-        .transcription
-        .into_iter()
-        .map(|entry| RecordingSegment {
-            text: entry.text.trim().to_string(),
-            start_ms: entry.offsets.from,
-            end_ms: entry.offsets.to,
-        })
-        .collect();
-    Some(segments)
+    Some(
+        parsed
+            .transcription
+            .into_iter()
+            .map(|entry| ParsedSegment {
+                first_token_dtw_ms: first_token_dtw_ms(&entry),
+                segment: RecordingSegment {
+                    text: entry.text.trim().to_string(),
+                    start_ms: entry.offsets.from,
+                    end_ms: entry.offsets.to,
+                },
+            })
+            .collect(),
+    )
+}
+
+/// whisper reports `t_dtw` in centiseconds; everything here is milliseconds.
+const DTW_UNIT_MS: u64 = 10;
+
+/// The first token of `entry` that is real text rather than a control marker.
+///
+/// `[_BEG_]` and `[_TT_nnn]` carry no audio and sit at both ends of a segment, so taking the
+/// literal first token would place a sentence at a marker's timestamp rather than at its own
+/// first word.
+fn first_token_dtw_ms(entry: &WhisperJsonSegment) -> Option<u64> {
+    entry
+        .tokens
+        .iter()
+        .find(|token| !token.text.trim_start().starts_with("[_"))
+        .and_then(|token| token.t_dtw)
+        .filter(|t_dtw| *t_dtw >= 0)
+        .map(|t_dtw| t_dtw as u64 * DTW_UNIT_MS)
 }
 
 #[derive(serde::Deserialize)]
@@ -660,12 +740,27 @@ struct WhisperJsonSegment {
     #[serde(default)]
     text: String,
     offsets: WhisperJsonOffsets,
+    /// Absent unless whisper was run with `--output-json-full`, and carrying `t_dtw` only when
+    /// it was also run with `--dtw`. A container-level default keeps an older json readable.
+    #[serde(default)]
+    tokens: Vec<WhisperJsonToken>,
 }
 
 #[derive(serde::Deserialize)]
 struct WhisperJsonOffsets {
     from: u64,
     to: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct WhisperJsonToken {
+    #[serde(default)]
+    text: String,
+    /// Where dynamic time warping placed this token against the audio, in centiseconds on the
+    /// compressed timeline. Distinct from `offsets`, which carries the decoder's own estimate —
+    /// the two disagree by up to a second, and this is the one measured against the waveform.
+    #[serde(default)]
+    t_dtw: Option<i64>,
 }
 
 fn sanitize_language_tag(language: &str) -> String {
@@ -863,6 +958,9 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 thread_count,
                 music_mode,
                 fast_decode: settings.whisper.decode_speed == "fast",
+                dtw_preset: crate::app_types::whisper_model_spec(&settings.whisper.model_choice)
+                    .dtw_preset
+                    .to_string(),
             },
             cancel_listener.flag(),
             move |percent| {
@@ -894,6 +992,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         )
         .and_then(|result| {
             log_speech_regions(app, &result.speech_regions, music_mode);
+            log_word_timings(app, &result.vad_timeline, music_mode);
             apply_transcription_result_to_recording(
                 app,
                 &original_file_path,
@@ -901,7 +1000,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 result.transcript_path,
                 result.json_path,
                 &settings.whisper.language,
-                result.speech_envelope.as_ref(),
+                &result.vad_timeline,
             )
         });
 
@@ -1155,7 +1254,7 @@ mod tests {
             "fr",
             &transcript_path,
             0,
-            None,
+            &VadTimeline::default(),
         )
         .unwrap()
         .expect("a parseable json must yield a sidecar path");
@@ -1207,7 +1306,7 @@ Bonjour le monde
             "fr",
             &transcript_path,
             0,
-            None,
+            &VadTimeline::default(),
         )
         .unwrap();
         assert!(result.is_none(), "a missing json must not produce a sidecar");
@@ -1221,7 +1320,7 @@ Bonjour le monde
             "fr",
             &transcript_path,
             0,
-            None,
+            &VadTimeline::default(),
         )
         .unwrap();
         assert!(result.is_none(), "unparseable json must not produce a sidecar");
@@ -1230,63 +1329,71 @@ Bonjour le monde
         assert!(!dir.path().join("hola_100.fr.segments.json").exists());
     }
 
-    /// Builds an envelope from a voiced/silent sketch: each char is one 10 ms frame,
-    /// `#` voiced and `.` silent. Keeps these tests about the rule rather than about WAV
-    /// parsing, which `transcription.rs` covers separately.
-    fn envelope(sketch: &str) -> SpeechEnvelope {
-        SpeechEnvelope::from_frames(sketch.chars().map(|frame| frame == '#').collect())
+    fn cue(text: &str, start_ms: u64, end_ms: u64) -> RecordingSegment {
+        RecordingSegment {
+            text: text.into(),
+            start_ms,
+            end_ms,
+        }
     }
 
-    /// The case this replaced the VAD clamp for: a cue whose words start well after it does.
-    /// Measured on a real recording, one five-second cue did not begin speaking until 3.69 s
-    /// in and nothing trimmed it — the old clamp only ever moved the END, on the stated
-    /// assumption that starts were already exact.
+    /// The measured case this was built for. Cue `345220` began 340 ms before its own first
+    /// word, and DTW showed the 340 ms held `なんだ` — the previous sentence's ending. One
+    /// misplaced seam, and it broke both cues: the earlier one lost its ending, the later one
+    /// inherited it.
     #[test]
-    fn a_late_start_is_pulled_in_to_the_speech() {
-        let envelope = envelope("..................########........");
+    fn a_seam_moves_to_the_word_edge_and_fixes_both_cues() {
+        let mut segments = vec![
+            cue("sou nan da", 344_600, 345_220),
+            cue("jaa issho ni iku?", 345_220, 346_200),
+        ];
 
-        let (start_ms, end_ms) = trim_cue_to_speech(0, 340, Some(&envelope), 50);
+        retime_cues_from_tokens(&mut segments, &[Some(344_620), Some(345_560)]);
 
-        assert_eq!(start_ms, 130, "speech starts at 180ms, less the 50ms pad");
-        assert_eq!(end_ms, 310, "speech ends at 260ms, plus the 50ms pad");
+        assert_eq!(segments[0].start_ms, 344_620);
+        assert_eq!(segments[0].end_ms, 345_560, "keeps its own ending");
+        assert_eq!(segments[1].start_ms, 345_560, "no longer opens on the previous word");
     }
 
-    /// A trim may only ever shrink. Were it able to grow, a cue would reach into its
-    /// neighbour and two cards would share the same audio.
+    /// Cues stay contiguous: whatever one gives up, its neighbour takes. A gap here would be
+    /// audio belonging to no sentence at all.
     #[test]
-    fn a_trim_never_grows_a_cue() {
-        let envelope = envelope("##########");
+    fn cues_remain_contiguous_after_retiming() {
+        let mut segments = vec![
+            cue("one", 0, 1_000),
+            cue("two", 1_000, 2_000),
+            cue("three", 2_000, 3_000),
+        ];
 
-        let (start_ms, end_ms) = trim_cue_to_speech(0, 100, Some(&envelope), 5_000);
+        retime_cues_from_tokens(&mut segments, &[Some(100), Some(1_200), Some(2_050)]);
 
-        assert_eq!((start_ms, end_ms), (0, 100), "the pad cannot exceed the cue");
+        assert_eq!(segments[0].end_ms, segments[1].start_ms);
+        assert_eq!(segments[1].end_ms, segments[2].start_ms);
+        assert_eq!(segments[2].end_ms, 3_000, "the last cue keeps whisper's end");
     }
 
-    /// A cue holding no detected speech keeps whisper's own timings. Collapsing it to nothing
-    /// would turn a hallucination into a zero-length clip instead of an obviously wrong one.
+    /// No DTW for a cue — an older json, or a run where `--dtw` disabled itself — must leave
+    /// that cue exactly as whisper reported it rather than guess at a position.
     #[test]
-    fn a_silent_cue_is_left_alone() {
-        let envelope = envelope("....................");
+    fn a_cue_without_a_word_position_is_left_alone() {
+        let mut segments = vec![cue("one", 500, 1_500), cue("two", 1_500, 2_500)];
 
-        assert_eq!(trim_cue_to_speech(0, 200, Some(&envelope), 150), (0, 200));
+        retime_cues_from_tokens(&mut segments, &[None, None]);
+
+        assert_eq!((segments[0].start_ms, segments[0].end_ms), (500, 1_500));
+        assert_eq!((segments[1].start_ms, segments[1].end_ms), (1_500, 2_500));
     }
 
-    /// No envelope at all — an unreadable WAV, or audio with no dynamic range to measure —
-    /// must leave every timestamp exactly as whisper reported it.
+    /// A word position at or past the cue's own end means the mapping and the decode disagree
+    /// about this segment. Applying it would invert the cue; whisper's own bounds stand.
     #[test]
-    fn no_envelope_means_no_trimming() {
-        assert_eq!(trim_cue_to_speech(1_000, 9_000, None, 150), (1_000, 9_000));
-    }
+    fn an_impossible_word_position_is_refused() {
+        let mut segments = vec![cue("one", 500, 1_500), cue("two", 1_500, 2_500)];
 
-    /// Interior silence stays. The cue spans two bursts and its text covers both, so pulling
-    /// in to the first gap would drop words the sentence still claims to say.
-    #[test]
-    fn silence_inside_a_cue_survives() {
-        let envelope = envelope("####..........####");
+        retime_cues_from_tokens(&mut segments, &[Some(9_000), Some(1_600)]);
 
-        let (start_ms, end_ms) = trim_cue_to_speech(0, 180, Some(&envelope), 0);
-
-        assert_eq!((start_ms, end_ms), (0, 180), "both bursts are kept, gap and all");
+        assert_eq!(segments[0].start_ms, 500, "refused, so the cue is untouched");
+        assert_eq!(segments[1].start_ms, 1_600);
     }
 
     /// The watch path's rule, pinned separately because it is deliberately NOT the library's.
@@ -1323,39 +1430,20 @@ Bonjour le monde
                 end_ms: 600,
             }]
         };
-        let sketch = envelope("..................########..................................");
+        // Ends at 300, so the clamp pulls the cue's end to 420 (300 + the 120 ms pad) while
+        // `AsGiven` leaves it at 600. If these ever agree, one rule has become the other.
         let regions = [SpeechRegion {
             start_ms: 0,
-            end_ms: 500,
+            end_ms: 300,
         }];
 
-        let trimmed = clean_segments(segment(), 0, CueTiming::TrimToSpeech(Some(&sketch)));
+        let as_given = clean_segments(segment(), 0, CueTiming::AsGiven);
         let clamped = clean_segments(segment(), 0, CueTiming::ClampToVadRegions(&regions));
 
         assert_ne!(
-            (trimmed[0].start_ms, trimmed[0].end_ms),
+            (as_given[0].start_ms, as_given[0].end_ms),
             (clamped[0].start_ms, clamped[0].end_ms)
         );
-    }
-
-    /// End to end through the real `CUE_EDGE_PAD_MS`, so the pad the app actually ships is
-    /// the one under test. Speech runs 180ms..260ms inside a 600ms cue, leaving dead air at
-    /// both ends for the trim to remove.
-    #[test]
-    fn clean_segments_trims_cues_to_their_speech() {
-        let segments = vec![RecordingSegment {
-            text: "daijoubu".into(),
-            start_ms: 0,
-            end_ms: 600,
-        }];
-
-        let sketch =
-            envelope("..................########..................................");
-        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(Some(&sketch)));
-
-        assert_eq!(cleaned.len(), 1);
-        assert_eq!(cleaned[0].start_ms, 30, "speech at 180ms, less the 150ms pad");
-        assert_eq!(cleaned[0].end_ms, 410, "speech to 260ms, plus the 150ms pad");
     }
 
     #[test]
@@ -1371,7 +1459,7 @@ Bonjour le monde
             segments.push(seg("ループ", 1000 + i * 1000, 2000 + i * 1000));
         }
 
-        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(None));
+        let cleaned = clean_segments(segments, 0, CueTiming::AsGiven);
 
         // The loop collapses to a single segment spanning the whole run.
         assert_eq!(cleaned.len(), 2);
@@ -1391,7 +1479,7 @@ Bonjour le monde
         };
         let segments = vec![seg(0, 1000), seg(1000, 2000), seg(2000, 3000)];
 
-        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(None));
+        let cleaned = clean_segments(segments, 0, CueTiming::AsGiven);
 
         assert_eq!(cleaned.len(), 3);
     }
@@ -1411,7 +1499,7 @@ Bonjour le monde
             seg("ありがとうございました", 12000, 15000), // generic thanks -> KEEP (may be real)
         ];
 
-        let cleaned = clean_segments(segments, 0, CueTiming::TrimToSpeech(None));
+        let cleaned = clean_segments(segments, 0, CueTiming::AsGiven);
 
         assert_eq!(cleaned.len(), 2, "only the real line and the generic thanks survive");
         assert_eq!(cleaned[0].text, "本物の台詞です");
@@ -1431,7 +1519,7 @@ Bonjour le monde
             seg("starts past the end", 9000, 12000), // starts past duration -> drop
         ];
 
-        let cleaned = clean_segments(segments, 8000, CueTiming::TrimToSpeech(None));
+        let cleaned = clean_segments(segments, 8000, CueTiming::AsGiven);
 
         assert_eq!(cleaned.len(), 2);
         assert_eq!(cleaned[1].text, "overshoots the end");
@@ -1464,7 +1552,7 @@ Bonjour le monde
             "ja",
             &transcript_path,
             60_000,
-            None,
+            &VadTimeline::default(),
         )
         .unwrap()
         .expect("a parseable json must yield a sidecar path");

@@ -102,6 +102,11 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
             thread_count: transcription_thread_count(&settings.whisper.cpu_usage),
             music_mode: settings.whisper.audio_type == "music",
             fast_decode: settings.whisper.decode_speed == "fast",
+            // Empty on purpose: no `--dtw`, and so no `-nfa` either. This path times its cues
+            // with the VAD clamp, so word timings would cost 32% more for something it never
+            // reads — and turning flash attention off to get them changes how the model runs,
+            // on the one path that is deliberately frozen.
+            dtw_preset: String::new(),
         },
         cancel_listener.flag(),
         // Reuses the transcription progress channel, so the existing bar reports this too —

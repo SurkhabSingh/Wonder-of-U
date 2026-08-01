@@ -21,6 +21,11 @@ pub(crate) struct WhisperModelSpec {
     pub(crate) label: &'static str,
     pub(crate) file_name: &'static str,
     pub(crate) download_url: &'static str,
+    /// What whisper-cli's `--dtw` calls this model, which is not what we call it — ours is
+    /// `large-v3`, its preset is `large.v3`. Kept beside the model rather than derived at the
+    /// call site because getting it wrong does not fail: `--dtw` accepts an unknown name,
+    /// disables itself, and returns ordinary timestamps.
+    pub(crate) dtw_preset: &'static str,
 }
 
 pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
@@ -29,30 +34,35 @@ pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
         label: "Tiny",
         file_name: "ggml-tiny.bin",
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+        dtw_preset: "tiny",
     },
     WhisperModelSpec {
         id: "base",
         label: "Base",
         file_name: "ggml-base.bin",
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+        dtw_preset: "base",
     },
     WhisperModelSpec {
         id: "small",
         label: "Small",
         file_name: "ggml-small.bin",
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+        dtw_preset: "small",
     },
     WhisperModelSpec {
         id: "medium",
         label: "Medium",
         file_name: "ggml-medium.bin",
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+        dtw_preset: "medium",
     },
     WhisperModelSpec {
         id: "large-v3",
         label: "Large v3",
         file_name: "ggml-large-v3.bin",
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+        dtw_preset: "large.v3",
     },
 ];
 

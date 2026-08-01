@@ -84,6 +84,13 @@ pub struct WhisperTranscriptionRequest {
     /// via `transcription_thread_count`. Bounds how much of the machine a long transcription
     /// consumes so it never maxes out the box.
     pub thread_count: usize,
+    /// What `--dtw` calls the model being used, from its `WhisperModelSpec`.
+    ///
+    /// Dynamic time warping is what places a cue on a word edge rather than wherever whisper
+    /// happened to break the segment — the only signal that works when two sentences run
+    /// together with no pause to put a boundary in. Costs about 32% more time (measured: 281 s
+    /// to 371 s over a 9-minute recording), because it cannot run alongside flash attention.
+    pub dtw_preset: String,
     /// When true, transcribe in "music" mode: skip Silero VAD entirely so a full song
     /// transcribes. VAD rejects sung vocals over backing music and stalls partway through a
     /// song at any threshold; the cost is whisper's own, looser timestamps. False keeps the
@@ -108,144 +115,11 @@ pub struct WhisperTranscriptionResult {
     /// Empty in music mode, which runs no VAD, and empty if a future runtime stops printing
     /// the lines. Both must degrade to leaving cue ends exactly as whisper reported them.
     pub speech_regions: Vec<SpeechRegion>,
-    /// Where the audio is loud enough to be speech, measured from the decoded WAV.
+    /// How to put a token's timestamp back on the recording's timeline.
     ///
-    /// `None` when the WAV could not be read, which must leave every timestamp exactly as
-    /// whisper reported it.
-    pub speech_envelope: Option<SpeechEnvelope>,
-}
-
-/// One bit per 10 ms of audio: was anyone speaking.
-///
-/// Deliberately measured from the waveform rather than taken from Silero. The VAD answers a
-/// harder question — *is this speech* — and on Japanese it answers "no" to a sentence-final
-/// です or ます, which are devoiced and quiet but are exactly the syllables a learner needs to
-/// hear. Loudness relative to this recording's own noise floor has no such opinion: it only
-/// asks whether there is signal, and a trailing syllable still has signal.
-///
-/// Used to pull a cue in to the speech it holds. It can only ever shrink a cue, so a wrong
-/// answer costs a little dead air, never a word.
-#[derive(Debug, Clone)]
-pub struct SpeechEnvelope {
-    /// One entry per `FRAME_MS` of audio, in order.
-    voiced: Vec<bool>,
-}
-
-/// The resolution of the envelope. 10 ms is far finer than any boundary we move and keeps a
-/// ten-minute recording's envelope under 60 KB.
-const FRAME_MS: usize = 10;
-
-/// Where to put the speech/silence line between the noise floor and the speech level.
-///
-/// Low enough to keep a devoiced syllable on the speech side — that is the whole reason this
-/// exists — and high enough that room tone does not read as talking. Both ends are taken from
-/// the recording itself, so a quiet lapel mic and a loud rip get the same treatment.
-const SPEECH_FRACTION: f32 = 0.45;
-
-impl SpeechEnvelope {
-    /// Reads the 16 kHz mono WAV whisper was given and measures per-frame loudness.
-    ///
-    /// The file is the one `decode_to_wav_16k` just wrote, so its format is known rather than
-    /// guessed; anything unexpected returns `None` and leaves timings untouched.
-    pub fn from_wav_16k_mono(path: &Path) -> Option<Self> {
-        let bytes = fs::read(path).ok()?;
-        // Walk the RIFF chunks to `data` rather than assuming the 44-byte canonical header —
-        // ffmpeg writes a LIST/INFO chunk ahead of it often enough to matter.
-        let mut offset = 12usize;
-        let data = loop {
-            if offset + 8 > bytes.len() {
-                return None;
-            }
-            let id = &bytes[offset..offset + 4];
-            let size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as usize;
-            let body = offset + 8;
-            if id == b"data" {
-                break bytes.get(body..(body + size).min(bytes.len()))?;
-            }
-            // Chunks are word-aligned, so an odd size carries a pad byte.
-            offset = body + size + (size & 1);
-        };
-
-        let samples_per_frame = 16 * FRAME_MS; // 16 kHz -> 16 samples per ms
-        let frame_bytes = samples_per_frame * 2;
-        if data.len() < frame_bytes {
-            return None;
-        }
-
-        let mut decibels: Vec<f32> = Vec::with_capacity(data.len() / frame_bytes);
-        for frame in data.chunks_exact(frame_bytes) {
-            let sum: f64 = frame
-                .chunks_exact(2)
-                .map(|pair| {
-                    let sample = i16::from_le_bytes([pair[0], pair[1]]) as f64 / 32768.0;
-                    sample * sample
-                })
-                .sum();
-            let rms = (sum / samples_per_frame as f64).sqrt().max(1e-6);
-            decibels.push(20.0 * rms.log10() as f32);
-        }
-
-        let noise = percentile(&decibels, 0.10);
-        let speech = percentile(&decibels, 0.85);
-        // A recording with no dynamic range at all — pure tone, pure silence — has no floor to
-        // measure against, and trimming it would be guesswork.
-        if speech - noise < 6.0 {
-            return None;
-        }
-        let threshold = noise + (speech - noise) * SPEECH_FRACTION;
-
-        Some(Self {
-            voiced: decibels.into_iter().map(|value| value > threshold).collect(),
-        })
-    }
-
-    /// Builds an envelope directly from per-frame flags, for tests that are about the
-    /// trimming rule rather than about decoding a WAV.
-    #[cfg(test)]
-    pub fn from_frames(voiced: Vec<bool>) -> Self {
-        Self { voiced }
-    }
-
-    /// Pulls `[start_ms, end_ms]` in to the speech inside it, keeping `pad_ms` either side.
-    ///
-    /// Shrink-only and total: the result is always within the window it was given, so a cue
-    /// can never grow into its neighbour and the text can never lose audio it did not already
-    /// lack. A window holding no detected speech is returned untouched — a hallucination over
-    /// silence keeps whisper's own timings rather than collapsing to nothing.
-    pub fn trim(&self, start_ms: u64, end_ms: u64, pad_ms: u64) -> (u64, u64) {
-        if end_ms <= start_ms {
-            return (start_ms, end_ms);
-        }
-        let first = (start_ms as usize / FRAME_MS).min(self.voiced.len());
-        let last = (end_ms as usize / FRAME_MS).min(self.voiced.len());
-        let window = self.voiced.get(first..last).unwrap_or(&[]);
-
-        let Some(first_voiced) = window.iter().position(|voiced| *voiced) else {
-            return (start_ms, end_ms);
-        };
-        let last_voiced = window
-            .iter()
-            .rposition(|voiced| *voiced)
-            .unwrap_or(first_voiced);
-
-        let speech_start = start_ms + (first_voiced * FRAME_MS) as u64;
-        let speech_end = start_ms + ((last_voiced + 1) * FRAME_MS) as u64;
-        (
-            start_ms.max(speech_start.saturating_sub(pad_ms)),
-            end_ms.min(speech_end.saturating_add(pad_ms)),
-        )
-    }
-}
-
-/// Nearest-rank percentile over a copy, so the caller's order is left alone.
-fn percentile(values: &[f32], fraction: f32) -> f32 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let index = ((sorted.len() - 1) as f32 * fraction).round() as usize;
-    sorted[index.min(sorted.len() - 1)]
+    /// Empty when whisper printed no mapped VAD lines (music mode runs no VAD at all), which
+    /// must leave every timestamp exactly as whisper reported it.
+    pub vad_timeline: VadTimeline,
 }
 
 /// A fixed ASCII output base for whisper's `--output-file`. We deliberately do NOT derive it
@@ -517,25 +391,41 @@ enum SpeechRegionSource {
 struct VadRegionLog {
     mapped: Vec<SpeechRegion>,
     probe: Vec<SpeechRegion>,
+    /// The compressed-timeline half of the mapped lines, in the order they were printed.
+    timeline: Vec<(u64, u64, u64)>,
 }
 
 impl VadRegionLog {
-    fn push(&mut self, source: SpeechRegionSource, region: SpeechRegion) {
-        match source {
-            SpeechRegionSource::Mapped => self.mapped.push(region),
-            SpeechRegionSource::Probe => self.probe.push(region),
+    fn push(&mut self, parsed: ParsedVadLine) {
+        match parsed.source {
+            SpeechRegionSource::Mapped => {
+                self.mapped.push(parsed.region);
+                if let Some((processed_start, processed_end)) = parsed.processed {
+                    self.timeline
+                        .push((processed_start, processed_end, parsed.region.start_ms));
+                }
+            }
+            SpeechRegionSource::Probe => self.probe.push(parsed.region),
         }
     }
 
     /// The mapped list wins when present: it survives merging and filtering, so it matches
     /// what was decoded. The probe list is the fallback for a build that stops printing the
     /// mapping — better a slightly pre-merge region list than none.
-    fn into_regions(self) -> Vec<SpeechRegion> {
+    fn into_regions(&self) -> Vec<SpeechRegion> {
         if self.mapped.is_empty() {
-            self.probe
+            self.probe.clone()
         } else {
-            self.mapped
+            self.mapped.clone()
         }
+    }
+
+    /// Sorted by compressed position so a lookup can rely on the order regardless of how the
+    /// lines arrived.
+    fn into_timeline(&self) -> VadTimeline {
+        let mut regions = self.timeline.clone();
+        regions.sort_unstable();
+        VadTimeline { regions }
     }
 }
 
@@ -600,7 +490,17 @@ fn value_after<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 /// is user-upgradable (`download_whisper_runtime_version`) — a rename in either line must not
 /// silently take the clamp with it. `run_whisper_once`'s caller warns when VAD ran and no
 /// region parsed at all, which is the tripwire for exactly that.
-fn parse_vad_region_line(line: &str) -> Option<(SpeechRegionSource, SpeechRegion)> {
+/// One parsed VAD log line: where the region sits in the recording, and — when the line says
+/// so — where the same audio sits on the timeline whisper actually decoded.
+struct ParsedVadLine {
+    source: SpeechRegionSource,
+    region: SpeechRegion,
+    /// `(start, end)` on whisper's compressed timeline. Only the mapped line carries it; the
+    /// probe line predates the mapping and has nothing to offer here.
+    processed: Option<(u64, u64)>,
+}
+
+fn parse_vad_region_line(line: &str) -> Option<ParsedVadLine> {
     let (source, start, end) = if line.contains("vad_segment_info:") {
         (
             SpeechRegionSource::Mapped,
@@ -622,7 +522,68 @@ fn parse_vad_region_line(line: &str) -> Option<(SpeechRegionSource, SpeechRegion
         end_ms: parse_vad_seconds(end, Rounding::Up)?,
     };
     // A backwards region would corrupt the forward walk the clamp does over this list.
-    (region.end_ms >= region.start_ms).then_some((source, region))
+    if region.end_ms < region.start_ms {
+        return None;
+    }
+
+    // The same line also states where this audio landed after the silence was cut out. Token
+    // timestamps are reported against THAT timeline, so without these a token time cannot be
+    // placed in the recording at all. Rounded the same direction as their originals so a
+    // region's two spans stay equal in length, which is what makes the mapping a pure offset.
+    let processed = match source {
+        SpeechRegionSource::Mapped => match (
+            value_after(line, "vad_start:"),
+            value_after(line, "vad_end:"),
+        ) {
+            (Some(start), Some(end)) => parse_vad_seconds(start, Rounding::Down)
+                .zip(parse_vad_seconds(end, Rounding::Up))
+                .filter(|(start, end)| end >= start),
+            _ => None,
+        },
+        SpeechRegionSource::Probe => None,
+    };
+
+    Some(ParsedVadLine {
+        source,
+        region,
+        processed,
+    })
+}
+
+/// Turns a timestamp on whisper's compressed timeline into one on the recording's own.
+///
+/// With `--vad`, whisper is handed the speech regions concatenated together — the silence
+/// between them is gone — and it reports token timestamps against that shortened audio. A
+/// token at 47.68 s of the compressed timeline may be at 61.90 s of the recording. Segment
+/// timestamps are already mapped back for us; token ones are not.
+///
+/// Each region maps by a single offset, because a region's compressed span and its original
+/// span are the same length. That is not an assumption: measured over a 550 s recording, all
+/// 148 regions matched exactly, and consecutive regions sit a constant 200 ms apart on the
+/// compressed side.
+#[derive(Debug, Clone, Default)]
+pub struct VadTimeline {
+    /// `(processed_start, processed_end, original_start)`, in processed order.
+    regions: Vec<(u64, u64, u64)>,
+}
+
+impl VadTimeline {
+    pub fn is_empty(&self) -> bool {
+        self.regions.is_empty()
+    }
+
+    /// The recording-timeline position of `processed_ms`, or `None` if it falls outside every
+    /// region.
+    ///
+    /// A token should always land inside a region — only speech was fed to whisper — so a miss
+    /// means the log and the token stream disagree about the decode, and the caller is expected
+    /// to treat that as a failure rather than invent a position for it.
+    pub fn to_original_ms(&self, processed_ms: u64) -> Option<u64> {
+        self.regions
+            .iter()
+            .find(|(start, end, _)| *start <= processed_ms && processed_ms <= *end)
+            .map(|(start, _, original_start)| original_start + (processed_ms - start))
+    }
 }
 
 /// Parse a whisper-cli progress line — `whisper_print_progress_callback: progress = N%`
@@ -712,12 +673,7 @@ pub fn run_whisper_transcription(
     let wav_path = decode_to_wav_16k(&request.ffmpeg_path, &request.audio_path)?;
     temps.track(wav_path.clone());
 
-    // Measured from the WAV whisper is about to read, so the cue timings and the loudness
-    // they get pulled in to describe the same decode. Reading it here also means the file is
-    // still on disk — it is a tracked temp and is gone by the time the caller sees a result.
-    let speech_envelope = SpeechEnvelope::from_wav_16k_mono(&wav_path);
-
-    let mut result = run_whisper_once(
+    run_whisper_once(
         &request.cli_path,
         &request.model_path,
         &request.vad_model_path,
@@ -727,12 +683,11 @@ pub fn run_whisper_transcription(
         request.thread_count,
         request.music_mode,
         request.fast_decode,
+        &request.dtw_preset,
         cancel,
         on_progress,
         on_segment,
-    )?;
-    result.speech_envelope = speech_envelope;
-    Ok(result)
+    )
 }
 
 /// One whisper-cli `--vad` pass over a single (already 16 kHz mono) WAV to
@@ -748,6 +703,7 @@ fn run_whisper_once(
     thread_count: usize,
     music_mode: bool,
     fast_decode: bool,
+    dtw_preset: &str,
     cancel: Arc<AtomicBool>,
     on_progress: impl Fn(u8) + Send + 'static,
     on_segment: impl Fn(u64, u64, String) + Send + 'static,
@@ -794,6 +750,8 @@ fn run_whisper_once(
         .arg(&audio_arg)
         .arg("--output-txt")
         .arg("--output-json")
+        // Per-token entries, which is where `t_dtw` lives. The plain json carries segments only.
+        .arg("--output-json-full")
         .arg("--output-file")
         .arg(output_base)
         // NOT `--no-prints`: that would also suppress the `[start --> end]  text` segment
@@ -810,6 +768,17 @@ fn run_whisper_once(
     // transcription, more finish it sooner. whisper-cli defaults to 4 threads, which idles
     // bigger CPUs.
     command.arg("-t").arg(thread_count.to_string());
+
+    // Token-level timestamps, aligned to the waveform rather than read off the decoder's
+    // attention. `--dtw` refuses to run beside flash attention and says so on stderr before
+    // quietly carrying on without it, so flash attention is turned off here rather than left
+    // to be disabled underneath us.
+    if !dtw_preset.is_empty() {
+        command
+            .arg("-nfa")
+            .arg("--dtw")
+            .arg(dtw_preset);
+    }
 
     // Stop whisper's runaway repetition on non-vocal audio. `-mc 0` drops the cross-window
     // text context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
@@ -885,9 +854,9 @@ fn run_whisper_once(
             if let Some(percent) = parse_whisper_progress_line(&line) {
                 on_progress(percent);
             }
-            if let Some((source, region)) = parse_vad_region_line(&line) {
+            if let Some(parsed) = parse_vad_region_line(&line) {
                 if let Ok(mut log) = region_sink.lock() {
-                    log.push(source, region);
+                    log.push(parsed);
                 }
             }
             push_diagnostic_line(&stderr_sink, &line);
@@ -995,17 +964,16 @@ fn run_whisper_once(
     }
 
     // Both drain threads are joined by now, so this is the only remaining holder.
-    let speech_regions = region_log
+    let (speech_regions, vad_timeline) = region_log
         .lock()
-        .map(|mut log| std::mem::take(&mut *log).into_regions())
+        .map(|log| (log.into_regions(), log.into_timeline()))
         .unwrap_or_default();
 
     Ok(WhisperTranscriptionResult {
         transcript_path,
         json_path,
         speech_regions,
-        // Filled in by the caller, which is the layer that still has the decoded WAV.
-        speech_envelope: None,
+        vad_timeline,
     })
 }
 
@@ -1030,110 +998,57 @@ mod tests {
 
     use super::*;
 
-    /// Writes a 16 kHz mono WAV whose middle second is loud and whose edges are near-silent,
-    /// optionally behind an extra chunk before `data` — ffmpeg writes a LIST/INFO chunk often
-    /// enough that assuming the canonical 44-byte header would eventually read noise as audio.
-    fn write_test_wav(path: &Path, extra_chunk: bool) {
-        let sample_rate = 16_000u32;
-        let mut samples: Vec<i16> = Vec::new();
-        for index in 0..sample_rate * 3 {
-            let loud = index >= sample_rate && index < sample_rate * 2;
-            let amplitude = if loud { 8_000.0 } else { 8.0 };
-            let phase = index as f32 / sample_rate as f32 * 440.0 * std::f32::consts::TAU;
-            samples.push((phase.sin() * amplitude) as i16);
-        }
-        let audio: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
-
-        let mut body = Vec::new();
-        body.extend_from_slice(b"WAVE");
-        body.extend_from_slice(b"fmt ");
-        body.extend_from_slice(&16u32.to_le_bytes());
-        body.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        body.extend_from_slice(&1u16.to_le_bytes()); // mono
-        body.extend_from_slice(&sample_rate.to_le_bytes());
-        body.extend_from_slice(&(sample_rate * 2).to_le_bytes());
-        body.extend_from_slice(&2u16.to_le_bytes());
-        body.extend_from_slice(&16u16.to_le_bytes());
-        if extra_chunk {
-            body.extend_from_slice(b"LIST");
-            body.extend_from_slice(&5u32.to_le_bytes());
-            body.extend_from_slice(b"INFOx");
-            body.push(0); // odd size carries a pad byte
-        }
-        body.extend_from_slice(b"data");
-        body.extend_from_slice(&(audio.len() as u32).to_le_bytes());
-        body.extend_from_slice(&audio);
-
-        let mut file = Vec::new();
-        file.extend_from_slice(b"RIFF");
-        file.extend_from_slice(&(body.len() as u32).to_le_bytes());
-        file.extend_from_slice(&body);
-        fs::write(path, file).expect("write test wav");
-    }
-
-    /// The envelope must find the loud second and call the quiet edges silence, so a cue
-    /// spanning the whole file trims to the speech inside it.
+    /// The mapping the whole DTW approach rests on: a token time on whisper's compressed
+    /// timeline has to come back to the recording's own. Each region is a single offset.
     #[test]
-    fn the_envelope_finds_the_loud_stretch_in_a_wav() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("tone.wav");
-        write_test_wav(&path, false);
+    fn a_compressed_timestamp_maps_back_through_its_region() {
+        // Two regions with 1.5 s of silence cut out between them, as whisper does.
+        let timeline = VadTimeline {
+            regions: vec![(0, 640, 160), (840, 1190, 2300)],
+        };
 
-        let envelope = SpeechEnvelope::from_wav_16k_mono(&path).expect("an envelope");
-        let (start_ms, end_ms) = envelope.trim(0, 3_000, 100);
-
-        assert!(
-            (900..=1_000).contains(&start_ms),
-            "speech starts at 1000ms, less the 100ms pad, got {start_ms}"
-        );
-        assert!(
-            (2_000..=2_100).contains(&end_ms),
-            "speech ends at 2000ms, plus the 100ms pad, got {end_ms}"
+        assert_eq!(timeline.to_original_ms(0), Some(160), "region start");
+        assert_eq!(timeline.to_original_ms(300), Some(460), "inside the first region");
+        assert_eq!(timeline.to_original_ms(840), Some(2300), "second region start");
+        assert_eq!(
+            timeline.to_original_ms(1000),
+            Some(2460),
+            "the cut silence must not shift a later token"
         );
     }
 
-    /// The `data` chunk is found by walking the chunk list, not by assuming its offset.
+    /// A time in the gap between two regions belongs to audio whisper never saw. Answering
+    /// anyway would place a token somewhere it demonstrably is not, so this says so instead
+    /// and the caller fails loudly.
     #[test]
-    fn a_wav_with_an_extra_chunk_before_data_still_parses() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("tagged.wav");
-        write_test_wav(&path, true);
+    fn a_timestamp_outside_every_region_has_no_answer() {
+        let timeline = VadTimeline {
+            regions: vec![(0, 640, 160), (840, 1190, 2300)],
+        };
 
-        let envelope = SpeechEnvelope::from_wav_16k_mono(&path).expect("an envelope");
-        let (start_ms, _) = envelope.trim(0, 3_000, 100);
-
-        assert!(
-            (900..=1_000).contains(&start_ms),
-            "a LIST chunk before the audio must not shift the envelope, got {start_ms}"
-        );
+        assert_eq!(timeline.to_original_ms(700), None, "in the separator");
+        assert_eq!(timeline.to_original_ms(9_000), None, "past the end");
     }
 
-    /// Audio with no dynamic range gives nothing to measure against, and guessing at a
-    /// threshold there would trim real speech. It must decline instead.
+    /// The mapped VAD line carries both timelines; the older probe line carries only one.
+    /// Reading the compressed half is what makes token timestamps usable at all.
     #[test]
-    fn flat_audio_yields_no_envelope() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("flat.wav");
-        let audio: Vec<u8> = (0..16_000u32 * 2)
-            .flat_map(|_| 1_000i16.to_le_bytes())
-            .collect();
-        let mut file = Vec::new();
-        file.extend_from_slice(b"RIFF");
-        file.extend_from_slice(&(36 + audio.len() as u32).to_le_bytes());
-        file.extend_from_slice(b"WAVEfmt ");
-        file.extend_from_slice(&16u32.to_le_bytes());
-        file.extend_from_slice(&1u16.to_le_bytes());
-        file.extend_from_slice(&1u16.to_le_bytes());
-        file.extend_from_slice(&16_000u32.to_le_bytes());
-        file.extend_from_slice(&32_000u32.to_le_bytes());
-        file.extend_from_slice(&2u16.to_le_bytes());
-        file.extend_from_slice(&16u16.to_le_bytes());
-        file.extend_from_slice(b"data");
-        file.extend_from_slice(&(audio.len() as u32).to_le_bytes());
-        file.extend_from_slice(&audio);
-        fs::write(&path, file).expect("write flat wav");
+    fn the_mapped_vad_line_also_yields_its_compressed_span() {
+        let line = "whisper_vad: vad_segment_info: orig_start: 2.53, orig_end: 3.71,                     vad_start: 0.52, vad_end: 1.70";
 
-        assert!(SpeechEnvelope::from_wav_16k_mono(&path).is_none());
+        let parsed = parse_vad_region_line(line).expect("mapped line parses");
+
+        assert_eq!(parsed.region.start_ms, 2_530);
+        assert_eq!(parsed.processed, Some((520, 1_700)));
+    }
+
+    #[test]
+    fn the_probe_vad_line_has_no_compressed_span() {
+        let line = "whisper_vad_segments_from_probs: VAD segment 3: start = 1.00, end = 2.00";
+
+        let parsed = parse_vad_region_line(line).expect("probe line parses");
+
+        assert_eq!(parsed.processed, None);
     }
 
     #[test]
@@ -1173,7 +1088,8 @@ mod tests {
     fn the_mapped_vad_line_gives_absolute_region_bounds() {
         let line = "whisper_vad: vad_segment_info: orig_start: 2.53, orig_end: 3.71,                     vad_start: 0.52, vad_end: 1.70";
 
-        let (source, region) = parse_vad_region_line(line).expect("mapped line parses");
+        let parsed = parse_vad_region_line(line).expect("mapped line parses");
+        let (source, region) = (parsed.source, parsed.region);
 
         assert_eq!(source, SpeechRegionSource::Mapped);
         // orig_*, not vad_* — the processed timeline is not where the audio lives.
@@ -1185,7 +1101,8 @@ mod tests {
     fn the_probe_vad_line_is_read_as_a_fallback() {
         let line = "whisper_vad_segments_from_probs: VAD segment 0: start = 1.92, end = 2.24                     (duration: 0.32)";
 
-        let (source, region) = parse_vad_region_line(line).expect("probe line parses");
+        let parsed = parse_vad_region_line(line).expect("probe line parses");
+        let (source, region) = (parsed.source, parsed.region);
 
         assert_eq!(source, SpeechRegionSource::Probe);
         assert_eq!(region.start_ms, 1920);
@@ -1234,8 +1151,16 @@ mod tests {
             start_ms: 1920,
             end_ms: 2240,
         };
-        log.push(SpeechRegionSource::Probe, probe);
-        log.push(SpeechRegionSource::Mapped, mapped);
+        log.push(ParsedVadLine {
+            source: SpeechRegionSource::Probe,
+            region: probe,
+            processed: None,
+        });
+        log.push(ParsedVadLine {
+            source: SpeechRegionSource::Mapped,
+            region: mapped,
+            processed: None,
+        });
 
         assert_eq!(log.into_regions(), vec![mapped]);
     }
@@ -1247,7 +1172,11 @@ mod tests {
             start_ms: 1920,
             end_ms: 2240,
         };
-        log.push(SpeechRegionSource::Probe, probe);
+        log.push(ParsedVadLine {
+            source: SpeechRegionSource::Probe,
+            region: probe,
+            processed: None,
+        });
 
         assert_eq!(log.into_regions(), vec![probe]);
         assert!(VadRegionLog::default().into_regions().is_empty());
@@ -1422,6 +1351,7 @@ mod tests {
             thread_count: transcription_thread_count("balanced"),
             music_mode: std::env::var("WOU_MUSIC").is_ok(),
             fast_decode: std::env::var("WOU_FAST").is_ok(),
+            dtw_preset: std::env::var("WOU_DTW").unwrap_or_else(|_| "large.v3".into()),
         };
         let result = run_whisper_transcription(
             &request,
