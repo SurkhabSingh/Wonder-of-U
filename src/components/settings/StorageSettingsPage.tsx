@@ -4,6 +4,7 @@ import type {
   BusyAction,
   WhisperAssetUpdateResult,
 } from "../../types";
+import { isDownloadBusy } from "../../types";
 import { UpdateResultCard } from "../ui/UpdateResultCard";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 
@@ -83,7 +84,7 @@ export function StorageSettingsPage({
           <button
             type="button"
             onClick={() => void onDownloadRecommendedFfmpeg()}
-            disabled={downloadIsActive || busyAction === "downloadFfmpeg"}
+            disabled={downloadIsActive || isDownloadBusy(busyAction)}
           >
             Download FFmpeg
           </button>
@@ -144,7 +145,7 @@ export function StorageSettingsPage({
           <button
             type="button"
             onClick={() => void onDownloadRecommendedYtdlp()}
-            disabled={downloadIsActive || busyAction === "downloadYtdlp"}
+            disabled={downloadIsActive || isDownloadBusy(busyAction)}
           >
             Download yt-dlp
           </button>
@@ -187,7 +188,7 @@ export function StorageSettingsPage({
           type="button"
           className={alassReady ? "secondary" : undefined}
           onClick={() => void onDownloadRecommendedAlass()}
-          disabled={downloadIsActive || busyAction === "downloadAlass"}
+          disabled={downloadIsActive || isDownloadBusy(busyAction)}
         >
           {alassReady ? "Re-download alass" : "Download alass"}
         </button>
@@ -197,7 +198,7 @@ export function StorageSettingsPage({
           <button
             type="button"
             onClick={() => void onDownloadRecommendedYtdlp()}
-            disabled={downloadIsActive || busyAction === "downloadYtdlp"}
+            disabled={downloadIsActive || isDownloadBusy(busyAction)}
           >
             Download {ytdlpUpdateVersion}
           </button>

@@ -5,6 +5,7 @@ import type {
   BusyAction,
   WhisperAssetUpdateResult,
 } from "../../types";
+import { isDownloadBusy } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { TooltipBadge } from "../ui/Tooltip";
 import { UpdateResultCard } from "../ui/UpdateResultCard";
@@ -286,7 +287,7 @@ export function ModelSettingsPage({
             <button
               type="button"
               onClick={() => void onDownloadRecommendedModel()}
-              disabled={downloadIsActive || busyAction === "downloadModel"}
+              disabled={downloadIsActive || isDownloadBusy(busyAction)}
             >
               Download {selectedModel.label} Model
             </button>

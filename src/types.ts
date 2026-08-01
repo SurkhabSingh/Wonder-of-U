@@ -450,6 +450,29 @@ export type LookupResult = {
   entries: LookupEntry[];
 };
 
+/// The busy actions that fetch a managed binary or model.
+///
+/// A download button cannot ask only whether ITS OWN action is running. `busyAction` is set
+/// the instant a button is clicked, while `downloadIsActive` comes from the backend's own
+/// progress snapshot and only arrives once it has started reporting — so between the click
+/// and that first report, every OTHER download button is still live. Starting a second one
+/// there overwrites `busyAction`, and the first download's `finally` then clears the busy
+/// state while the second is still running.
+///
+/// Naming the group in one place means a new download joins the guard by being added here,
+/// rather than by every button remembering to name it.
+export const DOWNLOAD_BUSY_ACTIONS = [
+  "downloadModel",
+  "downloadRuntime",
+  "downloadFfmpeg",
+  "downloadAlass",
+  "downloadYtdlp",
+] as const;
+
+export function isDownloadBusy(busyAction: BusyAction): boolean {
+  return DOWNLOAD_BUSY_ACTIONS.some((action) => action === busyAction);
+}
+
 export type BusyAction =
   | "start"
   | "stop"

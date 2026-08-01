@@ -4,6 +4,7 @@ import type {
   BusyAction,
   WhisperAssetUpdateResult,
 } from "../../types";
+import { isDownloadBusy } from "../../types";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { TooltipBadge } from "../ui/Tooltip";
 import { UpdateResultCard } from "../ui/UpdateResultCard";
@@ -162,7 +163,7 @@ export function RuntimeSettingsPage({
                 <button
                   type="button"
                   onClick={() => void onDownloadRuntimeVersion(runtimeUpdateVersion)}
-                  disabled={downloadIsActive || busyAction === "downloadRuntime"}
+                  disabled={downloadIsActive || isDownloadBusy(busyAction)}
                 >
                   Download {runtimeUpdateVersion}
                 </button>
@@ -174,7 +175,7 @@ export function RuntimeSettingsPage({
             <button
               type="button"
               onClick={() => void onDownloadRecommendedRuntime()}
-              disabled={downloadIsActive || busyAction === "downloadRuntime"}
+              disabled={downloadIsActive || isDownloadBusy(busyAction)}
             >
               Download Recommended Runtime
             </button>
