@@ -281,7 +281,26 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
 
     // The audio is renamed when its first transcript lands, so the caller's path
     // is the only one that still resolves.
-    let recording = find_recent_recording(app, file_path).ok()?;
+    //
+    // Reported rather than dropped. `None` from this function means "skipped, and there is
+    // nothing worth saying" — it is what an already-translated recording and a skipped job
+    // both answer. Returning it here would file a failure under the same heading as a
+    // success, so a caller passing the pre-rename path would silently stop translating
+    // everything and read as if it had nothing to do.
+    let recording = match find_recent_recording(app, file_path) {
+        Ok(recording) => recording,
+        Err(error) => {
+            log_event(
+                app,
+                "WARN",
+                "translation.recording_lookup_failed",
+                serde_json::json!({ "filePath": file_path, "message": error }),
+            );
+            return Some(format!(
+                "Translation was skipped because this recording could not be found: {error}"
+            ));
+        }
+    };
     let target = TranslationTarget::configured(app);
 
     if translation_matches_target(recording.translation_path.as_deref(), &target.language) {
