@@ -60,6 +60,18 @@ export type AnkiSettings = {
   fields: AnkiFieldMapping;
   // Milliseconds of audio padding added to each side of a mined sentence clip.
   clipPaddingMs: number;
+  // Which note types and fields hold the words you already know. Independent of
+  // `noteType` above: the notes cards are pushed INTO are rarely the ones your
+  // vocabulary is read FROM.
+  vocabularySources: VocabularySource[];
+  // How long a word has to have stuck before it counts as known, in days. 21 is
+  // Anki's own "mature" line.
+  knownWordIntervalDays: number;
+};
+
+export type VocabularySource = {
+  noteType: string;
+  field: string;
 };
 
 export type WhisperSettings = {
@@ -164,8 +176,16 @@ export type AppSettings = {
  * AppSettings holds only strings, numbers, booleans and nested groups of the same, so
  * `extends object` cleanly separates "group to recurse into" from "value to replace".
  */
+// An array is a leaf, not something to recurse into. `mergeSettings` replaces an
+// array wholesale — merging by index would make removing a row impossible — and
+// the type has to say the same thing, or an update could offer a half-filled row
+// that type-checks here and is rejected by the save as a missing field.
 export type DeepPartial<T> = {
-  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+  [K in keyof T]?: T[K] extends readonly unknown[]
+    ? T[K]
+    : T[K] extends object
+      ? DeepPartial<T[K]>
+      : T[K];
 };
 
 export type SettingsUpdate = DeepPartial<AppSettings>;
@@ -294,6 +314,23 @@ export type AlassDetection = {
   message: string;
 };
 
+export type DictionaryDetection = {
+  status: string;
+  dictionaryPath: string | null;
+  managed: boolean;
+  message: string;
+};
+
+// What the saved known-word list has to say for itself. `status` is one of
+// "unconfigured" (no sources chosen), "unbuilt" (nothing saved yet), "ready",
+// "stale" (the settings changed since it was built), "empty", or "offline".
+export type KnownWordsSnapshot = {
+  status: string;
+  message: string;
+  wordCount: number;
+  builtAtMs: number | null;
+};
+
 export type WhisperAssetUpdateResult = {
   kind: string;
   status: string;
@@ -322,6 +359,8 @@ export type AppBootstrap = {
   ytdlpDetection: YtdlpDetection;
   alassDetection: AlassDetection;
   modelDownload: ModelDownloadSnapshot;
+  dictionaryDetection: DictionaryDetection;
+  knownWords: KnownWordsSnapshot;
   logPath: string;
 };
 
@@ -467,6 +506,7 @@ export const DOWNLOAD_BUSY_ACTIONS = [
   "downloadFfmpeg",
   "downloadAlass",
   "downloadYtdlp",
+  "downloadDictionary",
 ] as const;
 
 export function isDownloadBusy(busyAction: BusyAction): boolean {
@@ -483,6 +523,8 @@ export type BusyAction =
   | "downloadFfmpeg"
   | "downloadAlass"
   | "downloadYtdlp"
+  | "downloadDictionary"
+  | "refreshKnownWords"
   | "importYoutube"
   | "checkYtdlpUpdate"
   | "checkRuntimeUpdate"
@@ -515,6 +557,7 @@ export type SettingsSection =
   | "whisper"
   | "storage"
   | "anki"
+  | "studyPicks"
   | "scanner";
 
 export type RecordingFilter =

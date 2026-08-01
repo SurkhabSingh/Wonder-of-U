@@ -11,6 +11,7 @@ import type {
   WhisperAssetUpdateResult,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
+import { StudyPicksSettingsPage } from "./StudyPicksSettingsPage";
 import { ScannerSettingsPage } from "./ScannerSettingsPage";
 import { AnkiMappingSettingsPage } from "./AnkiMappingSettingsPage";
 import { ModelSettingsPage } from "./ModelSettingsPage";
@@ -58,6 +59,8 @@ export function SettingsPages({
   onDownloadRecommendedFfmpeg,
   onDownloadRecommendedYtdlp,
   onDownloadRecommendedAlass,
+  onDownloadRecommendedDictionary,
+  onRefreshKnownWords,
   onCheckYtdlpUpdate,
   onToggleDownloadPause,
   onCancelDownload,
@@ -96,6 +99,8 @@ export function SettingsPages({
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
   onDownloadRecommendedAlass: () => void | Promise<void>;
+  onDownloadRecommendedDictionary: () => void | Promise<void>;
+  onRefreshKnownWords: () => void | Promise<void>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
   onCancelDownload: () => void | Promise<void>;
@@ -210,6 +215,21 @@ export function SettingsPages({
             displayedAnkiCatalog={displayedAnkiCatalog}
             onRefreshAnkiCatalog={onRefreshAnkiCatalog}
             onUpdateAnkiField={onUpdateAnkiField}
+            onUpdateSettings={onUpdateSettings}
+            settingsDraft={settingsDraft}
+          />
+        </section>
+
+        <section id="settings-studyPicks" className="settings-section">
+          <StudyPicksSettingsPage
+            bootstrap={bootstrap}
+            busyAction={busyAction}
+            displayedAnkiCatalog={displayedAnkiCatalog}
+            downloadIsActive={downloadIsActive}
+            onCancelDownload={onCancelDownload}
+            onDownloadRecommendedDictionary={onDownloadRecommendedDictionary}
+            onRefreshKnownWords={onRefreshKnownWords}
+            onToggleDownloadPause={onToggleDownloadPause}
             onUpdateSettings={onUpdateSettings}
             settingsDraft={settingsDraft}
           />

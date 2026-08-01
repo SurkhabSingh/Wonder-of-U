@@ -563,6 +563,8 @@ function App() {
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
+    downloadRecommendedDictionary,
+    refreshKnownWords,
     downloadRuntimeVersion,
     toggleDownloadPause,
     updateAnkiField,
@@ -1228,6 +1230,8 @@ function App() {
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onDownloadRecommendedAlass={downloadRecommendedAlass}
+            onDownloadRecommendedDictionary={downloadRecommendedDictionary}
+            onRefreshKnownWords={refreshKnownWords}
             onCheckYtdlpUpdate={checkYtdlpUpdate}
             onToggleDownloadPause={toggleDownloadPause}
             onCancelDownload={cancelDownload}

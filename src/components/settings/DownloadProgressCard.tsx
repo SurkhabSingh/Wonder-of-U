@@ -9,7 +9,7 @@ export function DownloadProgressCard({
   onCancel,
 }: {
   snapshot: ModelDownloadSnapshot;
-  kind: "runtime" | "model" | "ffmpeg" | "ytdlp";
+  kind: "runtime" | "model" | "ffmpeg" | "ytdlp" | "dictionary";
   downloadIsActive: boolean;
   onTogglePause: () => void;
   onCancel: () => void;
