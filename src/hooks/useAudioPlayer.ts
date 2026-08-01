@@ -69,9 +69,6 @@ export function useAudioPlayer(): AudioPlayer {
   // currentTime writes on an unloaded element, so we replay the seek once
   // loadedmetadata fires.
   const pendingSeekMsRef = useRef<number | null>(null);
-  // The path currently attached to the element, so playSegment can decide
-  // whether it needs to reload the source or can seek the loaded track.
-  const loadedPathRef = useRef<string | null>(null);
   // The chosen playback speed, mirrored in a ref so the once-registered
   // loadedmetadata handler can re-apply it after a fresh src resets the element to 1.
   const rateRef = useRef(1);
@@ -252,7 +249,6 @@ export function useAudioPlayer(): AudioPlayer {
     clipOffsetMsRef.current = null;
     segmentRequestRef.current += 1;
     recordingRef.current = recording;
-    loadedPathRef.current = recording.filePath;
     audio.src = convertFileSrc(recording.filePath);
     audio.currentTime = 0;
     // Seed the total from the known recording duration; loadedmetadata refines
@@ -328,7 +324,6 @@ export function useAudioPlayer(): AudioPlayer {
           pendingSeekMsRef.current = null;
           segmentStartMsRef.current = null;
           clipOffsetMsRef.current = clipStartMs;
-          loadedPathRef.current = clipPath;
           audio.src = convertFileSrc(clipPath);
           audio.currentTime = 0;
           void audio.play().catch(() => {
@@ -356,12 +351,18 @@ export function useAudioPlayer(): AudioPlayer {
     if (!audio || !audio.src) {
       return;
     }
-    // The transport toggle is free playback: pressing it drops any segment
-    // boundary and its highlight so audio runs to the end from here.
-    boundaryMsRef.current = null;
-    setState((prev) =>
-      prev.activeSegment === null ? prev : { ...prev, activeSegment: null },
-    );
+    // While a sentence clip is loaded the transport governs that sentence and nothing else —
+    // the element holds only those few seconds. Dropping the highlight here would take it off
+    // the very row being played, and the "runs to the end of the file" the next line assumes
+    // is not available to reach.
+    if (clipOffsetMsRef.current === null) {
+      // Free playback: pressing this drops any segment boundary and its highlight so audio
+      // runs to the end from here.
+      boundaryMsRef.current = null;
+      setState((prev) =>
+        prev.activeSegment === null ? prev : { ...prev, activeSegment: null },
+      );
+    }
     if (audio.paused) {
       void audio.play().catch(() => {
         setState((prev) => ({ ...prev, isPlaying: false }));
@@ -394,7 +395,6 @@ export function useAudioPlayer(): AudioPlayer {
     const recording = recordingRef.current;
     if (clipOffsetMsRef.current !== null && recording) {
       clipOffsetMsRef.current = null;
-      loadedPathRef.current = recording.filePath;
       pendingSeekMsRef.current = Math.max(0, ms);
       audio.src = convertFileSrc(recording.filePath);
     } else {
@@ -417,7 +417,6 @@ export function useAudioPlayer(): AudioPlayer {
     }
     boundaryMsRef.current = null;
     pendingSeekMsRef.current = null;
-    loadedPathRef.current = null;
     segmentStartMsRef.current = null;
     clipOffsetMsRef.current = null;
     segmentRequestRef.current += 1;

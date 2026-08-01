@@ -29,10 +29,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Mutex,
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use tauri::{Manager, Runtime};
@@ -61,9 +58,6 @@ fn preview_temp_dir() -> Result<PathBuf, String> {
 /// A fixed name would be served from the WebView's cache on the second play — same URL, stale
 /// bytes, and the wrong sentence heard. Each cut gets its own name so each gets its own URL.
 static PREVIEW_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// The preview currently on disk, so the next one can remove it.
-static CURRENT_PREVIEW: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Deletes every file in the preview directory except the one just written.
 ///
@@ -162,9 +156,6 @@ pub(crate) fn preview_segment_clip_inner<R: Runtime>(
     // After the new clip exists, never before: a failed cut must not leave playback with
     // nothing to fall back on.
     sweep_previews_except(&clip);
-    if let Ok(mut current) = CURRENT_PREVIEW.lock() {
-        *current = Some(clip.clone());
-    }
 
     Ok(clip.display().to_string())
 }
