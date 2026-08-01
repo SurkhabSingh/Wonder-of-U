@@ -102,7 +102,17 @@ fn delete_recording_files(
             .iter()
             .map(|transcript| transcript.file_path.clone()),
     );
+    // The per-sentence timings that go with each transcript. Stored on the transcript itself,
+    // so this needs no guessing — it was simply never collected, and a delete left a
+    // `.segments.json` for every language behind in the user's own recordings folder.
+    paths.extend(
+        recording
+            .transcripts
+            .iter()
+            .filter_map(|transcript| transcript.segments_path.clone()),
+    );
     paths.extend(sibling_translation_paths(recording));
+    paths.extend(sibling_subtitle_paths(recording));
 
     for path in paths {
         let candidate = Path::new(&path);
@@ -138,6 +148,22 @@ fn delete_recording_files(
 /// check as the audio itself. A folder that cannot be read yields nothing rather than
 /// failing the delete — a translation left behind is recoverable, a failed delete of
 /// the audio is what the user actually asked for.
+/// The `.srt` files written beside a transcript, found by sweeping rather than by lookup.
+///
+/// Unlike the segments sidecar, a subtitle's path is not stored on the recording — nothing
+/// reads it back, so nothing kept it. That makes it invisible to a delete built from stored
+/// paths, and one was left behind per language every time a recording was removed.
+///
+/// Swept by prefix for the same reason `sibling_translation_paths` is: the language tag is not
+/// knowable from the recording alone once several languages exist. Every candidate still goes
+/// through the containment check below, so a sweep can only ever propose a path — it cannot
+/// widen what is allowed to be deleted.
+fn sibling_subtitle_paths(recording: &RecentRecording) -> Vec<String> {
+    sibling_paths_with(recording, |name, stem| {
+        name.starts_with(&format!("{stem}.")) && name.ends_with(".srt")
+    })
+}
+
 fn sibling_translation_paths(recording: &RecentRecording) -> Vec<String> {
     let audio_path = Path::new(&recording.file_path);
     let (Some(parent), Some(stem)) = (
@@ -147,7 +173,28 @@ fn sibling_translation_paths(recording: &RecentRecording) -> Vec<String> {
         return Vec::new();
     };
 
-    let prefix = format!("{stem}.translation.");
+    sibling_paths_with(recording, |name, stem| {
+        name.starts_with(&format!("{stem}.translation.")) && name.ends_with(".txt")
+    })
+}
+
+/// Files beside the audio whose name `matches`, given the audio's own stem.
+///
+/// One implementation for both sweeps so they cannot drift into different ideas of "beside" —
+/// which directory counts, what a stem is, and that an unreadable directory yields nothing
+/// rather than failing a delete the user asked for.
+fn sibling_paths_with(
+    recording: &RecentRecording,
+    matches: impl Fn(&str, &str) -> bool,
+) -> Vec<String> {
+    let audio_path = Path::new(&recording.file_path);
+    let (Some(parent), Some(stem)) = (
+        audio_path.parent(),
+        audio_path.file_stem().and_then(|stem| stem.to_str()),
+    ) else {
+        return Vec::new();
+    };
+
     let Ok(entries) = fs::read_dir(parent) else {
         return Vec::new();
     };
@@ -160,7 +207,7 @@ fn sibling_translation_paths(recording: &RecentRecording) -> Vec<String> {
                 && path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .map(|name| name.starts_with(&prefix) && name.ends_with(".txt"))
+                    .map(|name| matches(name, stem))
                     .unwrap_or(false)
         })
         .map(|path| path.display().to_string())
@@ -734,6 +781,61 @@ mod tests {
         assert!(!audio.exists());
         assert!(!transcript.exists());
         assert!(!translation.exists());
+    }
+
+    /// The sidecars a transcript writes beside the audio go with it.
+    ///
+    /// Both were missed until this was audited, and neither is visible from the app: deleting
+    /// a recording left a `.segments.json` and a `.srt` per language sitting in the user's own
+    /// recordings folder, referenced by nothing and cleaned up by nothing.
+    ///
+    /// They are found two different ways on purpose. The segments path is stored on the
+    /// transcript, so it is read. The subtitle path is stored nowhere at all — nothing reads it
+    /// back, so nothing kept it — and has to be swept for.
+    #[test]
+    fn the_segments_and_subtitle_sidecars_are_deleted_with_the_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("lesson.wav");
+        let transcript = dir.path().join("lesson.ja.transcript.txt");
+        let segments = dir.path().join("lesson.ja.segments.json");
+        let subtitle = dir.path().join("lesson.ja.srt");
+        let other_language_subtitle = dir.path().join("lesson.en.srt");
+        for path in [&audio, &transcript, &segments, &subtitle, &other_language_subtitle] {
+            fs::write(path, b"x").unwrap();
+        }
+
+        let mut recording = recording_at(&audio);
+        recording.transcript_path = Some(transcript.display().to_string());
+        recording.transcripts.push(RecordingTranscript {
+            language: "ja".into(),
+            file_path: transcript.display().to_string(),
+            detected_language: Some("ja".into()),
+            segments_path: Some(segments.display().to_string()),
+        });
+
+        delete_recording_files(&recording, dir.path()).unwrap();
+
+        assert!(!segments.exists(), "the per-sentence timings must go too");
+        assert!(!subtitle.exists(), "so must the subtitle written beside it");
+        assert!(
+            !other_language_subtitle.exists(),
+            "a second language's subtitle is just as orphaned"
+        );
+    }
+
+    /// The sweep proposes paths; it does not widen what may be deleted. A subtitle belonging to
+    /// a DIFFERENT recording shares the folder, not the stem, and must survive.
+    #[test]
+    fn another_recordings_subtitle_is_not_swept_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("lesson.wav");
+        let stranger = dir.path().join("another-lesson.ja.srt");
+        fs::write(&audio, b"audio").unwrap();
+        fs::write(&stranger, b"not mine").unwrap();
+
+        delete_recording_files(&recording_at(&audio), dir.path()).unwrap();
+
+        assert!(stranger.exists(), "a different recording's subtitle is not ours to delete");
     }
 
     #[test]
