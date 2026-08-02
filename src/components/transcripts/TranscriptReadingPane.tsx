@@ -72,6 +72,7 @@ export function TranscriptReadingPane({
   ranking = null,
   withinReachOnly = false,
   mineFailures,
+  activeMatch = null,
 }: {
   paneKey: string;
   kicker: string;
@@ -128,6 +129,10 @@ export function TranscriptReadingPane({
   // are. Keyed rather than indexed so a merge or split drops the marker with the
   // sentence it belonged to instead of moving it onto a neighbour.
   mineFailures?: Map<string, string>;
+  // The match being stepped to, when it is in THIS pane. The viewer owns the
+  // ordered list of matches across both panes; a pane only needs to know whether
+  // one of its own rows is the current one.
+  activeMatch?: { index: number; occurrence: number } | null;
 }) {
   const rows = document ? buildRows(document, segmentsOverride) : [];
   const hiddenByFilter =
@@ -233,6 +238,9 @@ export function TranscriptReadingPane({
                 ranking={ranking?.lines[index] ?? null}
                 mineFailure={
                   mineKey !== null ? (mineFailures?.get(mineKey) ?? null) : null
+                }
+                activeMatchOccurrence={
+                  activeMatch?.index === index ? activeMatch.occurrence : null
                 }
               />
             );

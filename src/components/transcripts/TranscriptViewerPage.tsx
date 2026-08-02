@@ -193,19 +193,6 @@ function isCjkDocument(document: RecordingTextDocument | null): boolean {
   );
 }
 
-function documentMatchCount(
-  document: RecordingTextDocument | null,
-  query: string,
-): number {
-  if (!document || document.missing) {
-    return 0;
-  }
-  return splitTranscriptSegments(document.text).reduce(
-    (total, segment) => total + countMatches(segment, query),
-    0,
-  );
-}
-
 function TranscriptSkeleton() {
   return (
     <div className="transcript-pane">
@@ -798,18 +785,84 @@ export function TranscriptViewerPage({
     [transcripts],
   );
 
-  const matchCount = useMemo(() => {
-    const documents: (RecordingTextDocument | null)[] =
-      viewMode === "transcript"
-        ? [activeTranscript]
-        : viewMode === "translation"
-          ? [activeTranslation]
-          : [activeTranscript, activeTranslation];
-    return documents.reduce(
-      (total, doc) => total + documentMatchCount(doc, query),
-      0,
+  // Every match on screen, in reading order, as (pane, row, occurrence).
+  //
+  // Built from the RENDERED rows rather than from the document's plain text. The
+  // count used to come from the text while the rows come from the segments
+  // sidecar, which are not always the same lines — tolerable for a number nobody
+  // navigates, but "3 of 27" has to point at a row that exists.
+  const matches = useMemo(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      return [];
+    }
+    const panes: { paneKey: "transcript" | "translation"; rows: string[] }[] = [];
+    if (viewMode !== "translation" && activeTranscript && !activeTranscript.missing) {
+      panes.push({ paneKey: "transcript", rows: transcriptLines });
+    }
+    if (viewMode !== "transcript" && activeTranslation && !activeTranslation.missing) {
+      panes.push({
+        paneKey: "translation",
+        rows: buildRows(activeTranslation, undefined).map((row) => row.text),
+      });
+    }
+
+    const found: {
+      paneKey: "transcript" | "translation";
+      index: number;
+      occurrence: number;
+    }[] = [];
+    for (const pane of panes) {
+      pane.rows.forEach((text, index) => {
+        for (
+          let occurrence = 0;
+          occurrence < countMatches(text, trimmed);
+          occurrence += 1
+        ) {
+          found.push({ paneKey: pane.paneKey, index, occurrence });
+        }
+      });
+    }
+    return found;
+  }, [viewMode, activeTranscript, activeTranslation, transcriptLines, query]);
+
+  const matchCount = matches.length;
+  // Which match Enter / the arrows are sitting on. Null means "found them, not
+  // stepping through them yet", which is what a fresh query should look like.
+  const [activeMatchIndex, setActiveMatchIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setActiveMatchIndex(null);
+  }, [query, viewMode]);
+
+  const stepMatch = (direction: 1 | -1) => {
+    if (matches.length === 0) {
+      return;
+    }
+    // Wraps, like every find bar: reaching the end and being told "no more" when
+    // there are matches above you is a dead end, not an answer.
+    const next =
+      activeMatchIndex === null
+        ? direction === 1
+          ? 0
+          : matches.length - 1
+        : (activeMatchIndex + direction + matches.length) % matches.length;
+    setActiveMatchIndex(next);
+
+    const match = matches[next];
+    const row = window.document.querySelector(
+      `[data-segment="${match.paneKey}-${match.index}"]`,
     );
-  }, [viewMode, activeTranscript, activeTranslation, query]);
+    // `center` rather than `nearest`: a match one row below the fold would
+    // otherwise scroll just barely into view at the very bottom, which reads as
+    // nothing having happened.
+    row?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (match.paneKey === "transcript") {
+      setActiveSegmentIndex(match.index);
+    }
+  };
+
+  const activeMatch = activeMatchIndex === null ? null : matches[activeMatchIndex];
 
   const metaText = [
     formatDuration(recording.durationMs),
@@ -955,12 +1008,47 @@ export function TranscriptViewerPage({
               placeholder="Find in transcript"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") {
+                  return;
+                }
+                // The box keeps focus so the next Enter steps again — the whole
+                // point of a find bar is not having to click back into it.
+                event.preventDefault();
+                stepMatch(event.shiftKey ? -1 : 1);
+              }}
               aria-label="Find in transcript"
             />
             {trimmedQuery ? (
-              <span className="transcript-find-count">
-                {matchCount} match{matchCount === 1 ? "" : "es"}
-              </span>
+              <>
+                <span className="transcript-find-count">
+                  {matchCount === 0
+                    ? "No matches"
+                    : activeMatchIndex === null
+                      ? `${matchCount} match${matchCount === 1 ? "" : "es"}`
+                      : `${activeMatchIndex + 1} of ${matchCount}`}
+                </span>
+                <button
+                  type="button"
+                  className="transcript-find-step"
+                  onClick={() => stepMatch(-1)}
+                  disabled={matchCount === 0}
+                  title="Previous match (Shift+Enter)"
+                  aria-label="Previous match"
+                >
+                  <span aria-hidden="true">{"↑"}</span>
+                </button>
+                <button
+                  type="button"
+                  className="transcript-find-step"
+                  onClick={() => stepMatch(1)}
+                  disabled={matchCount === 0}
+                  title="Next match (Enter)"
+                  aria-label="Next match"
+                >
+                  <span aria-hidden="true">{"↓"}</span>
+                </button>
+              </>
             ) : null}
           </div>
         </div>
@@ -1190,6 +1278,9 @@ export function TranscriptViewerPage({
               ranking={ranking}
               withinReachOnly={withinReachOnly}
               mineFailures={mineFailures}
+              activeMatch={
+                activeMatch?.paneKey === "transcript" ? activeMatch : null
+              }
             />
           ) : null}
 

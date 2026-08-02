@@ -1935,8 +1935,26 @@ input::placeholder {
   flex: 0 0 auto;
   color: var(--text-muted);
   font-size: var(--text-xs);
+  /* Tabular, so "9 of 27" becoming "10 of 27" does not shift the buttons beside
+     it while the user is clicking them. */
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  /* Wide enough for the longest state it shows, for the same reason. */
+  min-width: 5.5rem;
+  text-align: right;
+}
+
+/* Step to the next or previous match. Sized to the search input's own height so
+   the find bar reads as one control rather than three. */
+.transcript-find-step {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  line-height: 1;
 }
 
 /* Independently scrolling two-column reading grid. Flexes to fill whatever
@@ -2370,6 +2388,18 @@ input::placeholder {
   padding: 0 1px;
   background: var(--segment-mark);
   color: var(--text-strong);
+}
+
+/* The one match being stepped to. Every match stays highlighted — losing them
+   would make stepping feel like the others had gone — so the current one is
+   distinguished by the accent and a ring rather than by being the only mark. */
+.transcript-mark.is-active {
+  background: var(--accent);
+  /* --surface, not white: the accent is dark in the light theme and light in
+     the dark one, so a fixed foreground is unreadable in one of them. The
+     surface colour inverts with it. Same pairing the mined chip uses. */
+  color: var(--surface);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .transcript-segment-aside {

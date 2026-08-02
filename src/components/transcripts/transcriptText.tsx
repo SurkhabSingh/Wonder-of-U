@@ -31,7 +31,14 @@ export function countMatches(text: string, query: string): number {
   return (text.match(pattern) ?? []).length;
 }
 
-export function highlightMatches(text: string, query: string): ReactNode {
+export function highlightMatches(
+  text: string,
+  query: string,
+  // Which occurrence within THIS line is the one being stepped to, or null when
+  // the active match is on another line. Counted per line rather than across the
+  // transcript so a row can be highlighted without knowing where it sits.
+  activeOccurrence: number | null = null,
+): ReactNode {
   const trimmed = query.trim();
   if (!trimmed) {
     return text;
@@ -40,15 +47,23 @@ export function highlightMatches(text: string, query: string): ReactNode {
   const pattern = new RegExp(`(${escapeRegExp(trimmed)})`, "gi");
   const parts = text.split(pattern);
 
-  return parts.map((part, index) =>
+  let occurrence = -1;
+  return parts.map((part, index) => {
     // String.split with a capturing group places the matched text at odd
     // indices; everything else is untouched surrounding text.
-    index % 2 === 1 ? (
-      <mark key={index} className="transcript-mark">
+    if (index % 2 === 0) {
+      return part;
+    }
+    occurrence += 1;
+    return (
+      <mark
+        key={index}
+        className={`transcript-mark${
+          occurrence === activeOccurrence ? " is-active" : ""
+        }`}
+      >
         {part}
       </mark>
-    ) : (
-      part
-    ),
-  );
+    );
+  });
 }

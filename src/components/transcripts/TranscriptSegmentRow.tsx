@@ -31,6 +31,7 @@ export function TranscriptSegmentRow({
   canSplit = false,
   ranking = null,
   mineFailure = null,
+  activeMatchOccurrence = null,
 }: {
   segmentKey: string;
   text: string;
@@ -74,6 +75,9 @@ export function TranscriptSegmentRow({
   // Why a batch mine could not make a card of this line. Shown on the row itself,
   // because "3 of 35 failed" is only actionable next to the three.
   mineFailure?: string | null;
+  // Which occurrence of the search term in this line is the one being stepped to,
+  // or null when the active match is elsewhere.
+  activeMatchOccurrence?: number | null;
 }) {
   const [copied, setCopied] = useState(false);
   const hasTiming = startMs !== null && endMs !== null;
@@ -164,7 +168,7 @@ export function TranscriptSegmentRow({
           highlighting is unaffected — the scanner reads text nodes, not elements. */}
       <p className="transcript-segment-body">
         <ScannableText ownerKey={`row:${segmentKey}`}>
-          {highlightMatches(text, query)}
+          {highlightMatches(text, query, activeMatchOccurrence)}
         </ScannableText>
       </p>
       <div className="transcript-segment-aside">
