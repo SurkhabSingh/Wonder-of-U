@@ -17,6 +17,7 @@ mod scanner_overlay;
 mod segment_preview;
 mod settings;
 mod subtitles;
+mod tokenizer;
 mod transcription;
 mod translation_bridge;
 mod watch;
@@ -98,6 +99,11 @@ pub fn run() {
             start_recording,
             stop_recording,
             load_anki_catalog,
+            refresh_known_words,
+            scan_vocabulary_sources,
+            rank_transcript_lines,
+            mine_segments_to_anki,
+            download_recommended_dictionary,
             load_mined_sentences,
             start_watch_session,
             watch_snapshot,

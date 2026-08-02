@@ -9,11 +9,11 @@ pub(crate) use history::{
     derive_transcript_language_from_path, is_japanese_transcript_language,
     reconcile_recording_history, transcript_looks_japanese,
 };
-pub(crate) use persistence::{build_app_paths, load_persisted_data, write_persisted_data};
+pub(crate) use persistence::{write_file_atomically, build_app_paths, load_persisted_data, write_persisted_data};
 use persistence::{default_asset_directory, default_output_directory};
 
 use crate::{
-    app_types::{
+    app_types::{VocabularySource, 
         default_translation_provider, default_translation_target_language, whisper_model_spec,
         AnkiFieldMapping, AnkiSettings, AppPathsState, AppSettings, FeatureSettings, PersistedData,
         ScannerSettings, TranslationSettings, WhisperSettings,
@@ -134,10 +134,30 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 position: settings.anki.fields.position.trim().to_string(),
                 image: settings.anki.fields.image.trim().to_string(),
                 video: settings.anki.fields.video.trim().to_string(),
+                definition: settings.anki.fields.definition.trim().to_string(),
             },
             // Clamp the mined-clip padding to a sane ceiling so a hand-edited value can't
             // produce a clip that swallows the neighbouring sentences.
             clip_padding_ms: settings.anki.clip_padding_ms.min(2000),
+            // Trimmed, and otherwise kept exactly as typed — INCLUDING half-filled
+            // rows. This used to drop them, on the reasoning that a row missing a
+            // half cannot be queried. True, but settings are also the thing the user
+            // is in the middle of editing: adding a source starts as an empty row,
+            // the autosave lands about a second later, and the row the user was
+            // filling in vanished under them. Which rows are usable is decided where
+            // they are USED, by `KnownWordsBuild::from_anki_settings`.
+            vocabulary_sources: settings
+                .anki
+                .vocabulary_sources
+                .iter()
+                .map(|source| VocabularySource {
+                    note_type: source.note_type.trim().to_string(),
+                    field: source.field.trim().to_string(),
+                })
+                .collect(),
+            // Zero would make every word ever added "known"; the ceiling stops a hand-edited
+            // value from making the index permanently empty.
+            known_word_interval_days: settings.anki.known_word_interval_days.clamp(1, 3650),
         },
         features: FeatureSettings {
             transcription: settings.features.transcription,
@@ -147,6 +167,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
             allow_mp3_conversion: settings.features.allow_mp3_conversion,
             auto_add_furigana_after_anki_push: settings.features.auto_add_furigana_after_anki_push,
             translate_after_transcription: settings.features.translate_after_transcription,
+            add_definitions_to_mined_cards: settings.features.add_definitions_to_mined_cards,
         },
         translation: TranslationSettings {
             provider: normalize_translation_provider(&settings.translation.provider),

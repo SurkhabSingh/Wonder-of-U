@@ -33,6 +33,9 @@ export type FeatureSettings = {
   allowMp3Conversion: boolean;
   autoAddFuriganaAfterAnkiPush: boolean;
   translateAfterTranscription: boolean;
+  // Look the new words in a mined line up in the dictionary the popup uses, and
+  // write what comes back onto the card. Needs the Anki add-on running.
+  addDefinitionsToMinedCards: boolean;
 };
 
 export type AnkiFieldMapping = {
@@ -52,6 +55,7 @@ export type AnkiFieldMapping = {
   // that tag as a player, and treats it as media it owns, so it works on the phone clients
   // and Check Media counts it. Empty = unmapped, which is what turns clip capture off.
   video: string;
+  definition: string;
 };
 
 export type AnkiSettings = {
@@ -60,6 +64,18 @@ export type AnkiSettings = {
   fields: AnkiFieldMapping;
   // Milliseconds of audio padding added to each side of a mined sentence clip.
   clipPaddingMs: number;
+  // Which note types and fields hold the words you already know. Independent of
+  // `noteType` above: the notes cards are pushed INTO are rarely the ones your
+  // vocabulary is read FROM.
+  vocabularySources: VocabularySource[];
+  // How long a word has to have stuck before it counts as known, in days. 21 is
+  // Anki's own "mature" line.
+  knownWordIntervalDays: number;
+};
+
+export type VocabularySource = {
+  noteType: string;
+  field: string;
 };
 
 export type WhisperSettings = {
@@ -164,8 +180,16 @@ export type AppSettings = {
  * AppSettings holds only strings, numbers, booleans and nested groups of the same, so
  * `extends object` cleanly separates "group to recurse into" from "value to replace".
  */
+// An array is a leaf, not something to recurse into. `mergeSettings` replaces an
+// array wholesale — merging by index would make removing a row impossible — and
+// the type has to say the same thing, or an update could offer a half-filled row
+// that type-checks here and is rejected by the save as a missing field.
 export type DeepPartial<T> = {
-  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+  [K in keyof T]?: T[K] extends readonly unknown[]
+    ? T[K]
+    : T[K] extends object
+      ? DeepPartial<T[K]>
+      : T[K];
 };
 
 export type SettingsUpdate = DeepPartial<AppSettings>;
@@ -294,6 +318,93 @@ export type AlassDetection = {
   message: string;
 };
 
+export type DictionaryDetection = {
+  status: string;
+  dictionaryPath: string | null;
+  managed: boolean;
+  message: string;
+};
+
+// One line handed to a batch mine.
+export type MineLineRequest = {
+  text: string;
+  startMs: number;
+  endMs: number;
+  translation: string | null;
+};
+
+// What became of one line in a batch. `status` is "added", "failed", or
+// "notAttempted" — the last for lines a stopped run never reached, which is not
+// the same as a line that was tried and refused.
+export type MinedLineOutcome = {
+  text: string;
+  startMs: number;
+  endMs: number;
+  status: string;
+  message: string;
+};
+
+// `status` is "ready" (all added), "partial" (some failed), "stopped" (the run
+// gave up early), or "failed" (nothing was attempted).
+export type MinedLinesResult = {
+  status: string;
+  message: string;
+  added: number;
+  failed: number;
+  lines: MinedLineOutcome[];
+  bootstrap: AppBootstrap;
+};
+
+// What one transcript line asks of the reader. `unknownWords` rather than a bare
+// count, because on an i+1 line that one word is the entire reason to mine it.
+export type LineRanking = {
+  unknownWords: string[];
+  // Words that count at all, known or not. A line of pure grammar has none, which
+  // is not the same as a line you know every word of.
+  contentWordCount: number;
+  // Whether this line is worth mining. Decided in Rust, never re-derived here: the
+  // summary count and the filtered rows have to be the same set, and two copies of
+  // the rule is how they stop being.
+  withinReach: boolean;
+};
+
+// Always one entry per line handed in, whatever `status` says: "ready",
+// "unconfigured", "unbuilt", or "needsDictionary".
+export type TranscriptRanking = {
+  status: string;
+  message: string;
+  lines: LineRanking[];
+};
+
+// One proposed vocabulary source. `samples` carries real values off the user's own
+// cards — the scan cannot tell a deck of single kanji from a deck of words, and
+// three samples answer that at a glance.
+export type VocabularySuggestion = {
+  noteType: string;
+  field: string;
+  matureNoteCount: number;
+  samples: string[];
+  alreadyAdded: boolean;
+};
+
+// `status` is "ready", "none" (nothing read like vocabulary), "offline", or
+// "needsDictionary".
+export type VocabularySuggestions = {
+  status: string;
+  message: string;
+  suggestions: VocabularySuggestion[];
+};
+
+// What the saved known-word list has to say for itself. `status` is one of
+// "unconfigured" (no sources chosen), "unbuilt" (nothing saved yet), "ready",
+// "stale" (the settings changed since it was built), "empty", or "offline".
+export type KnownWordsSnapshot = {
+  status: string;
+  message: string;
+  wordCount: number;
+  builtAtMs: number | null;
+};
+
 export type WhisperAssetUpdateResult = {
   kind: string;
   status: string;
@@ -322,6 +433,8 @@ export type AppBootstrap = {
   ytdlpDetection: YtdlpDetection;
   alassDetection: AlassDetection;
   modelDownload: ModelDownloadSnapshot;
+  dictionaryDetection: DictionaryDetection;
+  knownWords: KnownWordsSnapshot;
   logPath: string;
 };
 
@@ -467,6 +580,7 @@ export const DOWNLOAD_BUSY_ACTIONS = [
   "downloadFfmpeg",
   "downloadAlass",
   "downloadYtdlp",
+  "downloadDictionary",
 ] as const;
 
 export function isDownloadBusy(busyAction: BusyAction): boolean {
@@ -483,6 +597,9 @@ export type BusyAction =
   | "downloadFfmpeg"
   | "downloadAlass"
   | "downloadYtdlp"
+  | "downloadDictionary"
+  | "refreshKnownWords"
+  | "scanVocabulary"
   | "importYoutube"
   | "checkYtdlpUpdate"
   | "checkRuntimeUpdate"
@@ -515,6 +632,7 @@ export type SettingsSection =
   | "whisper"
   | "storage"
   | "anki"
+  | "studyPicks"
   | "scanner";
 
 export type RecordingFilter =

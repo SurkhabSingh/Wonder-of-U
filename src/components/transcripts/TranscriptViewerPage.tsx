@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import { useRecordingTexts } from "../../hooks/useRecordingTexts";
@@ -10,6 +11,7 @@ import {
 import { transcriptLanguageLabel } from "../../lib/helpers";
 import { ScannableText } from "../scanner/ScannableText";
 import type {
+  MinedLinesResult,
   RecentRecording,
   RecordingSegment,
   RecordingTextDocument,
@@ -18,7 +20,8 @@ import type {
 import { NowPlayingBar } from "../audio/NowPlayingBar";
 import { TranscriptLanguageTabs } from "./TranscriptLanguageTabs";
 import type { TranscriptLanguageTab } from "./TranscriptLanguageTabs";
-import { TranscriptReadingPane } from "./TranscriptReadingPane";
+import { TranscriptReadingPane, buildRows } from "./TranscriptReadingPane";
+import { useSentenceRanking } from "../../hooks/useSentenceRanking";
 import {
   countMatches,
   normalizeSegmentText,
@@ -190,19 +193,6 @@ function isCjkDocument(document: RecordingTextDocument | null): boolean {
   );
 }
 
-function documentMatchCount(
-  document: RecordingTextDocument | null,
-  query: string,
-): number {
-  if (!document || document.missing) {
-    return 0;
-  }
-  return splitTranscriptSegments(document.text).reduce(
-    (total, segment) => total + countMatches(segment, query),
-    0,
-  );
-}
-
 function TranscriptSkeleton() {
   return (
     <div className="transcript-pane">
@@ -312,6 +302,7 @@ export function TranscriptViewerPage({
   lastTranscriptionOutcome,
   transcriptionLanguage,
   clipPaddingMs,
+  knownWordsBuiltAtMs,
 }: {
   recording: RecentRecording;
   onBack: () => void;
@@ -362,6 +353,10 @@ export function TranscriptViewerPage({
   // Milliseconds the miner pads a clip by on each side. Playback uses the same value so a
   // previewed sentence and the card made from it cannot drift apart.
   clipPaddingMs: number;
+  // When the known-word list was last read from Anki. Only a re-rank trigger: a
+  // Refresh has to update the badges on a transcript already open, or the words
+  // learned this morning would not show until the page was left and returned to.
+  knownWordsBuiltAtMs: number | null;
   // Set when the most recent transcription of this recording ended badly, so the viewer
   // can say which of "you cancelled it", "it failed" and "there is no transcript" the
   // empty screen actually means. Null when the last run succeeded or none has run.
@@ -470,6 +465,24 @@ export function TranscriptViewerPage({
   // Merge/split rewrite this copy only; nothing is persisted, and switching
   // language or reloading the transcript resets it from the source segments.
   const [editedSegments, setEditedSegments] = useState<RecordingSegment[]>([]);
+  // Narrows the transcript to the lines a single word from being readable.
+  const [withinReachOnly, setWithinReachOnly] = useState(false);
+  // Why a batch mine could not make a card of a row, keyed like the mined markers.
+  const [mineFailures, setMineFailures] = useState<Map<string, string>>(
+    new Map(),
+  );
+  const [isBatchMining, setIsBatchMining] = useState(false);
+  // The same rows the transcript pane will build, so entry N of the ranking
+  // describes row N. Merging or splitting a sentence changes these and re-ranks,
+  // which is the point of ranking the lines rather than the sidecar.
+  const transcriptLines = useMemo(
+    () =>
+      activeTranscript
+        ? buildRows(activeTranscript, editedSegments).map((row) => row.text)
+        : [],
+    [activeTranscript, editedSegments],
+  );
+  const ranking = useSentenceRanking(transcriptLines, knownWordsBuiltAtMs);
   // Rows already mined, tracked by content key so the marker survives re-renders
   // but not a merge/split (which makes a new sentence). Seeded below from the
   // cards actually in Anki, so it covers earlier sessions too, then extended as
@@ -502,6 +515,7 @@ export function TranscriptViewerPage({
   useEffect(() => {
     setEditedSegments(activeTranscript?.segments ?? []);
     setMinedKeys(new Set());
+    setMineFailures(new Map());
     setMiningKey(null);
     // A new transcript reindexes every row, so drop the old focus/selection.
     setSelectedSegment(null);
@@ -568,6 +582,84 @@ export function TranscriptViewerPage({
       .finally(() => {
         setMiningKey((current) => (current === key ? null : current));
       });
+  };
+
+  // The rows the "Mine all" action would act on: within reach, and not already a
+  // card. Already-mined rows are skipped rather than refused — mining one at a time
+  // offers "Mine again" deliberately, but a bulk run is not reviewed card by card,
+  // and quietly doubling forty notes is not a thing to make easy.
+  const minableWithinReach = useMemo(() => {
+    if (!ranking || ranking.status !== "ready") {
+      return [];
+    }
+    return editedSegments
+      .map((segment, index) => ({ segment, index }))
+      .filter(({ segment, index }) => {
+        const key = segmentMineKey(segment);
+        return (
+          (ranking.lines[index]?.withinReach ?? false) &&
+          !minedKeys.has(key) &&
+          !minedKeysFromAnki.has(key)
+        );
+      });
+  }, [ranking, editedSegments, minedKeys, minedKeysFromAnki]);
+
+  const handleMineWithinReach = async () => {
+    if (minableWithinReach.length === 0 || isBatchMining) {
+      return;
+    }
+    setIsBatchMining(true);
+    // Cleared first: a marker left from the previous run beside a line this run
+    // succeeded on would be a lie about the state of the deck.
+    setMineFailures(new Map());
+    try {
+      const result = await invoke<MinedLinesResult>("mine_segments_to_anki", {
+        filePath: recording.filePath,
+        lines: minableWithinReach.map(({ segment, index }) => {
+          const paired = pairedTranslationFor(
+            index,
+            segment,
+            activeTranscript,
+            activeTranslation,
+          );
+          return {
+            text: segment.text,
+            startMs: segment.startMs,
+            endMs: segment.endMs,
+            translation: paired === MISALIGNED_TRANSLATION ? null : paired,
+          };
+        }),
+      });
+
+      const failures = new Map<string, string>();
+      const mined = new Set(minedKeys);
+      for (const line of result.lines) {
+        const key = `${line.startMs}:${line.endMs}:${line.text}`;
+        if (line.status === "added") {
+          mined.add(key);
+        } else if (line.status === "failed") {
+          failures.set(key, line.message);
+        }
+      }
+      setMinedKeys(mined);
+      setMineFailures(failures);
+
+      if (failures.size > 0) {
+        // The count in the toast, the reasons on the rows. A toast holding three
+        // lines of Japanese and three error messages is a toast nobody reads.
+        toast.warning(
+          `${result.message} The lines that failed are marked in the transcript.`,
+        );
+      } else {
+        toast.success(result.message);
+      }
+    } catch (error: unknown) {
+      toast.error(
+        typeof error === "string" ? error : "These sentences could not be mined.",
+      );
+    } finally {
+      setIsBatchMining(false);
+    }
   };
 
   // Mining writes an Anki card with the sentence audio, so it needs local audio
@@ -693,18 +785,104 @@ export function TranscriptViewerPage({
     [transcripts],
   );
 
-  const matchCount = useMemo(() => {
-    const documents: (RecordingTextDocument | null)[] =
-      viewMode === "transcript"
-        ? [activeTranscript]
-        : viewMode === "translation"
-          ? [activeTranslation]
-          : [activeTranscript, activeTranslation];
-    return documents.reduce(
-      (total, doc) => total + documentMatchCount(doc, query),
-      0,
+  // Every match on screen, in reading order, as (pane, row, occurrence).
+  //
+  // Built from the RENDERED rows rather than from the document's plain text. The
+  // count used to come from the text while the rows come from the segments
+  // sidecar, which are not always the same lines — tolerable for a number nobody
+  // navigates, but "3 of 27" has to point at a row that exists.
+  const matches = useMemo(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      return [];
+    }
+    const panes: { paneKey: "transcript" | "translation"; rows: string[] }[] = [];
+    if (viewMode !== "translation" && activeTranscript && !activeTranscript.missing) {
+      panes.push({
+        paneKey: "transcript",
+        // A row the "One word away" filter has hidden has no element to scroll to
+        // and no mark to light up, so counting its matches would mean a find bar
+        // reading "5 of 27" and, on some of those, doing nothing at all. Blanked
+        // rather than dropped, so the indices still line up with the rendered rows.
+        rows:
+          withinReachOnly && ranking
+            ? transcriptLines.map((text, index) =>
+                ranking.lines[index]?.withinReach ? text : "",
+              )
+            : transcriptLines,
+      });
+    }
+    if (viewMode !== "transcript" && activeTranslation && !activeTranslation.missing) {
+      panes.push({
+        paneKey: "translation",
+        rows: buildRows(activeTranslation, undefined).map((row) => row.text),
+      });
+    }
+
+    const found: {
+      paneKey: "transcript" | "translation";
+      index: number;
+      occurrence: number;
+    }[] = [];
+    for (const pane of panes) {
+      pane.rows.forEach((text, index) => {
+        for (
+          let occurrence = 0;
+          occurrence < countMatches(text, trimmed);
+          occurrence += 1
+        ) {
+          found.push({ paneKey: pane.paneKey, index, occurrence });
+        }
+      });
+    }
+    return found;
+  }, [
+    viewMode,
+    activeTranscript,
+    activeTranslation,
+    transcriptLines,
+    query,
+    withinReachOnly,
+    ranking,
+  ]);
+
+  const matchCount = matches.length;
+  // Which match Enter / the arrows are sitting on. Null means "found them, not
+  // stepping through them yet", which is what a fresh query should look like.
+  const [activeMatchIndex, setActiveMatchIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setActiveMatchIndex(null);
+  }, [query, viewMode]);
+
+  const stepMatch = (direction: 1 | -1) => {
+    if (matches.length === 0) {
+      return;
+    }
+    // Wraps, like every find bar: reaching the end and being told "no more" when
+    // there are matches above you is a dead end, not an answer.
+    const next =
+      activeMatchIndex === null
+        ? direction === 1
+          ? 0
+          : matches.length - 1
+        : (activeMatchIndex + direction + matches.length) % matches.length;
+    setActiveMatchIndex(next);
+
+    const match = matches[next];
+    const row = document.querySelector(
+      `[data-segment="${match.paneKey}-${match.index}"]`,
     );
-  }, [viewMode, activeTranscript, activeTranslation, query]);
+    // `center` rather than `nearest`: a match one row below the fold would
+    // otherwise scroll just barely into view at the very bottom, which reads as
+    // nothing having happened.
+    row?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (match.paneKey === "transcript") {
+      setActiveSegmentIndex(match.index);
+    }
+  };
+
+  const activeMatch = activeMatchIndex === null ? null : matches[activeMatchIndex];
 
   const metaText = [
     formatDuration(recording.durationMs),
@@ -806,6 +984,43 @@ export function TranscriptViewerPage({
             ))}
           </div>
 
+          {ranking?.status === "ready" ? (
+            <button
+              type="button"
+              className={`transcript-mode ${withinReachOnly ? "is-active" : ""}`}
+              aria-pressed={withinReachOnly}
+              onClick={() => setWithinReachOnly((current) => !current)}
+              title={ranking.message}
+            >
+              One word away
+            </button>
+          ) : null}
+          {/* Only offered with the filter on. "Mine all" while looking at the whole
+              transcript reads as "mine everything", and the number beside it is the
+              only thing that says otherwise. */}
+          {withinReachOnly && !recording.audioDeleted ? (
+            <button
+              type="button"
+              className="transcript-mode"
+              onClick={() => void handleMineWithinReach()}
+              disabled={
+                isBatchMining ||
+                mineDisabledReason !== null ||
+                minableWithinReach.length === 0
+              }
+              title={
+                mineDisabledReason ??
+                (minableWithinReach.length === 0
+                  ? "Every line here is already a card"
+                  : "Make a card of every line shown, one word at a time")
+              }
+            >
+              {isBatchMining
+                ? "Mining…"
+                : `Mine all ${minableWithinReach.length}`}
+            </button>
+          ) : null}
+
           <div className="transcript-find">
             <input
               type="search"
@@ -813,12 +1028,47 @@ export function TranscriptViewerPage({
               placeholder="Find in transcript"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") {
+                  return;
+                }
+                // The box keeps focus so the next Enter steps again — the whole
+                // point of a find bar is not having to click back into it.
+                event.preventDefault();
+                stepMatch(event.shiftKey ? -1 : 1);
+              }}
               aria-label="Find in transcript"
             />
             {trimmedQuery ? (
-              <span className="transcript-find-count">
-                {matchCount} match{matchCount === 1 ? "" : "es"}
-              </span>
+              <>
+                <span className="transcript-find-count">
+                  {matchCount === 0
+                    ? "No matches"
+                    : activeMatchIndex === null
+                      ? `${matchCount} match${matchCount === 1 ? "" : "es"}`
+                      : `${activeMatchIndex + 1} of ${matchCount}`}
+                </span>
+                <button
+                  type="button"
+                  className="transcript-find-step"
+                  onClick={() => stepMatch(-1)}
+                  disabled={matchCount === 0}
+                  title="Previous match (Shift+Enter)"
+                  aria-label="Previous match"
+                >
+                  <span aria-hidden="true">{"↑"}</span>
+                </button>
+                <button
+                  type="button"
+                  className="transcript-find-step"
+                  onClick={() => stepMatch(1)}
+                  disabled={matchCount === 0}
+                  title="Next match (Enter)"
+                  aria-label="Next match"
+                >
+                  <span aria-hidden="true">{"↓"}</span>
+                </button>
+              </>
             ) : null}
           </div>
         </div>
@@ -1045,6 +1295,12 @@ export function TranscriptViewerPage({
               miningKey={miningKey}
               isMining={isMining}
               mineDisabledReason={mineDisabledReason}
+              ranking={ranking}
+              withinReachOnly={withinReachOnly}
+              mineFailures={mineFailures}
+              activeMatch={
+                activeMatch?.paneKey === "transcript" ? activeMatch : null
+              }
             />
           ) : null}
 

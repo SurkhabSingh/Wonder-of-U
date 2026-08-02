@@ -32,6 +32,7 @@ pub(crate) fn build_app_paths<R: Runtime>(
 
     Ok(AppPathsState {
         state_file: data_dir.join("state.json"),
+        known_words_file: data_dir.join("known_words.txt"),
         log_file: log_dir.join("wonder-of-u.log"),
         data_dir,
         assets_dir,
@@ -162,38 +163,50 @@ pub(crate) fn load_persisted_data<R: Runtime>(
     Ok(state)
 }
 
-/// Writes the state file atomically: temp file, flush, rename over the original.
+/// Writes a JSON file atomically: temp file, flush, rename over the original.
 ///
-/// This is the only writer of the only copy of the library, and it runs on every
-/// history mutation. A plain `fs::write` truncates the real file first, so a crash
-/// or power loss between the truncate and the flush leaves well-formed-looking but
-/// truncated JSON — which the loader cannot parse, and the whole library is gone.
+/// `state.json` is the demanding caller and the reason this exists: it is the only
+/// copy of the recording library, rewritten on every history mutation, so a plain
+/// `fs::write` — which truncates the real file first — would leave well-formed
+/// looking but truncated JSON after a crash between the truncate and the flush, and
+/// the whole library gone. `known_words.txt` reuses it for the same guarantee.
 /// Same temp+rename shape `asset_downloads::transfer` uses for downloads.
 ///
 /// The `sync_all` is load-bearing, not belt and braces. The rename is atomic with
 /// respect to the directory entry only; without the flush it can commit while the
 /// temp file's bytes are still in the page cache, and a power loss then leaves the
-/// state file's NEW name over the OLD file's unwritten contents — exactly the
+/// file's NEW name over the OLD file's unwritten contents — exactly the
 /// truncated-JSON case the temp file exists to prevent. Windows' MoveFileEx (what
 /// `fs::rename` uses) does not flush the source for us. The parent directory is
 /// not synced: there is no portable handle for that on Windows, and NTFS journals
 /// the rename itself.
-fn write_state_file_atomically(state_file: &Path, serialized: &str) -> Result<(), String> {
-    let temp_path = state_file.with_extension("json.tmp");
+pub(crate) fn write_file_atomically(path: &Path, contents: &str) -> Result<(), String> {
+    // Built by appending to the whole file name rather than by replacing the
+    // extension: `state.json` still writes through `state.json.tmp` exactly as
+    // before, and a file that is not JSON gets a temp file named after itself
+    // instead of one claiming an extension it does not have.
+    let temp_path = match path.file_name() {
+        Some(name) => {
+            let mut temp_name = name.to_os_string();
+            temp_name.push(".tmp");
+            path.with_file_name(temp_name)
+        }
+        None => return Err(format!("{} is not a file path.", path.display())),
+    };
 
     let result = (|| {
         let mut file = fs::File::create(&temp_path).map_err(|error| error.to_string())?;
-        file.write_all(serialized.as_bytes())
+        file.write_all(contents.as_bytes())
             .map_err(|error| error.to_string())?;
         file.sync_all().map_err(|error| error.to_string())?;
         drop(file);
-        fs::rename(&temp_path, state_file).map_err(|error| error.to_string())
+        fs::rename(&temp_path, path).map_err(|error| error.to_string())
     })();
 
     if result.is_err() {
         // A stranded temp file would be retried into on the next write anyway, but
-        // leaving a half-written state.json.tmp beside the real one is confusing to
-        // anyone recovering by hand.
+        // leaving a half-written `.tmp` beside the real one is confusing to anyone
+        // recovering by hand.
         let _ = fs::remove_file(&temp_path);
     }
 
@@ -206,18 +219,19 @@ pub(crate) fn write_persisted_data<R: Runtime>(
 ) -> Result<(), String> {
     let paths = app.state::<AppPathsState>().inner().clone();
     let serialized = serde_json::to_string_pretty(state).map_err(|error| error.to_string())?;
-    write_state_file_atomically(&paths.state_file, &serialized)
+    write_file_atomically(&paths.state_file, &serialized)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{preserve_unparseable_state_file, write_state_file_atomically};
+    use super::{preserve_unparseable_state_file, write_file_atomically};
     use crate::app_types::AppPathsState;
     use std::fs;
 
     fn paths_in(data_dir: &std::path::Path) -> AppPathsState {
         AppPathsState {
             state_file: data_dir.join("state.json"),
+            known_words_file: data_dir.join("known_words.txt"),
             log_file: data_dir.join("wonder-of-u.log"),
             data_dir: data_dir.to_path_buf(),
             assets_dir: data_dir.join("assets"),
@@ -230,7 +244,7 @@ mod tests {
         let state_file = dir.path().join("state.json");
         fs::write(&state_file, "{\"old\":true}").unwrap();
 
-        write_state_file_atomically(&state_file, "{\"new\":true}").unwrap();
+        write_file_atomically(&state_file, "{\"new\":true}").unwrap();
 
         assert_eq!(fs::read_to_string(&state_file).unwrap(), "{\"new\":true}");
         assert!(!dir.path().join("state.json.tmp").exists());
@@ -241,7 +255,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state_file = dir.path().join("state.json");
 
-        write_state_file_atomically(&state_file, "{}").unwrap();
+        write_file_atomically(&state_file, "{}").unwrap();
 
         assert_eq!(fs::read_to_string(&state_file).unwrap(), "{}");
     }
@@ -255,7 +269,7 @@ mod tests {
         // state file must not have been touched on the way to that failure.
         fs::create_dir(dir.path().join("state.json.tmp")).unwrap();
 
-        assert!(write_state_file_atomically(&state_file, "{\"new\":true}").is_err());
+        assert!(write_file_atomically(&state_file, "{\"new\":true}").is_err());
         assert_eq!(fs::read_to_string(&state_file).unwrap(), "{\"old\":true}");
     }
 

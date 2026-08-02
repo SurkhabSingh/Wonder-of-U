@@ -56,6 +56,7 @@ export function AnkiMappingSettingsPage({
             position: "Time",
             image: "Image",
             video: "Video",
+            definition: "Definition",
           },
         },
       });
@@ -219,6 +220,7 @@ export function AnkiMappingSettingsPage({
                     position: "",
                     image: "",
                     video: "",
+                    definition: "",
                   },
                 },
               });
@@ -302,6 +304,14 @@ export function AnkiMappingSettingsPage({
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
+          field="definition"
+          label="Definitions field"
+          description="Optional dictionary meanings of the words in the line you don't know yet. Only filled when the setting below is on, and only for words the app can see are new to you."
+          currentValue={settingsDraft.anki.fields.definition}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
           field="position"
           label="Timestamp field"
           description="Optional timestamp of the sentence within the recording (H:MM:SS)."
@@ -348,6 +358,39 @@ export function AnkiMappingSettingsPage({
           doesn&rsquo;t cut the first or last syllable. Larger values add more lead-in
           and tail; smaller values make tighter clips.
         </p>
+      </div>
+
+      <div className="info-note">
+        <label className="toggle inline-toggle">
+          <input
+            type="checkbox"
+            checked={settingsDraft.features.addDefinitionsToMinedCards}
+            onChange={(event) =>
+              onUpdateSettings({
+                features: {
+                  addDefinitionsToMinedCards: event.currentTarget.checked,
+                },
+              })
+            }
+          />
+          <span>Add dictionary meanings for the words you don&rsquo;t know yet</span>
+        </label>
+        <p className="microcopy">
+          When a mined line contains a word you haven&rsquo;t learned, its meaning is
+          looked up and written to the definitions field above. Needs Anki open and
+          your vocabulary set up under Study Picks. If a meaning can&rsquo;t be found
+          the card is still made, just without it &mdash; and the mine says so.
+        </p>
+        {/* A toggle with nowhere to write is a toggle that does nothing, and from the
+            outside that is indistinguishable from a broken feature. Say it here rather
+            than letting every mined card be the thing that reports it. */}
+        {settingsDraft.features.addDefinitionsToMinedCards &&
+        !settingsDraft.anki.fields.definition ? (
+          <p className="microcopy field-warning">
+            Map the definitions field above for this to have anywhere to write. On the
+            app&rsquo;s own note type, &ldquo;Create or update&rdquo; adds it.
+          </p>
+        ) : null}
       </div>
 
       <div className="info-note">

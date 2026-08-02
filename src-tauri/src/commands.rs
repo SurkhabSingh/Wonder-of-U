@@ -31,18 +31,22 @@ use crate::{
 use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
-        load_mined_sentences_inner, mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
-        push_recordings_to_anki_inner,
+        load_mined_sentences_inner, mine_segment_to_anki_inner, mine_segments_to_anki_inner,
+        push_recordings_to_anki_deck_inner,
+        push_recordings_to_anki_inner, rank_transcript_lines_inner, refresh_known_words_inner,
+        scan_vocabulary_sources_inner,
     },
-    app_runtime::build_app_bootstrap,
+    app_runtime::{build_app_bootstrap, emit_app_snapshot},
     app_types::{
-        AnkiCatalog, AppBootstrap, AppSettings, MinedSentences, RecordingBatchResult,
-        RecordingTexts, WhisperAssetUpdateResult,
+        AnkiCatalog, AppBootstrap, AppSettings, KnownWordsSnapshot, MinedSentences,
+        MineLineRequest, MinedLinesResult, RecordingBatchResult, RecordingTexts,
+        TranscriptRanking, VocabularySuggestions, WhisperAssetUpdateResult,
     },
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
         download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
-        download_recommended_alass_inner, download_recommended_ytdlp_inner,
+        download_recommended_alass_inner, download_recommended_dictionary_inner,
+        download_recommended_ytdlp_inner,
         download_whisper_runtime_version_inner,
         toggle_whisper_model_download_pause_inner,
     },
@@ -194,6 +198,79 @@ pub(crate) async fn load_anki_catalog(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Mines several lines from one recording in one pass.
+///
+/// Every line handed in comes back with what became of it, successes included: a
+/// batch that reports "3 of 35 failed" without saying which three is a batch that
+/// has to be redone from the top.
+#[tauri::command]
+pub(crate) async fn mine_segments_to_anki(
+    app: AppHandle,
+    file_path: String,
+    lines: Vec<MineLineRequest>,
+) -> Result<MinedLinesResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        mine_segments_to_anki_inner(&app, file_path, lines)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Counts the words in each line that are not yet known.
+///
+/// Takes the lines themselves rather than a recording, because the rows on screen
+/// are not always the rows on disk — the viewer can merge and split them, and a
+/// ranking keyed to the sidecar would describe the transcript's previous shape.
+///
+/// Off the UI thread: a long episode is several hundred lines, and the first call
+/// after launch also loads the dictionary.
+#[tauri::command]
+pub(crate) async fn rank_transcript_lines(
+    app: AppHandle,
+    lines: Vec<String>,
+) -> Result<TranscriptRanking, String> {
+    tauri::async_runtime::spawn_blocking(move || rank_transcript_lines_inner(&app, &lines))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Looks through the collection for note types that hold vocabulary.
+///
+/// Proposes; it never writes. The suggestions become settings only when the user
+/// accepts one, which is the point — a wrong field here fails silently, and the
+/// samples riding along with each suggestion are what make it checkable.
+///
+/// Off the UI thread: it walks every note type in the collection and tokenizes a
+/// sample of each candidate field.
+#[tauri::command]
+pub(crate) async fn scan_vocabulary_sources(
+    app: AppHandle,
+) -> Result<VocabularySuggestions, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_vocabulary_sources_inner(&app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Rebuilds the known-word list from Anki. Manual by design — see
+/// `refresh_known_words_inner`.
+///
+/// Off the UI thread: a serious collection is tens of thousands of notes across a
+/// hundred round trips, and the whole point of a button is that the window stays
+/// alive while it runs.
+#[tauri::command]
+pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnapshot, String> {
+    let app_for_blocking = app.clone();
+    let snapshot = tauri::async_runtime::spawn_blocking(move || {
+        refresh_known_words_inner(&app_for_blocking)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    // The list the rest of the app sees has changed, so everything showing a count
+    // or an age is now wrong until it hears about it.
+    emit_app_snapshot(&app);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -614,6 +691,13 @@ pub(crate) async fn sync_watch_subtitles(
 #[tauri::command]
 pub(crate) fn download_recommended_alass(app: AppHandle) -> Result<AppBootstrap, String> {
     download_recommended_alass_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+/// Downloads the Japanese dictionary into the managed asset directory.
+#[tauri::command]
+pub(crate) fn download_recommended_dictionary(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_recommended_dictionary_inner(&app)?;
     build_app_bootstrap(&app)
 }
 

@@ -10,7 +10,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use super::{
     clip::capture_clip,
-    client::{anki_connect_request, anki_offline_message},
+    definitions::{definitions_for, Definitions},
+    client::{anki_connect_health_check, anki_connect_request, anki_offline_message},
     fields::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
         MediaPart,
@@ -25,8 +26,8 @@ use crate::{
     app_runtime::{build_app_bootstrap, log_event, update_shell_snapshot},
     app_state::transcript_looks_japanese,
     app_types::{
-        AppSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
-        SharedPersistedState,
+        AppSettings, MineLineRequest, MinedLineOutcome, MinedLinesResult, RecentRecording,
+        RecordingActionItem, RecordingBatchResult, SharedPersistedState,
     },
     recording_library::{find_recent_recording, playback_path, unique_path_with_suffix},
     runtime_assets::detect_local_ffmpeg,
@@ -615,7 +616,39 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         }
     }
 
-    // 6. Furigana (non-fatal), and only when it was asked for.
+    // 6. Definitions for the words this line is meant to teach (non-fatal).
+    //
+    // Two switches, and either one off means no lookup: the feature toggle, and a
+    // mapped field to put the answer in. The second is not redundant — a mapping
+    // can be lost when a note type changes, and writing to a field that no longer
+    // exists is how a whole card gets rejected.
+    //
+    // Reported when it was asked for and did not arrive, exactly as furigana is. The
+    // first version stayed silent on the reasoning that a card without a definition
+    // is still the card mining has always made — which was wrong: the toggle IS the
+    // request, and a card missing what it promised is indistinguishable from a
+    // toggle that does nothing at all.
+    let mut definition_problem = None;
+    if settings.features.add_definitions_to_mined_cards {
+        if anki.fields.definition.is_empty() {
+            // The toggle is on and there is nowhere to put the answer. Said out loud,
+            // because from the outside this looks exactly like the feature not working.
+            definition_problem = Some("no Anki field is mapped for them".to_string());
+        } else {
+            match definitions_for(app, trimmed_text) {
+                Definitions::Ready(html) => {
+                    fields.insert(
+                        anki.fields.definition.clone(),
+                        serde_json::Value::String(html),
+                    );
+                }
+                Definitions::Unavailable(reason) => definition_problem = Some(reason),
+                Definitions::NothingToAdd => {}
+            }
+        }
+    }
+
+    // 7. Furigana (non-fatal), and only when it was asked for.
     //
     // The setting was read by the push path alone, so a mined card got furigana whether or
     // not the toggle was on — one of the two ways to make a card ignored the switch that
@@ -631,7 +664,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         }
     }
 
-    // 7. Create the note with the same dedup guard the push flow uses.
+    // 8. Create the note with the same dedup guard the push flow uses.
     let note_result = anki_connect_request(
         "addNote",
         serde_json::json!({
@@ -689,6 +722,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
                     screenshot_problem.map(|problem| format!("a screenshot ({problem})")),
                     video_problem.map(|problem| format!("a video clip ({problem})")),
                     furigana_problem.map(|problem| format!("furigana ({problem})")),
+                    definition_problem.map(|problem| format!("definitions ({problem})")),
                 ]
                 .into_iter()
                 .flatten()
@@ -828,6 +862,134 @@ pub(crate) fn mine_segment_to_anki_inner<R: Runtime>(
         status: batch_status.into(),
         message,
         items: vec![item],
+        bootstrap: build_app_bootstrap(app)?,
+    })
+}
+
+/// How many failures in a row end the run.
+///
+/// Not a cap on how much may be mined — that was asked for and there is none. This
+/// is a broken-connection guard. Each AnkiConnect call waits up to 15 seconds, so
+/// an Anki that dies partway through a hundred-line run would otherwise keep the
+/// user waiting close to half an hour with nothing to show and no way out. Three
+/// consecutive failures is a systemic problem, not a bad line, and the lines not
+/// reached come back as `notAttempted` so the difference stays visible.
+const CONSECUTIVE_FAILURE_LIMIT: usize = 3;
+
+/// Roughly how many progress updates a run should emit, whatever its length.
+///
+/// Every update rebuilds the app snapshot, which walks the asset directory and
+/// re-renders the window. Once per line would spend more time reporting the work
+/// than doing it; twenty is enough for a bar that visibly moves.
+const PROGRESS_UPDATE_COUNT: usize = 20;
+
+fn mined_outcome(line: &MineLineRequest, status: &str, message: String) -> MinedLineOutcome {
+    MinedLineOutcome {
+        text: line.text.clone(),
+        start_ms: line.start_ms,
+        end_ms: line.end_ms,
+        status: status.into(),
+        message,
+    }
+}
+
+/// Mines several lines from one recording in a single pass.
+///
+/// Runs each line through exactly the same `mine_single_segment` the one-at-a-time
+/// button uses, so a card made here is a card made there. The batch adds only what
+/// a batch needs: progress, a stopping rule, and an answer for every line.
+pub(crate) fn mine_segments_to_anki_inner<R: Runtime>(
+    app: &AppHandle<R>,
+    file_path: String,
+    lines: Vec<MineLineRequest>,
+) -> Result<MinedLinesResult, String> {
+    let total = lines.len();
+    // Checked once up front rather than discovered on the first line. The common
+    // failure by far is Anki simply not being open, and finding that out before
+    // cutting any audio means nothing half-happened.
+    if let Err(error) = anki_connect_health_check() {
+        return Ok(MinedLinesResult {
+            status: "failed".into(),
+            message: anki_offline_message(&error),
+            added: 0,
+            failed: 0,
+            lines: lines
+                .iter()
+                .map(|line| mined_outcome(line, "notAttempted", String::new()))
+                .collect(),
+            bootstrap: build_app_bootstrap(app)?,
+        });
+    }
+
+    let progress_every = (total / PROGRESS_UPDATE_COUNT).max(1);
+    let mut outcomes: Vec<MinedLineOutcome> = Vec::with_capacity(total);
+    let mut added = 0usize;
+    let mut failed = 0usize;
+    let mut consecutive_failures = 0usize;
+    let mut stopped_early = false;
+
+    for (index, line) in lines.iter().enumerate() {
+        if stopped_early {
+            outcomes.push(mined_outcome(line, "notAttempted", String::new()));
+            continue;
+        }
+
+        let (item, _) = mine_single_segment(
+            app,
+            &file_path,
+            &line.text,
+            line.start_ms,
+            line.end_ms,
+            line.translation.as_deref(),
+        );
+        if item.status == "failed" {
+            failed += 1;
+            consecutive_failures += 1;
+            outcomes.push(mined_outcome(line, "failed", item.message));
+            stopped_early = consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT;
+        } else {
+            added += 1;
+            consecutive_failures = 0;
+            outcomes.push(mined_outcome(line, "added", item.message));
+        }
+
+        if index % progress_every == 0 {
+            // Best-effort: losing a progress update must not lose the run.
+            let _ = update_shell_snapshot(app, |shell| {
+                shell.status_text = format!("Mining line {} of {total}…", index + 1);
+                shell.transition_count += 1;
+            });
+        }
+    }
+
+    let status = if stopped_early {
+        "stopped"
+    } else if failed > 0 {
+        "partial"
+    } else {
+        "ready"
+    };
+    let message = if stopped_early {
+        format!(
+            "Stopped after {CONSECUTIVE_FAILURE_LIMIT} lines failed in a row — Anki stopped answering. {added} added before that."
+        )
+    } else if failed > 0 {
+        format!("{added} added, {failed} could not be mined.")
+    } else {
+        format!("{added} {} added to Anki.", if added == 1 { "card" } else { "cards" })
+    };
+
+    update_shell_snapshot(app, |shell| {
+        shell.status_text = message.clone();
+        shell.transition_count += 1;
+    })?;
+
+    Ok(MinedLinesResult {
+        status: status.into(),
+        message,
+        added,
+        failed,
+        lines: outcomes,
         bootstrap: build_app_bootstrap(app)?,
     })
 }

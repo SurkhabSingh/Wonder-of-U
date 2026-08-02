@@ -10,7 +10,9 @@ import type {
   AppBootstrap,
   AppSettings,
   BusyAction,
+  KnownWordsSnapshot,
   SettingsSection,
+  VocabularySuggestions,
   WhisperAssetUpdateResult,
 } from "../types";
 
@@ -115,6 +117,70 @@ export function useSetupActions({
       setBusyAction(null);
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+
+  const downloadRecommendedDictionary = useCallback(async () => {
+    try {
+      setBusyAction("downloadDictionary");
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_recommended_dictionary",
+      );
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("studyPicks");
+    } catch (error) {
+      setLoadError(
+        errorMessage(error, "The Japanese dictionary could not be prepared."),
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+
+  /**
+   * Reads the collection and rebuilds the known-word list.
+   *
+   * The snapshot the command returns is discarded on purpose: it also emits an
+   * app snapshot, and taking the result here as well would mean two paths writing
+   * the same status, which is how the count in the header and the count in the
+   * card end up disagreeing.
+   */
+  const refreshKnownWords = useCallback(async () => {
+    try {
+      setBusyAction("refreshKnownWords");
+      // Settings first: the refresh reads the sources and threshold from the
+      // SAVED settings, so an unsaved edit would otherwise rebuild the old list
+      // and look like the change did nothing.
+      await persistSettingsIfNeeded();
+      await invoke<KnownWordsSnapshot>("refresh_known_words");
+    } catch (error) {
+      setLoadError(
+        errorMessage(error, "Your known-word list could not be rebuilt."),
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }, [persistSettingsIfNeeded, setBusyAction, setLoadError]);
+
+  /**
+   * Looks through the collection for note types that hold vocabulary.
+   *
+   * Returns the suggestions rather than applying them. Writing them straight into
+   * settings would be the one thing this feature must not do: a wrong field fails
+   * silently, so the user has to see the samples and choose.
+   */
+  const scanVocabularySources =
+    useCallback(async (): Promise<VocabularySuggestions | null> => {
+      try {
+        setBusyAction("scanVocabulary");
+        return await invoke<VocabularySuggestions>("scan_vocabulary_sources");
+      } catch (error) {
+        setLoadError(
+          errorMessage(error, "Your Anki collection could not be searched."),
+        );
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    }, [setBusyAction, setLoadError]);
 
   const checkYtdlpUpdate = useCallback(async () => {
     try {
@@ -299,7 +365,10 @@ export function useSetupActions({
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
+    downloadRecommendedDictionary,
     downloadRuntimeVersion,
+    refreshKnownWords,
+    scanVocabularySources,
     toggleDownloadPause,
     updateAnkiField,
   };

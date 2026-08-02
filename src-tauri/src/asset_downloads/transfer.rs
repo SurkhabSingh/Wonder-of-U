@@ -494,3 +494,57 @@ mod tests {
         assert!(found.is_none());
     }
 }
+
+/// Removes a half-installed directory unless the install got as far as verifying.
+///
+/// Extraction writes an archive's entries in order, so an interrupted one leaves a
+/// directory that is real but incomplete — and the lindera archive happens to write
+/// its small `metadata.json` long before its 32MB `dict.words`, which is precisely
+/// the file detection keys on. Without this, a download that died mid-extract would
+/// be trusted as ready forever and fail on every use. Covers the cancel and
+/// mid-extract paths; `verify_managed_directory_or_remove` covers a complete
+/// install that still will not load.
+pub(super) struct PartialInstallGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl PartialInstallGuard {
+    pub(super) fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartialInstallGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Verifies a freshly installed managed directory, deleting it when it is not usable.
+///
+/// The binary sibling above cannot be reused for this: it removes with
+/// `fs::remove_file`, which fails on a directory and would leave a broken install
+/// exactly where detection trusts it. The removal is best-effort for the same
+/// reason as the binary sibling — it must never replace the verification error.
+pub(super) fn verify_managed_directory_or_remove<T, V>(
+    directory_path: &Path,
+    verify: V,
+) -> Result<T, String>
+where
+    V: FnOnce(&Path) -> Result<T, String>,
+{
+    match verify(directory_path) {
+        Ok(verified) => Ok(verified),
+        Err(error) => {
+            let _ = fs::remove_dir_all(directory_path);
+            Err(error)
+        }
+    }
+}

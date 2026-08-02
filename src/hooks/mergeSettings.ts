@@ -10,9 +10,11 @@ import type { DeepPartial } from "../types";
  * problem was that staying unbroken depended on reading the comment. Walking the
  * shape instead means a sixth group is merged correctly the day it is added.
  *
- * Only plain objects recurse. Settings hold nothing else — no arrays, no class
- * instances, no null — so anything that is not a plain object on both sides is a
- * value the update means to replace.
+ * Only plain objects recurse. Anything else — an array, a string, a number — is a
+ * value the update means to replace. That matters most for the array of vocabulary
+ * sources: merging it by index would make removing a row impossible, since the row
+ * being dropped would simply survive from the current value. `DeepPartial` marks
+ * arrays as leaves for the same reason, so the type says what this does.
  */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return (

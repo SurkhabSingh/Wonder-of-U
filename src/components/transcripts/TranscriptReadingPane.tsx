@@ -1,5 +1,10 @@
 import type { ActiveSegment } from "../../hooks/useAudioPlayer";
-import type { RecordingSegment, RecordingTextDocument } from "../../types";
+import { isWithinReach } from "../../hooks/useSentenceRanking";
+import type {
+  RecordingSegment,
+  RecordingTextDocument,
+  TranscriptRanking,
+} from "../../types";
 import { TranscriptSegmentRow } from "./TranscriptSegmentRow";
 import { splitTranscriptSegments } from "./transcriptText";
 
@@ -15,7 +20,7 @@ type ReadingRow = {
 // copy of the timed segments (merge/split) instead of the document's own. When
 // absent or empty, rows fall back to the document's segments, then to untimed
 // lines split from the plain text.
-function buildRows(
+export function buildRows(
   document: RecordingTextDocument,
   segmentsOverride: RecordingSegment[] | undefined,
 ): ReadingRow[] {
@@ -64,6 +69,10 @@ export function TranscriptReadingPane({
   miningKey = null,
   isMining = false,
   mineDisabledReason = null,
+  ranking = null,
+  withinReachOnly = false,
+  mineFailures,
+  activeMatch = null,
 }: {
   paneKey: string;
   kicker: string;
@@ -109,8 +118,30 @@ export function TranscriptReadingPane({
   isMining?: boolean;
   // Non-null when Anki isn't usable; becomes the disabled Mine button's tooltip.
   mineDisabledReason?: string | null;
+  // How new each line is. Built from the same `buildRows` call the viewer makes, so
+  // entry N describes row N; null when nothing has ranked this pane.
+  ranking?: TranscriptRanking | null;
+  // Narrows the pane to the lines a single word away. Rows are hidden, never
+  // reordered — the order IS the recording, and reading along while listening
+  // depends on it.
+  withinReachOnly?: boolean;
+  // Why a batch mine could not make a card of a row, keyed the same way mined rows
+  // are. Keyed rather than indexed so a merge or split drops the marker with the
+  // sentence it belonged to instead of moving it onto a neighbour.
+  mineFailures?: Map<string, string>;
+  // The match being stepped to, when it is in THIS pane. The viewer owns the
+  // ordered list of matches across both panes; a pane only needs to know whether
+  // one of its own rows is the current one.
+  activeMatch?: { index: number; occurrence: number } | null;
 }) {
   const rows = document ? buildRows(document, segmentsOverride) : [];
+  const hiddenByFilter =
+    withinReachOnly && ranking
+      ? rows.filter((_, index) => {
+          const line = ranking.lines[index];
+          return !line || !isWithinReach(line);
+        }).length
+      : 0;
 
   return (
     <section className={`transcript-pane ${isCjk ? "is-cjk" : ""}`}>
@@ -128,8 +159,22 @@ export function TranscriptReadingPane({
           <p className="transcript-pane-missing">{missingLabel}</p>
         ) : rows.length === 0 ? (
           <p className="transcript-pane-empty">{noSpeechLabel}</p>
+        ) : hiddenByFilter === rows.length ? (
+          <p className="transcript-pane-empty">
+            No line here is a single word away. Turn the filter off to read the
+            whole transcript.
+          </p>
         ) : (
           rows.map((row, index) => {
+            // Filtered rows are skipped rather than removed from the list, so
+            // `index` stays the index the sidecar, the mine action and the paired
+            // pane all agree on.
+            if (withinReachOnly && ranking) {
+              const line = ranking.lines[index];
+              if (!line || !isWithinReach(line)) {
+                return null;
+              }
+            }
             const key = `${paneKey}-${index}`;
             const timed = row.startMs !== null && row.endMs !== null;
             const playing =
@@ -190,6 +235,13 @@ export function TranscriptReadingPane({
                     : undefined
                 }
                 canSplit={row.text.length >= 2}
+                ranking={ranking?.lines[index] ?? null}
+                mineFailure={
+                  mineKey !== null ? (mineFailures?.get(mineKey) ?? null) : null
+                }
+                activeMatchOccurrence={
+                  activeMatch?.index === index ? activeMatch.occurrence : null
+                }
               />
             );
           })

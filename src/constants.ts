@@ -344,8 +344,11 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         position: "",
         image: "",
         video: "",
+        definition: "",
       },
       clipPaddingMs: 250,
+      vocabularySources: [],
+      knownWordIntervalDays: 21,
     },
     features: {
       transcription: true,
@@ -353,6 +356,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       allowMp3Conversion: false,
       autoAddFuriganaAfterAnkiPush: false,
       translateAfterTranscription: false,
+      addDefinitionsToMinedCards: false,
     },
     translation: {
       provider: "google-translate",
@@ -418,6 +422,19 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     totalBytes: null,
     progressPercent: null,
     targetPath: null,
+  },
+  dictionaryDetection: {
+    status: "notFound",
+    dictionaryPath: null,
+    managed: false,
+    message:
+      "Install the Japanese dictionary to analyse transcript sentences word by word.",
+  },
+  knownWords: {
+    status: "unconfigured",
+    message: "Add a vocabulary note type and field to build the list.",
+    wordCount: 0,
+    builtAtMs: null,
   },
   logPath: "",
 };

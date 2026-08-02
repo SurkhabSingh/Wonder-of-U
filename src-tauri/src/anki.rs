@@ -1,3 +1,8 @@
+mod known_words_store;
+mod definitions;
+mod sentence_ranking;
+mod vocabulary_scan;
+mod known_words;
 mod catalog;
 mod clip;
 mod client;
@@ -15,10 +20,15 @@ pub(crate) mod screenshot;
 
 pub(crate) use self::{
     catalog::load_anki_catalog_inner,
+    known_words::refresh_known_words_inner,
+    sentence_ranking::rank_transcript_lines_inner,
+    vocabulary_scan::scan_vocabulary_sources_inner,
+    known_words_store::{known_words_snapshot_from_state, restore_known_words_index},
     furigana_update::add_furigana_to_anki_inner,
     lookup::{lookup_term_inner, LookupResult},
     mine::{
-        hide_command_window, mine_segment_to_anki_inner, mine_watched_line_inner,
+        hide_command_window, mine_segment_to_anki_inner, mine_segments_to_anki_inner,
+        mine_watched_line_inner,
         slice_ffmpeg_args, ClipPadding,
     },
     mined::load_mined_sentences_inner,

@@ -1,5 +1,7 @@
 import { useState, type MouseEvent } from "react";
 import { formatDuration } from "../../lib/format";
+import type { LineRanking } from "../../types";
+import { isWithinReach } from "../../hooks/useSentenceRanking";
 import { ScannableText } from "../scanner/ScannableText";
 import { highlightMatches } from "./transcriptText";
 
@@ -27,6 +29,9 @@ export function TranscriptSegmentRow({
   canMerge = false,
   onSplit,
   canSplit = false,
+  ranking = null,
+  mineFailure = null,
+  activeMatchOccurrence = null,
 }: {
   segmentKey: string;
   text: string;
@@ -63,6 +68,16 @@ export function TranscriptSegmentRow({
   canMerge?: boolean;
   onSplit?: () => void;
   canSplit?: boolean;
+  // How many words in this line are still new. Null when nothing has ranked it —
+  // no vocabulary sources, no dictionary, no list built yet — in which case the row
+  // simply carries no badge.
+  ranking?: LineRanking | null;
+  // Why a batch mine could not make a card of this line. Shown on the row itself,
+  // because "3 of 35 failed" is only actionable next to the three.
+  mineFailure?: string | null;
+  // Which occurrence of the search term in this line is the one being stepped to,
+  // or null when the active match is elsewhere.
+  activeMatchOccurrence?: number | null;
 }) {
   const [copied, setCopied] = useState(false);
   const hasTiming = startMs !== null && endMs !== null;
@@ -100,6 +115,9 @@ export function TranscriptSegmentRow({
       onMouseEnter={onActivate}
       onMouseLeave={onDeactivate}
     >
+      {/* The badge sits in the gutter beside the timestamp rather than in the
+          aside, so a column of them can be read straight down while scrolling —
+          which is how you find the lines worth mining. */}
       <span
         className={`transcript-segment-gutter ${hasTiming ? "has-timing" : ""}`}
       >
@@ -122,13 +140,35 @@ export function TranscriptSegmentRow({
             {formatDuration(startMs)}
           </span>
         ) : null}
+        {ranking && ranking.contentWordCount > 0 ? (
+          <span
+            className={`transcript-segment-newness ${
+              isWithinReach(ranking)
+                ? "is-within-reach"
+                : ranking.unknownWords.length === 0
+                  ? "is-known"
+                  : ""
+            }`}
+            // The words themselves, not just how many. On a line one word away,
+            // that word is the entire reason to mine it.
+            title={
+              ranking.unknownWords.length === 0
+                ? "You know every word in this line."
+                : `New here: ${ranking.unknownWords.join("、")}`
+            }
+          >
+            {ranking.unknownWords.length === 0
+              ? "✓"
+              : `+${ranking.unknownWords.length}`}
+          </span>
+        ) : null}
       </span>
       {/* Every transcript line is scannable: the dictionary popup is app-wide, so a word
           can be looked up wherever it is read, not only on the watch page. Search
           highlighting is unaffected — the scanner reads text nodes, not elements. */}
       <p className="transcript-segment-body">
         <ScannableText ownerKey={`row:${segmentKey}`}>
-          {highlightMatches(text, query)}
+          {highlightMatches(text, query, activeMatchOccurrence)}
         </ScannableText>
       </p>
       <div className="transcript-segment-aside">
@@ -191,6 +231,14 @@ export function TranscriptSegmentRow({
                   >
                     <span aria-hidden="true">✓</span>{" "}
                     {mined ? "Mined" : "In deck"}
+                  </span>
+                ) : null}
+                {mineFailure ? (
+                  <span
+                    className="transcript-segment-mined is-failed"
+                    title={mineFailure}
+                  >
+                    <span aria-hidden="true">!</span> Failed
                   </span>
                 ) : null}
                 {mined ? null : (

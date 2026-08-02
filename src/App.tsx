@@ -563,6 +563,9 @@ function App() {
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
+    downloadRecommendedDictionary,
+    refreshKnownWords,
+    scanVocabularySources,
     downloadRuntimeVersion,
     toggleDownloadPause,
     updateAnkiField,
@@ -1084,6 +1087,7 @@ function App() {
                 recording={viewingRecording}
                 transcriptionLanguage={settingsDraft.whisper.language}
                 clipPaddingMs={settingsDraft.anki.clipPaddingMs}
+          knownWordsBuiltAtMs={bootstrap.knownWords.builtAtMs}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
                   enqueueTranscriptions([viewingRecording.filePath], force)
@@ -1228,6 +1232,9 @@ function App() {
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onDownloadRecommendedAlass={downloadRecommendedAlass}
+            onDownloadRecommendedDictionary={downloadRecommendedDictionary}
+            onRefreshKnownWords={refreshKnownWords}
+            onScanVocabularySources={scanVocabularySources}
             onCheckYtdlpUpdate={checkYtdlpUpdate}
             onToggleDownloadPause={toggleDownloadPause}
             onCancelDownload={cancelDownload}
