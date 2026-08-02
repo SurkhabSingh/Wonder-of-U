@@ -379,8 +379,18 @@ export function AnkiMappingSettingsPage({
           When a mined line contains a word you haven&rsquo;t learned, its meaning is
           looked up and written to the definitions field above. Needs Anki open and
           your vocabulary set up under Study Picks. If a meaning can&rsquo;t be found
-          the card is still made, just without it.
+          the card is still made, just without it &mdash; and the mine says so.
         </p>
+        {/* A toggle with nowhere to write is a toggle that does nothing, and from the
+            outside that is indistinguishable from a broken feature. Say it here rather
+            than letting every mined card be the thing that reports it. */}
+        {settingsDraft.features.addDefinitionsToMinedCards &&
+        !settingsDraft.anki.fields.definition ? (
+          <p className="microcopy field-warning">
+            Map the definitions field above for this to have anywhere to write. On the
+            app&rsquo;s own note type, &ldquo;Create or update&rdquo; adds it.
+          </p>
+        ) : null}
       </div>
 
       <div className="info-note">

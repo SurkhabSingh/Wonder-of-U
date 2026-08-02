@@ -299,10 +299,7 @@ fn known_words_build<R: Runtime>(app: &AppHandle<R>) -> Result<KnownWordsBuild, 
         .0
         .lock()
         .map_err(|_| "Could not read the Anki settings.".to_string())?;
-    Ok(KnownWordsBuild {
-        sources: persisted.settings.anki.vocabulary_sources.clone(),
-        mature_after_days: persisted.settings.anki.known_word_interval_days,
-    })
+    Ok(KnownWordsBuild::from_anki_settings(&persisted.settings.anki))
 }
 
 /// Describes the index as it stands now, whatever this refresh did to it.

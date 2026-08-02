@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
     app_types::{
-        KnownWordsState, LineRanking, SharedPersistedState, TranscriptRanking,
+        KnownWordsBuild, KnownWordsState, LineRanking, SharedPersistedState, TranscriptRanking,
     },
     runtime_assets::find_managed_dictionary_root,
     tokenizer::{tokenize_japanese, JapaneseToken},
@@ -174,7 +174,11 @@ pub(crate) fn rank_transcript_lines_inner<R: Runtime>(
             .map_err(|_| "Could not read the app settings.".to_string())?;
         (
             persisted.settings.asset_directory.clone(),
-            !persisted.settings.anki.vocabulary_sources.is_empty(),
+            // Through the one constructor, so a half-filled row in settings does not
+            // read as "configured" and promise a ranking that cannot be built.
+            !KnownWordsBuild::from_anki_settings(&persisted.settings.anki)
+                .sources
+                .is_empty(),
         )
     };
 

@@ -92,10 +92,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
     // answer end up describing different moments.
     let known_words = known_words_snapshot_from_state(
         app,
-        &KnownWordsBuild {
-            sources: persisted.settings.anki.vocabulary_sources.clone(),
-            mature_after_days: persisted.settings.anki.known_word_interval_days,
-        },
+        &KnownWordsBuild::from_anki_settings(&persisted.settings.anki),
     );
     let log_path = app
         .state::<AppPathsState>()

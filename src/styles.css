@@ -1474,6 +1474,53 @@ input::placeholder {
   background: var(--warning-soft);
 }
 
+/* A labelled block inside a settings section, with its action on the same line as
+   its label — the shape `.panel-header` uses, so a block reads as a section rather
+   than as a stray control above a list. */
+/* A setting that is switched on but cannot act — usually because the field it
+   writes to is unmapped. Warning-coloured rather than error: nothing is broken,
+   something is unfinished. */
+.microcopy.field-warning {
+  margin-top: var(--space-3);
+  color: var(--warning);
+}
+
+.settings-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+/* One vocabulary source: note type, the field on it, and Remove — on ONE line.
+ *
+ * These used to be a `.settings-grid.anki-grid` each, which was the bug: that grid
+ * makes its first two `.field`s span both columns, so every source became two
+ * full-width rows plus a third for the button. Three sources filled the section.
+ *
+ * `align-items: end` puts Remove level with the selects rather than with their
+ * labels; both are 36px, so the row reads as one control. */
+.vocabulary-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.vocabulary-source-remove {
+  white-space: nowrap;
+}
+
+/* Narrow windows cannot fit two selects and a button side by side; stack the
+   selects and let Remove sit under them rather than squeezing all three. */
+@media (max-width: 720px) {
+  .vocabulary-source-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* One proposed vocabulary source. The samples are the point of the row — they are
    what tells a deck of words from a deck of kanji — so they get the width, and the
    button is sized to its label rather than stretching. */

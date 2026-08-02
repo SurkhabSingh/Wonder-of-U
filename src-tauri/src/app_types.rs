@@ -1289,6 +1289,26 @@ pub(crate) struct KnownWordsBuild {
 }
 
 impl KnownWordsBuild {
+    /// The build the index should be made from, out of whatever is in settings.
+    ///
+    /// **The only way to make one from settings**, because it is where half-filled
+    /// rows are dropped. Settings keep a row the moment it is added so it can be
+    /// filled in; a row still missing a half cannot be queried and must not reach
+    /// the index, the scan, or the staleness check. Doing that filtering in the
+    /// normalizer deleted the row out from under the user mid-edit; doing it at each
+    /// point of use was four chances to forget.
+    pub(crate) fn from_anki_settings(anki: &AnkiSettings) -> Self {
+        Self {
+            sources: anki
+                .vocabulary_sources
+                .iter()
+                .filter(|source| !source.note_type.is_empty() && !source.field.is_empty())
+                .cloned()
+                .collect(),
+            mature_after_days: anki.known_word_interval_days,
+        }
+    }
+
     /// Whether an index built under `self` still answers for `other`.
     ///
     /// Sources compare as a multiset: reordering the rows in settings is not a

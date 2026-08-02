@@ -213,10 +213,7 @@ fn current_build<R: Runtime>(app: &AppHandle<R>) -> KnownWordsBuild {
     app.state::<SharedPersistedState>()
         .0
         .lock()
-        .map(|persisted| KnownWordsBuild {
-            sources: persisted.settings.anki.vocabulary_sources.clone(),
-            mature_after_days: persisted.settings.anki.known_word_interval_days,
-        })
+        .map(|persisted| KnownWordsBuild::from_anki_settings(&persisted.settings.anki))
         .unwrap_or_default()
 }
 

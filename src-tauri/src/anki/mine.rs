@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use super::{
     clip::capture_clip,
-    definitions::definitions_html,
+    definitions::{definitions_for, Definitions},
     client::{anki_connect_health_check, anki_connect_request, anki_offline_message},
     fields::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
@@ -623,16 +623,28 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
     // can be lost when a note type changes, and writing to a field that no longer
     // exists is how a whole card gets rejected.
     //
-    // Deliberately has no error branch, unlike furigana above. Furigana that was
-    // asked for and did not arrive changes the card the user expected; a definition
-    // that could not be fetched leaves a card that is exactly what mining has always
-    // made. `definitions_html` answers None for every failure for that reason.
-    if settings.features.add_definitions_to_mined_cards && !anki.fields.definition.is_empty() {
-        if let Some(html) = definitions_html(app, trimmed_text) {
-            fields.insert(
-                anki.fields.definition.clone(),
-                serde_json::Value::String(html),
-            );
+    // Reported when it was asked for and did not arrive, exactly as furigana is. The
+    // first version stayed silent on the reasoning that a card without a definition
+    // is still the card mining has always made — which was wrong: the toggle IS the
+    // request, and a card missing what it promised is indistinguishable from a
+    // toggle that does nothing at all.
+    let mut definition_problem = None;
+    if settings.features.add_definitions_to_mined_cards {
+        if anki.fields.definition.is_empty() {
+            // The toggle is on and there is nowhere to put the answer. Said out loud,
+            // because from the outside this looks exactly like the feature not working.
+            definition_problem = Some("no Anki field is mapped for them".to_string());
+        } else {
+            match definitions_for(app, trimmed_text) {
+                Definitions::Ready(html) => {
+                    fields.insert(
+                        anki.fields.definition.clone(),
+                        serde_json::Value::String(html),
+                    );
+                }
+                Definitions::Unavailable(reason) => definition_problem = Some(reason),
+                Definitions::NothingToAdd => {}
+            }
         }
     }
 
@@ -710,6 +722,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
                     screenshot_problem.map(|problem| format!("a screenshot ({problem})")),
                     video_problem.map(|problem| format!("a video clip ({problem})")),
                     furigana_problem.map(|problem| format!("furigana ({problem})")),
+                    definition_problem.map(|problem| format!("definitions ({problem})")),
                 ]
                 .into_iter()
                 .flatten()

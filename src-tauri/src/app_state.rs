@@ -139,9 +139,13 @@ pub(crate) fn normalize_settings<R: Runtime>(
             // Clamp the mined-clip padding to a sane ceiling so a hand-edited value can't
             // produce a clip that swallows the neighbouring sentences.
             clip_padding_ms: settings.anki.clip_padding_ms.min(2000),
-            // A row is only a source once BOTH halves are filled. A half-filled row cannot
-            // be queried, and keeping it would mean the index silently answering for fewer
-            // decks than the settings appear to list.
+            // Trimmed, and otherwise kept exactly as typed — INCLUDING half-filled
+            // rows. This used to drop them, on the reasoning that a row missing a
+            // half cannot be queried. True, but settings are also the thing the user
+            // is in the middle of editing: adding a source starts as an empty row,
+            // the autosave lands about a second later, and the row the user was
+            // filling in vanished under them. Which rows are usable is decided where
+            // they are USED, by `KnownWordsBuild::from_anki_settings`.
             vocabulary_sources: settings
                 .anki
                 .vocabulary_sources
@@ -150,7 +154,6 @@ pub(crate) fn normalize_settings<R: Runtime>(
                     note_type: source.note_type.trim().to_string(),
                     field: source.field.trim().to_string(),
                 })
-                .filter(|source| !source.note_type.is_empty() && !source.field.is_empty())
                 .collect(),
             // Zero would make every word ever added "known"; the ceiling stops a hand-edited
             // value from making the index permanently empty.

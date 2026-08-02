@@ -221,26 +221,60 @@ const MEDIA_CSS: &str = r#"
 
 const MEDIA_CSS_MARKER: &str = ".wu-video video";
 
-/// Adds the media blocks a back template is missing, leaving everything else alone.
-///
-/// Inserted directly after the card's opening tag when there is one, so the picture or clip
-/// leads the answer the way the app's own template does; otherwise prepended. A template
-/// that already mentions the field is untouched, which is what makes this idempotent and
-/// what keeps a hand-arranged layout hand-arranged.
-fn ensure_media_blocks(back_html: &str) -> String {
-    const BLOCKS: [(&str, &str); 2] = [
-        (
-            "{{Video}}",
-            "  {{#Video}}<div class=\"wu-video\">{{Video}}</div>{{/Video}}",
-        ),
-        (
-            "{{Image}}",
-            "  {{#Image}}<div class=\"wu-image\">{{Image}}</div>{{/Image}}",
-        ),
-    ];
+/// Styling for the definitions block, for note types that predate it. Kept in step
+/// with the `.wu-definition-field` rules in `CARD_CSS`.
+const DEFINITION_CSS: &str = r#"
+.wu-definition-field { margin: 16px auto 0; max-width: 32em; text-align: left; font-size: 0.95em; line-height: 1.55; }
+.wu-definition-field ul { margin: 4px 0 0; padding-left: 1.2em; }
+.wu-definition-field li { margin-bottom: 4px; }
+.wu-definition-field .wu-dict, .wu-definition-field .wou-dict { color: var(--wu-muted); font-size: 0.88em; }"#;
 
-    let mut html = back_html.to_string();
-    for (reference, block) in BLOCKS {
+const DEFINITION_CSS_MARKER: &str = ".wu-definition-field ul";
+
+/// Blocks that lead the answer: the picture or the clip, the way the app's own
+/// template arranges them.
+const LEADING_BACK_BLOCKS: [(&str, &str); 2] = [
+    (
+        "{{Video}}",
+        "  {{#Video}}<div class=\"wu-video\">{{Video}}</div>{{/Video}}",
+    ),
+    (
+        "{{Image}}",
+        "  {{#Image}}<div class=\"wu-image\">{{Image}}</div>{{/Image}}",
+    ),
+];
+
+/// Blocks that follow the answer. Definitions explain the sentence, so they belong
+/// after it — led with, they would sit above the line they are about.
+const TRAILING_BACK_BLOCKS: [(&str, &str); 1] = [(
+    "{{Definition}}",
+    "  {{#Definition}}<div class=\"wu-definition-field\">{{Definition}}</div>{{/Definition}}\n",
+)];
+
+/// Adds the blocks a back template is missing, leaving everything else alone.
+///
+/// **Adding a field is only half of updating a note type.** `modelFieldAdd` gives an
+/// existing note type somewhere to put the data and AnkiConnect then accepts the
+/// write without complaint — but a field no template renders shows nothing, so the
+/// card looks exactly as it did and the feature reads as doing nothing at all. That
+/// is precisely what happened when `Definition` was added: existing note types took
+/// the data and displayed none of it, while newly created ones were fine, because
+/// only `BACK_TEMPLATE` had learned about the field.
+///
+/// So every field the miner writes needs an entry in one of the two lists above,
+/// and `every_field_the_miner_writes_has_a_block` refuses to let a new one be added
+/// without one.
+///
+/// A template that already mentions the field is untouched, which is what makes this
+/// idempotent and what keeps a hand-arranged layout hand-arranged.
+///
+/// `is_answer_side` is not decoration. The media blocks belong on both sides — the
+/// clip is context, not the answer — but the definitions ARE the answer, and the
+/// first version of this patched every side it was given and put them on the front.
+fn ensure_template_blocks(template_html: &str, is_answer_side: bool) -> String {
+    let mut html = template_html.to_string();
+
+    for (reference, block) in LEADING_BACK_BLOCKS {
         if html.contains(reference) {
             continue;
         }
@@ -253,6 +287,23 @@ fn ensure_media_blocks(back_html: &str) -> String {
             _ => html.insert_str(0, &format!("{block}\n")),
         }
     }
+
+    for (reference, block) in TRAILING_BACK_BLOCKS {
+        if !is_answer_side || html.contains(reference) {
+            continue;
+        }
+        // Before the wrapper's own closing tag, for the same reason the leading
+        // blocks go after its opening one: outside it the block escapes whatever
+        // layout and styling the card's container provides.
+        match html.rfind("</") {
+            Some(position) => html.insert_str(position, block),
+            None => {
+                html.push('\n');
+                html.push_str(block.trim_end());
+            }
+        }
+    }
+
     html
 }
 
@@ -307,7 +358,11 @@ fn update_existing_note_type() -> Result<(), String> {
             };
             let mut next = serde_json::Map::new();
             for (side, html) in sides {
-                let _ = side;
+                // AnkiConnect names the sides "Front" and "Back". Only the back may
+                // receive the definitions block, and an unrecognised side name is
+                // treated as the front — adding the answer to a side we cannot
+                // identify is the failure worth avoiding.
+                let is_answer_side = side.eq_ignore_ascii_case("back");
                 let html = html.as_str().unwrap_or_default();
                 // Only an unfiltered {{Sentence}} needs rewriting; a template already
                 // using the filter (or a hand-edited one) is left exactly as it is.
@@ -317,7 +372,7 @@ fn update_existing_note_type() -> Result<(), String> {
                 // anything they do not already mention: the front is where the clip and the
                 // still belong, and the back keeps them so they can be replayed while
                 // reading the sentence.
-                updated = ensure_media_blocks(&updated);
+                updated = ensure_template_blocks(&updated, is_answer_side);
                 next.insert(side.clone(), serde_json::Value::String(updated));
             }
             patched.insert(name.clone(), serde_json::Value::Object(next));
@@ -352,6 +407,10 @@ fn update_existing_note_type() -> Result<(), String> {
     if !merged.contains(MEDIA_CSS_MARKER) {
         merged.push('\n');
         merged.push_str(MEDIA_CSS);
+    }
+    if !merged.contains(DEFINITION_CSS_MARKER) {
+        merged.push('\n');
+        merged.push_str(DEFINITION_CSS);
     }
     if merged != current_css {
         anki_connect_request(
@@ -398,7 +457,18 @@ pub(crate) fn create_recommended_note_type_inner() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_media_blocks, BACK_TEMPLATE, FIELD_NAMES, FRONT_TEMPLATE};
+    use super::{
+        ensure_template_blocks, BACK_TEMPLATE, FIELD_NAMES, FRONT_TEMPLATE, LEADING_BACK_BLOCKS,
+        TRAILING_BACK_BLOCKS,
+    };
+
+    /// The updater runs over both sides, so every helper here has to say which.
+    fn patch_front(html: &str) -> String {
+        ensure_template_blocks(html, false)
+    }
+    fn patch_back(html: &str) -> String {
+        ensure_template_blocks(html, true)
+    }
 
     #[test]
     fn the_front_shows_the_media_and_never_the_answer() {
@@ -418,14 +488,14 @@ mod tests {
     #[test]
     fn the_apps_own_front_template_is_left_alone() {
         // The updater runs over both sides now, so the front has to be a no-op too.
-        assert_eq!(ensure_media_blocks(FRONT_TEMPLATE), FRONT_TEMPLATE);
+        assert_eq!(patch_front(FRONT_TEMPLATE), FRONT_TEMPLATE);
     }
 
     #[test]
     fn the_apps_own_back_template_is_left_alone() {
         // It already renders both, so re-running the updater must be a no-op — otherwise
         // pressing "Create or update" twice would stack duplicate blocks.
-        assert_eq!(ensure_media_blocks(BACK_TEMPLATE), BACK_TEMPLATE);
+        assert_eq!(patch_back(BACK_TEMPLATE), BACK_TEMPLATE);
     }
 
     #[test]
@@ -433,7 +503,7 @@ mod tests {
         // Exactly the shape shipped before Image existed: the field list and the template
         // both stop at audio and sentence.
         let old = "<div class=\"wu-card wu-back\">\n  {{Audio}}\n  {{Sentence}}\n</div>";
-        let updated = ensure_media_blocks(old);
+        let updated = patch_back(old);
         assert!(updated.contains("{{#Video}}"));
         assert!(updated.contains("{{#Image}}"));
         // Everything that was there stays there.
@@ -444,7 +514,7 @@ mod tests {
     #[test]
     fn blocks_land_inside_the_cards_own_wrapper_not_before_it() {
         let old = "<div class=\"wu-card wu-back\">\n  {{Audio}}\n</div>";
-        let updated = ensure_media_blocks(old);
+        let updated = patch_back(old);
         assert!(
             updated.starts_with("<div class=\"wu-card wu-back\">"),
             "the wrapper must still open the template: {updated}"
@@ -454,7 +524,7 @@ mod tests {
     #[test]
     fn a_template_that_already_shows_one_only_gains_the_other() {
         let half = "<div>\n  {{#Image}}{{Image}}{{/Image}}\n  {{Audio}}\n</div>";
-        let updated = ensure_media_blocks(half);
+        let updated = patch_back(half);
         assert_eq!(
             updated.matches("{{Image}}").count(),
             half.matches("{{Image}}").count(),
@@ -465,10 +535,65 @@ mod tests {
 
     #[test]
     fn a_template_with_no_markup_at_all_still_gets_the_blocks() {
-        let updated = ensure_media_blocks("{{Audio}}");
+        let updated = patch_back("{{Audio}}");
         assert!(updated.contains("{{#Video}}"));
         assert!(updated.contains("{{#Image}}"));
         assert!(updated.contains("{{Audio}}"));
+    }
+
+
+    /// The bug this whole split exists for.
+    ///
+    /// A note type created before `Definition` existed gets the FIELD from
+    /// `modelFieldAdd`, AnkiConnect then accepts the write without complaint, and
+    /// the card shows nothing — because only `BACK_TEMPLATE` had learned about the
+    /// field and an existing template never did. It reads as the feature doing
+    /// nothing at all, which is exactly how it was reported.
+    #[test]
+    fn a_template_predating_the_definition_field_gains_its_block() {
+        let old = "<div class=\"wu-card wu-back\">
+  {{Audio}}
+  {{Sentence}}
+</div>";
+        let updated = patch_back(old);
+        assert!(updated.contains("{{#Definition}}"), "{updated}");
+        assert!(updated.contains("{{Definition}}"), "{updated}");
+        // After the sentence it explains, not above it.
+        assert!(
+            updated.find("{{Sentence}}") < updated.find("{{#Definition}}"),
+            "{updated}"
+        );
+        // And still inside the card's own wrapper.
+        assert!(updated.trim_end().ends_with("</div>"), "{updated}");
+    }
+
+    /// The definitions ARE the answer. The first version of this patcher ran over
+    /// every side it was handed and put them on the front.
+    #[test]
+    fn the_front_never_gains_the_definitions_block() {
+        let old = "<div class=\"wu-card wu-front\">
+  {{Audio}}
+</div>";
+        let updated = patch_front(old);
+        assert!(!updated.contains("{{Definition}}"), "{updated}");
+        // The media blocks are context, not the answer, so those still apply.
+        assert!(updated.contains("{{#Video}}"), "{updated}");
+    }
+
+    /// Adding a field to `FIELD_NAMES` is only half of it. Without a block, an
+    /// existing note type silently swallows whatever the miner writes there.
+    #[test]
+    fn every_field_the_miner_writes_has_a_block() {
+        for field in ["Image", "Video", "Definition"] {
+            let reference = format!("{{{{{field}}}}}");
+            assert!(
+                LEADING_BACK_BLOCKS
+                    .iter()
+                    .chain(TRAILING_BACK_BLOCKS.iter())
+                    .any(|(marker, _)| *marker == reference),
+                "{field} is written by the miner but no template block renders it"
+            );
+        }
     }
 
     #[test]

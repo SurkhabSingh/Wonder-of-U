@@ -16,7 +16,8 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
     app_types::{
-        SharedPersistedState, VocabularySource, VocabularySuggestion, VocabularySuggestions,
+        KnownWordsBuild, SharedPersistedState, VocabularySource, VocabularySuggestion,
+        VocabularySuggestions,
     },
     runtime_assets::find_managed_dictionary_root,
     tokenizer::tokenize_japanese,
@@ -308,10 +309,11 @@ fn scan_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(u32, String, Vec<Voc
         .0
         .lock()
         .map_err(|_| "Could not read the Anki settings.".to_string())?;
+    let build = KnownWordsBuild::from_anki_settings(&persisted.settings.anki);
     Ok((
-        persisted.settings.anki.known_word_interval_days,
+        build.mature_after_days,
         persisted.settings.asset_directory.clone(),
-        persisted.settings.anki.vocabulary_sources.clone(),
+        build.sources,
     ))
 }
 

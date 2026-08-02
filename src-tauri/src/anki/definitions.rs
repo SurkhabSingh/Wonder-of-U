@@ -16,6 +16,7 @@ use tauri::{AppHandle, Runtime};
 use crate::app_runtime::now_ms;
 
 use super::{
+    known_words::normalize_expression,
     lookup::{lookup_term_inner, LookupEntry},
     sentence_ranking::line_unknown_words,
 };
@@ -29,6 +30,18 @@ const ENTRIES_PER_WORD: usize = 3;
 
 /// How many glosses to keep from one entry, for the same reason.
 const GLOSSES_PER_ENTRY: usize = 4;
+
+/// How many entries to ASK for. Higher than the cap on purpose: the add-on answers
+/// about every prefix of the word as well as the word itself, and those are filtered
+/// out afterwards — ask for only three and all three can be prefixes.
+const LOOKUP_LIMIT: u32 = 12;
+
+/// How much of one gloss to keep.
+///
+/// A monolingual dictionary hands back the whole article — 旺文社's entry for a
+/// common kanji runs to stroke order, compounds and several senses, newlines and
+/// all. Whole, it is a page; cut, it is the definition.
+const MAX_GLOSS_CHARS: usize = 220;
 
 /// How long to stop attempting lookups after one fails.
 ///
@@ -71,6 +84,35 @@ fn escape(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Flattens one gloss to a single line and cuts it to length.
+///
+/// Newlines first: the add-on joins a dictionary's senses with them, and left
+/// alone they collapse in HTML anyway, welding 「① 一個…」「② セット…」 into one
+/// run of text without even a space between.
+fn tidy_gloss(gloss: &str) -> String {
+    let flattened = gloss.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flattened.chars().count() <= MAX_GLOSS_CHARS {
+        return flattened;
+    }
+    let cut: String = flattened.chars().take(MAX_GLOSS_CHARS).collect();
+    format!("{cut}…")
+}
+
+/// Whether this entry is about the word asked for, rather than a piece of it.
+///
+/// The add-on is asked with every prefix of the word, because that is what the
+/// popup needs when someone clicks mid-sentence — so asking about カフェ answers
+/// with カフェ, then カフ, then カ, and asking about おすすめ answers with おすすめ,
+/// 雄【おす】 and 汚【お】. Taking the top three verbatim put two wrong words on
+/// every card.
+///
+/// Matched on the reading as well as the headword, because a kana word's entry is
+/// filed under its kanji: asking for わかる answers with 分かる【わかる】, which is
+/// the right entry under a different spelling.
+fn entry_is_about(entry: &LookupEntry, word: &str) -> bool {
+    normalize_expression(&entry.expression) == word || normalize_expression(&entry.reading) == word
+}
+
 /// Renders one word's entries as the card will show them.
 ///
 /// The reading rides with the headword rather than in its own column, because a
@@ -78,8 +120,11 @@ fn escape(value: &str) -> String {
 /// The dictionary's name is kept: with several installed, which one a gloss came
 /// from is part of judging it.
 fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
+    // Filtered BEFORE the cap, not after: the prefix answers arrive interleaved
+    // with the real ones, so capping first would spend the three slots on them.
     let rendered: Vec<String> = entries
         .iter()
+        .filter(|entry| entry_is_about(entry, word))
         .take(ENTRIES_PER_WORD)
         .filter_map(|entry| {
             let glosses: Vec<String> = entry
@@ -88,7 +133,7 @@ fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
                 .map(|gloss| gloss.trim())
                 .filter(|gloss| !gloss.is_empty())
                 .take(GLOSSES_PER_ENTRY)
-                .map(escape)
+                .map(|gloss| escape(&tidy_gloss(gloss)))
                 .collect();
             if glosses.is_empty() {
                 return None;
@@ -122,49 +167,81 @@ fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
     })
 }
 
+/// What a definitions attempt produced.
+///
+/// Three states, not two, because "there was nothing to add" and "it could not be
+/// fetched" are different things to tell the user. The first is an ordinary card;
+/// the second is a card missing something they switched on and expect to be there.
+pub(super) enum Definitions {
+    /// Nothing to write, and nothing wrong: no new words in the line, or the
+    /// feature is not set up far enough to know.
+    NothingToAdd,
+    Ready(String),
+    /// Asked for and not obtained.
+    Unavailable(String),
+}
+
 /// Looks up every word this line is meant to teach and renders them for the card.
 ///
-/// `None` whenever there is nothing worth writing — no new words, no dictionary,
-/// no add-on running. **Never an error**: a definition is something added to a
-/// card, and failing to add it must never be a reason the card is not made. That
-/// is the whole contract of this module.
-pub(super) fn definitions_html<R: Runtime>(app: &AppHandle<R>, line: &str) -> Option<String> {
-    if !lookups_are_worth_attempting() {
-        return None;
-    }
-
-    let words = line_unknown_words(app, line).ok()?;
+/// Never returns an error. A definition is something added to a card, and failing
+/// to add it must not be a reason the card is not made — but it IS a reason to say
+/// so, which is what `Unavailable` is for. The first version of this collapsed
+/// every outcome into `None`, and a card silently missing what the toggle promised
+/// is indistinguishable from a toggle that does nothing.
+pub(super) fn definitions_for<R: Runtime>(app: &AppHandle<R>, line: &str) -> Definitions {
+    let words = match line_unknown_words(app, line) {
+        Ok(words) => words,
+        Err(error) => return Definitions::Unavailable(error),
+    };
     if words.is_empty() {
-        return None;
+        return Definitions::NothingToAdd;
+    }
+    if !lookups_are_worth_attempting() {
+        return Definitions::Unavailable(
+            "the dictionary was not answering a moment ago".into(),
+        );
     }
 
     let mut sections = Vec::new();
+    let mut problem = None;
     for word in words {
-        match lookup_term_inner(word.clone(), 0, Some(ENTRIES_PER_WORD as u32)) {
-            Ok(result) if result.status == "ready" => {
+        match lookup_term_inner(word.clone(), 0, Some(LOOKUP_LIMIT)) {
+            Ok(result) if result.status == "ready" || result.status == "empty" => {
                 note_lookups_available();
                 if let Some(html) = entries_html(&word, &result.entries) {
                     sections.push(html);
                 }
             }
-            // `empty` is a working dictionary with nothing for this word — a real
-            // answer, and no reason to stop asking about the next one.
-            Ok(result) if result.status == "empty" => note_lookups_available(),
             // Anything else means the add-on did not answer. Stop for a while
             // rather than paying the timeout again on every remaining line.
-            _ => {
+            Ok(result) => {
                 note_lookups_unavailable();
+                problem = Some(result.message);
+                break;
+            }
+            Err(error) => {
+                note_lookups_unavailable();
+                problem = Some(error);
                 break;
             }
         }
     }
 
-    (!sections.is_empty()).then(|| sections.join(""))
+    match (sections.is_empty(), problem) {
+        (false, _) => Definitions::Ready(sections.join("")),
+        (true, Some(problem)) => Definitions::Unavailable(problem),
+        // Every word was asked about and the dictionary simply had nothing. Not a
+        // failure, and not worth telling anyone about.
+        (true, None) => Definitions::NothingToAdd,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{entries_html, escape, ENTRIES_PER_WORD, GLOSSES_PER_ENTRY};
+    use super::{
+        entries_html, escape, tidy_gloss, ENTRIES_PER_WORD, GLOSSES_PER_ENTRY,
+        MAX_GLOSS_CHARS,
+    };
     use crate::anki::lookup::LookupEntry;
 
     fn entry(expression: &str, reading: &str, dictionary: &str, glosses: &[&str]) -> LookupEntry {
@@ -203,19 +280,78 @@ mod tests {
         assert!(entries_html("本", &[]).is_none());
     }
 
+    /// The bug that put two wrong words on every card.
+    ///
+    /// The add-on is asked with every prefix of the word, so カフェ answers with
+    /// カフェ, カフ and カ. Measured against the real dictionary before this filter
+    /// existed: all three were rendered.
+    #[test]
+    fn entries_about_a_prefix_of_the_word_are_dropped() {
+        let html = entries_html(
+            "カフェ",
+            &[
+                entry("カフェ", "カフェ", "JMdict", &["cafe"]),
+                entry("カフ", "カフ", "Pixiv", &["a character"]),
+                entry("カ", "カ", "Pixiv", &["the kana ka"]),
+            ],
+        )
+        .unwrap();
+        assert!(html.contains("cafe"), "{html}");
+        assert!(!html.contains("a character"), "{html}");
+        assert!(!html.contains("the kana ka"), "{html}");
+    }
+
+    /// A kana word's entry is filed under its kanji: わかる answers with
+    /// 分かる【わかる】, which is the right entry under a different spelling.
+    #[test]
+    fn an_entry_found_under_its_kanji_is_kept() {
+        let html = entries_html(
+            "わかる",
+            &[
+                entry("分かる", "わかる", "JMdict", &["to understand"]),
+                entry("和歌", "わか", "JMdict", &["waka poetry"]),
+            ],
+        )
+        .unwrap();
+        assert!(html.contains("to understand"), "{html}");
+        assert!(!html.contains("waka poetry"), "{html}");
+    }
+
+    #[test]
+    fn a_word_with_only_prefix_matches_renders_nothing() {
+        assert!(entries_html("カフェ", &[entry("カ", "カ", "Pixiv", &["ka"])]).is_none());
+    }
+
+    /// A monolingual entry arrives as a whole article, newlines and all. Left as
+    /// they are, HTML collapses them and welds the senses into one run of text.
+    #[test]
+    fn a_gloss_is_flattened_and_cut_to_length() {
+        assert_eq!(tidy_gloss("① one。
+② two。"), "① one。 ② two。");
+        assert_eq!(tidy_gloss("  spaced 
+
+ out  "), "spaced out");
+
+        let long = "あ".repeat(MAX_GLOSS_CHARS + 50);
+        let cut = tidy_gloss(&long);
+        assert_eq!(cut.chars().count(), MAX_GLOSS_CHARS + 1, "cut plus the ellipsis");
+        assert!(cut.ends_with('…'));
+    }
+
     /// A card is glanced at, not scrolled. Eighteen senses from seven dictionaries
     /// is a wall that gets skipped rather than a definition that gets read.
     #[test]
     fn entries_and_glosses_are_capped() {
+        // All about 本, as the prefix filter now requires, but from distinct
+        // dictionaries — so a cap test cannot pass by deduplication it does not do.
         let many: Vec<LookupEntry> = (0..10)
             .map(|index| {
                 entry(
                     "本",
                     "ほん",
-                    "JMdict",
+                    &format!("Dictionary {index}"),
                     &["one", "two", "three", "four", "five", "six"],
                 )
-                .tap_index(index)
             })
             .collect();
         let html = entries_html("本", &many).unwrap();
@@ -241,15 +377,40 @@ mod tests {
         assert!(!html.contains("<b>bold"), "{html}");
     }
 
-    trait TapIndex {
-        fn tap_index(self, index: usize) -> Self;
-    }
-    impl TapIndex for LookupEntry {
-        /// Distinct expressions, so a cap test cannot pass by deduplication it does
-        /// not actually do.
-        fn tap_index(mut self, index: usize) -> Self {
-            self.expression = format!("本{index}");
-            self
+    /// Asks the real add-on for real words and prints what comes back.
+    ///
+    /// The unit tests above cover the rendering, which is not the half that can be
+    /// wrong about the outside world. Needs Anki running with the lookup add-on.
+    ///
+    ///   cargo test explain_a_real_lookup -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires Anki running with the lookup add-on"]
+    fn explain_a_real_lookup() {
+        use crate::anki::lookup::lookup_term_inner;
+
+        for word in ["単品", "カフェ", "卵", "わかる", "おすすめ"] {
+            match lookup_term_inner(word.to_string(), 0, Some(3)) {
+                Ok(result) => {
+                    println!(
+                        "  {word:<8} status={:<12} term={:<10} entries={}",
+                        result.status,
+                        result.term,
+                        result.entries.len()
+                    );
+                    for entry in result.entries.iter().take(2) {
+                        println!(
+                            "        {} [{}] ({}) {:?}",
+                            entry.expression,
+                            entry.reading,
+                            entry.dictionary,
+                            entry.definitions.first()
+                        );
+                    }
+                    println!("        rendered: {:?}", super::entries_html(word, &result.entries));
+                }
+                Err(error) => println!("  {word:<8} ERROR {error}"),
+            }
         }
     }
+
 }

@@ -237,20 +237,15 @@ export function StudyPicksSettingsPage({
       />
 
       <div className="info-note">
-        <span className="field-label-with-help">
-          <span>Where your vocabulary lives</span>
-          <TooltipBadge
-            label="?"
-            description="The note types you learn words from, and which field on each holds the word itself. This is separate from the note type cards are pushed to — the deck you mine INTO is rarely the one you read your vocabulary FROM."
-          />
-        </span>
+        <div className="settings-block-header">
+          <span className="field-label-with-help">
+            <span>Where your vocabulary lives</span>
+            <TooltipBadge
+              label="?"
+              description="The note types you learn words from, and which field on each holds the word itself. This is separate from the note type cards are pushed to — the deck you mine INTO is rarely the one you read your vocabulary FROM."
+            />
+          </span>
 
-        <p className="microcopy">
-          {sources.length === 0
-            ? "Nothing set up yet. Look through your collection, or add a source by hand below."
-            : "Look through your collection again for anything not listed here."}
-        </p>
-        <div className="action-row inline-actions">
           <button
             type="button"
             className={sources.length === 0 ? undefined : "secondary"}
@@ -262,6 +257,12 @@ export function StudyPicksSettingsPage({
               : "Find my vocabulary decks"}
           </button>
         </div>
+
+        <p className="microcopy">
+          {sources.length === 0
+            ? "Nothing set up yet. Look through your collection, or add a source by hand below."
+            : "Look through your collection again for anything not listed here."}
+        </p>
 
         {scan ? (
           <div
@@ -311,7 +312,7 @@ export function StudyPicksSettingsPage({
         ) : null}
 
         {sources.map((source, index) => (
-          <div className="settings-grid anki-grid" key={`source-${index}`}>
+          <div className="vocabulary-source-row" key={`source-${index}`}>
             <label className="field">
               <span>Note type</span>
               <ThemedSelect
@@ -360,23 +361,20 @@ export function StudyPicksSettingsPage({
               />
             </label>
 
-            <div className="action-row inline-actions">
-              <button
-                type="button"
-                className="secondary"
-                onClick={() =>
-                  updateSources(
-                    sources.filter((_, position) => position !== index),
-                  )
-                }
-              >
-                Remove
-              </button>
-            </div>
+            <button
+              type="button"
+              className="secondary vocabulary-source-remove"
+              onClick={() =>
+                updateSources(sources.filter((_, position) => position !== index))
+              }
+              aria-label={`Remove ${source.noteType || "this"} source`}
+            >
+              Remove
+            </button>
           </div>
         ))}
 
-        <div className="action-row inline-actions">
+        <div className="action-row compact-actions">
           <button
             type="button"
             className="secondary"
@@ -441,9 +439,11 @@ export function StudyPicksSettingsPage({
         }`}
       >
         <strong>{knownWords.message}</strong>
-        {builtWhen ? (
-          <p className="microcopy">Last read from Anki {builtWhen}.</p>
-        ) : null}
+        <p className="microcopy">
+          Read on demand rather than watched, so studying never waits on us. Refresh
+          after a study session for the list to catch up.
+          {builtWhen ? ` Last read from Anki ${builtWhen}.` : ""}
+        </p>
       </div>
 
       <div className="action-row inline-actions">
@@ -458,10 +458,6 @@ export function StudyPicksSettingsPage({
             : "Refresh from Anki"}
         </button>
       </div>
-      <p className="microcopy">
-        Read on demand rather than watched, so studying never waits on us. Refresh
-        after a study session for the list to catch up.
-      </p>
     </>
   );
 }
