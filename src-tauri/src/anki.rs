@@ -26,7 +26,8 @@ pub(crate) use self::{
     furigana_update::add_furigana_to_anki_inner,
     lookup::{lookup_term_inner, LookupResult},
     mine::{
-        hide_command_window, mine_segment_to_anki_inner, mine_watched_line_inner,
+        hide_command_window, mine_segment_to_anki_inner, mine_segments_to_anki_inner,
+        mine_watched_line_inner,
         slice_ffmpeg_args, ClipPadding,
     },
     mined::load_mined_sentences_inner,

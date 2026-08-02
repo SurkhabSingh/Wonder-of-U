@@ -321,6 +321,36 @@ export type DictionaryDetection = {
   message: string;
 };
 
+// One line handed to a batch mine.
+export type MineLineRequest = {
+  text: string;
+  startMs: number;
+  endMs: number;
+  translation: string | null;
+};
+
+// What became of one line in a batch. `status` is "added", "failed", or
+// "notAttempted" — the last for lines a stopped run never reached, which is not
+// the same as a line that was tried and refused.
+export type MinedLineOutcome = {
+  text: string;
+  startMs: number;
+  endMs: number;
+  status: string;
+  message: string;
+};
+
+// `status` is "ready" (all added), "partial" (some failed), "stopped" (the run
+// gave up early), or "failed" (nothing was attempted).
+export type MinedLinesResult = {
+  status: string;
+  message: string;
+  added: number;
+  failed: number;
+  lines: MinedLineOutcome[];
+  bootstrap: AppBootstrap;
+};
+
 // What one transcript line asks of the reader. `unknownWords` rather than a bare
 // count, because on an i+1 line that one word is the entire reason to mine it.
 export type LineRanking = {

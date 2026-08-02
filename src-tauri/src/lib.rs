@@ -102,6 +102,7 @@ pub fn run() {
             refresh_known_words,
             scan_vocabulary_sources,
             rank_transcript_lines,
+            mine_segments_to_anki,
             download_recommended_dictionary,
             load_mined_sentences,
             start_watch_session,

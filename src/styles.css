@@ -2513,6 +2513,16 @@ input::placeholder {
   font-weight: var(--weight-medium);
 }
 
+/* A line a batch mine could not make a card of. Borrows the mined chip's shape so
+   a column of rows reads as one set of outcomes, and only the colour says which
+   way it went. The reason is the chip's tooltip — the row is where "which lines
+   failed" is actually answerable. */
+.transcript-segment-mined.is-failed {
+  border-color: color-mix(in srgb, var(--error) 32%, var(--border));
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error);
+}
+
 /* Quiet inline nudge for older transcripts that predate timestamps. Sits under
    the transport bar and offers a forced re-transcribe to backfill segments. */
 .transcript-enable-timing-buttons {

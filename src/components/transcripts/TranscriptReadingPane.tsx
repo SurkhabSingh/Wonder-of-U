@@ -71,6 +71,7 @@ export function TranscriptReadingPane({
   mineDisabledReason = null,
   ranking = null,
   withinReachOnly = false,
+  mineFailures,
 }: {
   paneKey: string;
   kicker: string;
@@ -123,6 +124,10 @@ export function TranscriptReadingPane({
   // reordered — the order IS the recording, and reading along while listening
   // depends on it.
   withinReachOnly?: boolean;
+  // Why a batch mine could not make a card of a row, keyed the same way mined rows
+  // are. Keyed rather than indexed so a merge or split drops the marker with the
+  // sentence it belonged to instead of moving it onto a neighbour.
+  mineFailures?: Map<string, string>;
 }) {
   const rows = document ? buildRows(document, segmentsOverride) : [];
   const hiddenByFilter =
@@ -226,6 +231,9 @@ export function TranscriptReadingPane({
                 }
                 canSplit={row.text.length >= 2}
                 ranking={ranking?.lines[index] ?? null}
+                mineFailure={
+                  mineKey !== null ? (mineFailures?.get(mineKey) ?? null) : null
+                }
               />
             );
           })

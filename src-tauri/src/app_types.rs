@@ -935,6 +935,52 @@ pub(crate) struct RecordingActionItem {
     pub(crate) note_id: Option<i64>,
 }
 
+/// One line handed to a batch mine.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MineLineRequest {
+    pub(crate) text: String,
+    pub(crate) start_ms: u64,
+    pub(crate) end_ms: u64,
+    pub(crate) translation: Option<String>,
+}
+
+/// What became of one line in a batch.
+///
+/// Carries the line itself rather than the recording path every item would share.
+/// A batch reporting "3 of 35 failed" and leaving the reader to work out WHICH
+/// three is a batch that has to be redone from the top.
+///
+/// `status` is `added`, `failed`, or `notAttempted` — the last for lines the run
+/// stopped short of, which is not the same as a line that was tried and refused.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MinedLineOutcome {
+    pub(crate) text: String,
+    pub(crate) start_ms: u64,
+    pub(crate) end_ms: u64,
+    pub(crate) status: String,
+    pub(crate) message: String,
+}
+
+/// The result of mining several lines at once.
+///
+/// Every line handed in comes back, successes included: the caller needs them to
+/// mark the rows it just mined, and the failures are only meaningful next to what
+/// did work.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MinedLinesResult {
+    /// `ready` (all added), `partial` (some failed), `stopped` (the run gave up
+    /// early), or `failed` (nothing was attempted).
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) added: usize,
+    pub(crate) failed: usize,
+    pub(crate) lines: Vec<MinedLineOutcome>,
+    pub(crate) bootstrap: AppBootstrap,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingBatchResult {
@@ -950,7 +996,7 @@ pub(crate) struct AppPathsState {
     pub(crate) state_file: PathBuf,
     pub(crate) log_file: PathBuf,
     pub(crate) assets_dir: PathBuf,
-    /// `known_words.json`, beside `state.json`. Its own file rather than a key in the
+    /// `known_words.txt`, beside `state.json`. Its own file rather than a key in the
     /// persisted state: a large word list has no business making every settings write
     /// bigger, and a corrupt index must not be able to cost the recording library.
     pub(crate) known_words_file: PathBuf,

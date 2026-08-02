@@ -30,6 +30,7 @@ export function TranscriptSegmentRow({
   onSplit,
   canSplit = false,
   ranking = null,
+  mineFailure = null,
 }: {
   segmentKey: string;
   text: string;
@@ -70,6 +71,9 @@ export function TranscriptSegmentRow({
   // no vocabulary sources, no dictionary, no list built yet — in which case the row
   // simply carries no badge.
   ranking?: LineRanking | null;
+  // Why a batch mine could not make a card of this line. Shown on the row itself,
+  // because "3 of 35 failed" is only actionable next to the three.
+  mineFailure?: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   const hasTiming = startMs !== null && endMs !== null;
@@ -223,6 +227,14 @@ export function TranscriptSegmentRow({
                   >
                     <span aria-hidden="true">✓</span>{" "}
                     {mined ? "Mined" : "In deck"}
+                  </span>
+                ) : null}
+                {mineFailure ? (
+                  <span
+                    className="transcript-segment-mined is-failed"
+                    title={mineFailure}
+                  >
+                    <span aria-hidden="true">!</span> Failed
                   </span>
                 ) : null}
                 {mined ? null : (

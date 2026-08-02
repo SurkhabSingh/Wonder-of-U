@@ -31,15 +31,16 @@ use crate::{
 use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
-        load_mined_sentences_inner, mine_segment_to_anki_inner, push_recordings_to_anki_deck_inner,
+        load_mined_sentences_inner, mine_segment_to_anki_inner, mine_segments_to_anki_inner,
+        push_recordings_to_anki_deck_inner,
         push_recordings_to_anki_inner, rank_transcript_lines_inner, refresh_known_words_inner,
         scan_vocabulary_sources_inner,
     },
     app_runtime::{build_app_bootstrap, emit_app_snapshot},
     app_types::{
         AnkiCatalog, AppBootstrap, AppSettings, KnownWordsSnapshot, MinedSentences,
-        RecordingBatchResult, RecordingTexts, TranscriptRanking, VocabularySuggestions,
-        WhisperAssetUpdateResult,
+        MineLineRequest, MinedLinesResult, RecordingBatchResult, RecordingTexts,
+        TranscriptRanking, VocabularySuggestions, WhisperAssetUpdateResult,
     },
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
@@ -194,6 +195,24 @@ pub(crate) async fn load_anki_catalog(
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         load_anki_catalog_inner(&app_for_blocking, note_type)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Mines several lines from one recording in one pass.
+///
+/// Every line handed in comes back with what became of it, successes included: a
+/// batch that reports "3 of 35 failed" without saying which three is a batch that
+/// has to be redone from the top.
+#[tauri::command]
+pub(crate) async fn mine_segments_to_anki(
+    app: AppHandle,
+    file_path: String,
+    lines: Vec<MineLineRequest>,
+) -> Result<MinedLinesResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        mine_segments_to_anki_inner(&app, file_path, lines)
     })
     .await
     .map_err(|error| error.to_string())?

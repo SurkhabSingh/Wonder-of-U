@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import { useRecordingTexts } from "../../hooks/useRecordingTexts";
@@ -10,6 +11,7 @@ import {
 import { transcriptLanguageLabel } from "../../lib/helpers";
 import { ScannableText } from "../scanner/ScannableText";
 import type {
+  MinedLinesResult,
   RecentRecording,
   RecordingSegment,
   RecordingTextDocument,
@@ -478,6 +480,11 @@ export function TranscriptViewerPage({
   const [editedSegments, setEditedSegments] = useState<RecordingSegment[]>([]);
   // Narrows the transcript to the lines a single word from being readable.
   const [withinReachOnly, setWithinReachOnly] = useState(false);
+  // Why a batch mine could not make a card of a row, keyed like the mined markers.
+  const [mineFailures, setMineFailures] = useState<Map<string, string>>(
+    new Map(),
+  );
+  const [isBatchMining, setIsBatchMining] = useState(false);
   // The same rows the transcript pane will build, so entry N of the ranking
   // describes row N. Merging or splitting a sentence changes these and re-ranks,
   // which is the point of ranking the lines rather than the sidecar.
@@ -521,6 +528,7 @@ export function TranscriptViewerPage({
   useEffect(() => {
     setEditedSegments(activeTranscript?.segments ?? []);
     setMinedKeys(new Set());
+    setMineFailures(new Map());
     setMiningKey(null);
     // A new transcript reindexes every row, so drop the old focus/selection.
     setSelectedSegment(null);
@@ -587,6 +595,84 @@ export function TranscriptViewerPage({
       .finally(() => {
         setMiningKey((current) => (current === key ? null : current));
       });
+  };
+
+  // The rows the "Mine all" action would act on: within reach, and not already a
+  // card. Already-mined rows are skipped rather than refused — mining one at a time
+  // offers "Mine again" deliberately, but a bulk run is not reviewed card by card,
+  // and quietly doubling forty notes is not a thing to make easy.
+  const minableWithinReach = useMemo(() => {
+    if (!ranking || ranking.status !== "ready") {
+      return [];
+    }
+    return editedSegments
+      .map((segment, index) => ({ segment, index }))
+      .filter(({ segment, index }) => {
+        const key = segmentMineKey(segment);
+        return (
+          (ranking.lines[index]?.withinReach ?? false) &&
+          !minedKeys.has(key) &&
+          !minedKeysFromAnki.has(key)
+        );
+      });
+  }, [ranking, editedSegments, minedKeys, minedKeysFromAnki]);
+
+  const handleMineWithinReach = async () => {
+    if (minableWithinReach.length === 0 || isBatchMining) {
+      return;
+    }
+    setIsBatchMining(true);
+    // Cleared first: a marker left from the previous run beside a line this run
+    // succeeded on would be a lie about the state of the deck.
+    setMineFailures(new Map());
+    try {
+      const result = await invoke<MinedLinesResult>("mine_segments_to_anki", {
+        filePath: recording.filePath,
+        lines: minableWithinReach.map(({ segment, index }) => {
+          const paired = pairedTranslationFor(
+            index,
+            segment,
+            activeTranscript,
+            activeTranslation,
+          );
+          return {
+            text: segment.text,
+            startMs: segment.startMs,
+            endMs: segment.endMs,
+            translation: paired === MISALIGNED_TRANSLATION ? null : paired,
+          };
+        }),
+      });
+
+      const failures = new Map<string, string>();
+      const mined = new Set(minedKeys);
+      for (const line of result.lines) {
+        const key = `${line.startMs}:${line.endMs}:${line.text}`;
+        if (line.status === "added") {
+          mined.add(key);
+        } else if (line.status === "failed") {
+          failures.set(key, line.message);
+        }
+      }
+      setMinedKeys(mined);
+      setMineFailures(failures);
+
+      if (failures.size > 0) {
+        // The count in the toast, the reasons on the rows. A toast holding three
+        // lines of Japanese and three error messages is a toast nobody reads.
+        toast.warning(
+          `${result.message} The lines that failed are marked in the transcript.`,
+        );
+      } else {
+        toast.success(result.message);
+      }
+    } catch (error: unknown) {
+      toast.error(
+        typeof error === "string" ? error : "These sentences could not be mined.",
+      );
+    } finally {
+      setIsBatchMining(false);
+    }
   };
 
   // Mining writes an Anki card with the sentence audio, so it needs local audio
@@ -836,6 +922,31 @@ export function TranscriptViewerPage({
               One word away
             </button>
           ) : null}
+          {/* Only offered with the filter on. "Mine all" while looking at the whole
+              transcript reads as "mine everything", and the number beside it is the
+              only thing that says otherwise. */}
+          {withinReachOnly && !recording.audioDeleted ? (
+            <button
+              type="button"
+              className="transcript-mode"
+              onClick={() => void handleMineWithinReach()}
+              disabled={
+                isBatchMining ||
+                mineDisabledReason !== null ||
+                minableWithinReach.length === 0
+              }
+              title={
+                mineDisabledReason ??
+                (minableWithinReach.length === 0
+                  ? "Every line here is already a card"
+                  : "Make a card of every line shown, one word at a time")
+              }
+            >
+              {isBatchMining
+                ? "Mining…"
+                : `Mine all ${minableWithinReach.length}`}
+            </button>
+          ) : null}
 
           <div className="transcript-find">
             <input
@@ -1078,6 +1189,7 @@ export function TranscriptViewerPage({
               mineDisabledReason={mineDisabledReason}
               ranking={ranking}
               withinReachOnly={withinReachOnly}
+              mineFailures={mineFailures}
             />
           ) : null}
 
