@@ -1,4 +1,5 @@
 mod known_words_store;
+mod definitions;
 mod sentence_ranking;
 mod vocabulary_scan;
 mod known_words;

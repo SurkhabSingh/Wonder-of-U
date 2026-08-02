@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use super::{
     clip::capture_clip,
+    definitions::definitions_html,
     client::{anki_connect_health_check, anki_connect_request, anki_offline_message},
     fields::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
@@ -615,7 +616,27 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         }
     }
 
-    // 6. Furigana (non-fatal), and only when it was asked for.
+    // 6. Definitions for the words this line is meant to teach (non-fatal).
+    //
+    // Two switches, and either one off means no lookup: the feature toggle, and a
+    // mapped field to put the answer in. The second is not redundant — a mapping
+    // can be lost when a note type changes, and writing to a field that no longer
+    // exists is how a whole card gets rejected.
+    //
+    // Deliberately has no error branch, unlike furigana above. Furigana that was
+    // asked for and did not arrive changes the card the user expected; a definition
+    // that could not be fetched leaves a card that is exactly what mining has always
+    // made. `definitions_html` answers None for every failure for that reason.
+    if settings.features.add_definitions_to_mined_cards && !anki.fields.definition.is_empty() {
+        if let Some(html) = definitions_html(app, trimmed_text) {
+            fields.insert(
+                anki.fields.definition.clone(),
+                serde_json::Value::String(html),
+            );
+        }
+    }
+
+    // 7. Furigana (non-fatal), and only when it was asked for.
     //
     // The setting was read by the push path alone, so a mined card got furigana whether or
     // not the toggle was on — one of the two ways to make a card ignored the switch that
@@ -631,7 +652,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         }
     }
 
-    // 7. Create the note with the same dedup guard the push flow uses.
+    // 8. Create the note with the same dedup guard the push flow uses.
     let note_result = anki_connect_request(
         "addNote",
         serde_json::json!({

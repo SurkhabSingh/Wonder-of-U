@@ -238,6 +238,12 @@ pub(crate) struct FeatureSettings {
     /// when it is not connected the transcript is still saved and the translation
     /// is simply skipped.
     pub(crate) translate_after_transcription: bool,
+    /// Look the new words in a mined line up in the dictionary the popup uses, and
+    /// write what comes back onto the card. Off by default: it needs the Anki
+    /// add-on running, and a card is a different thing with a definition on it than
+    /// without — that should be chosen, not inherited.
+    #[serde(default)]
+    pub(crate) add_definitions_to_mined_cards: bool,
 }
 
 impl Default for FeatureSettings {
@@ -248,6 +254,7 @@ impl Default for FeatureSettings {
             allow_mp3_conversion: false,
             auto_add_furigana_after_anki_push: false,
             translate_after_transcription: false,
+            add_definitions_to_mined_cards: false,
         }
     }
 }
@@ -277,6 +284,10 @@ pub(crate) struct AnkiFieldMapping {
     /// `[sound:...]` tag — Anki treats video behind that tag as media it owns and renders a
     /// player for it, which is what makes it work on the phone clients too.
     pub(crate) video: String,
+    /// Target field for the dictionary definitions of the words this line is meant
+    /// to teach. Empty = unmapped, which switches the lookup off for that card as
+    /// surely as the feature toggle does.
+    pub(crate) definition: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

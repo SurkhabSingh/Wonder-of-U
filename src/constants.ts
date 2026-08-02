@@ -344,6 +344,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         position: "",
         image: "",
         video: "",
+        definition: "",
       },
       clipPaddingMs: 250,
       vocabularySources: [],
@@ -355,6 +356,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       allowMp3Conversion: false,
       autoAddFuriganaAfterAnkiPush: false,
       translateAfterTranscription: false,
+      addDefinitionsToMinedCards: false,
     },
     translation: {
       provider: "google-translate",

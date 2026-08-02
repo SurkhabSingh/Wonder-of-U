@@ -107,6 +107,44 @@ fn line_content_words(line: &str, dictionary_path: &Path) -> Result<Vec<String>,
         .collect())
 }
 
+/// The words in one line the user does not know yet.
+///
+/// The same derivation the badge uses, exposed for the card enricher so a card's
+/// definitions cannot describe a different set of words than the badge that
+/// recommended the line. Empty whenever the feature is not set up — no sources, no
+/// dictionary, no index — because "nothing to add" is the right answer then, not an
+/// error a mine should carry.
+pub(super) fn line_unknown_words<R: Runtime>(
+    app: &AppHandle<R>,
+    line: &str,
+) -> Result<Vec<String>, String> {
+    let asset_directory = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not read the app settings.".to_string())?;
+        persisted.settings.asset_directory.clone()
+    };
+    let Some(dictionary_path) = find_managed_dictionary_root(Path::new(&asset_directory)) else {
+        return Ok(Vec::new());
+    };
+    let words = line_content_words(line, &dictionary_path)?;
+
+    let state = app.state::<KnownWordsState>();
+    let index = state
+        .0
+        .lock()
+        .map_err(|_| "Could not read your known-word list.".to_string())?;
+    let Some(index) = index.as_ref() else {
+        return Ok(Vec::new());
+    };
+    Ok(words
+        .into_iter()
+        .filter(|word| !index.words.contains(word))
+        .collect())
+}
+
 fn nothing_to_rank(status: &str, message: &str, line_count: usize) -> TranscriptRanking {
     TranscriptRanking {
         status: status.into(),

@@ -134,6 +134,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 position: settings.anki.fields.position.trim().to_string(),
                 image: settings.anki.fields.image.trim().to_string(),
                 video: settings.anki.fields.video.trim().to_string(),
+                definition: settings.anki.fields.definition.trim().to_string(),
             },
             // Clamp the mined-clip padding to a sane ceiling so a hand-edited value can't
             // produce a clip that swallows the neighbouring sentences.
@@ -163,6 +164,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
             allow_mp3_conversion: settings.features.allow_mp3_conversion,
             auto_add_furigana_after_anki_push: settings.features.auto_add_furigana_after_anki_push,
             translate_after_transcription: settings.features.translate_after_transcription,
+            add_definitions_to_mined_cards: settings.features.add_definitions_to_mined_cards,
         },
         translation: TranslationSettings {
             provider: normalize_translation_provider(&settings.translation.provider),

@@ -17,12 +17,13 @@ const CARD_TEMPLATE_NAME: &str = "Listening";
 /// pushed" keeps working. Display is template-driven, so the sentence being field 1
 /// does not put it on the front. `Audio` holds the `[sound:...]` the app fills;
 /// `Reading` is an optional manual kana aid, left unmapped by default.
-const FIELD_NAMES: [&str; 9] = [
+const FIELD_NAMES: [&str; 10] = [
     "Sentence",
     "Audio",
     "Image",
     "Video",
     "Translation",
+    "Definition",
     "Reading",
     "SourceURL",
     "Title",
@@ -63,6 +64,7 @@ const BACK_TEMPLATE: &str = r#"<div class="wu-card wu-back">
   {{#Sentence}}<div class="wu-sentence">{{furigana:Sentence}}</div>{{/Sentence}}
   {{#Reading}}<div class="wu-reading">{{Reading}}</div>{{/Reading}}
   {{#Translation}}<div class="wu-translation">{{Translation}}</div>{{/Translation}}
+  {{#Definition}}<div class="wu-definition-field">{{Definition}}</div>{{/Definition}}
   <div class="wu-meta">
     {{#Title}}<span class="wu-title">{{Title}}</span>{{/Title}}
     {{#Time}}<span class="wu-time">{{Time}}</span>{{/Time}}
@@ -151,6 +153,27 @@ const CARD_CSS: &str = r#".card {
   line-height: 1.6;
   margin: 14px auto 0;
   max-width: 32em;
+}
+/* Dictionary definitions for the words the line was mined for. Set left rather than
+   centred like the sentence: it is a list to read down, not a line to take in. */
+.wu-definition-field {
+  margin: 16px auto 0;
+  max-width: 32em;
+  text-align: left;
+  font-size: 0.95em;
+  line-height: 1.55;
+}
+.wu-definition-field ul {
+  margin: 4px 0 0;
+  padding-left: 1.2em;
+}
+.wu-definition-field li {
+  margin-bottom: 4px;
+}
+.wu-definition-field .wu-dict,
+.wu-definition-field .wou-dict {
+  color: var(--wu-muted);
+  font-size: 0.88em;
 }
 .wu-meta {
   display: flex;
@@ -384,7 +407,7 @@ mod tests {
         assert!(FRONT_TEMPLATE.contains("{{Video}}"));
         assert!(FRONT_TEMPLATE.contains("{{Image}}"));
         assert!(FRONT_TEMPLATE.contains("{{Audio}}"));
-        for answer in ["Sentence", "Translation", "Reading"] {
+        for answer in ["Sentence", "Translation", "Reading", "Definition"] {
             assert!(
                 !FRONT_TEMPLATE.contains(&format!("{{{{{answer}}}}}")),
                 "{answer} would give the answer away on the front"
@@ -453,7 +476,14 @@ mod tests {
         // The miner inserts by mapped field name, and AnkiConnect drops a key the note type
         // does not have WITHOUT reporting it — which is how screenshots went missing for
         // anyone whose note type predated the Image field.
-        for required in ["Sentence", "Audio", "Image", "Video", "Translation"] {
+        for required in [
+            "Sentence",
+            "Audio",
+            "Image",
+            "Video",
+            "Translation",
+            "Definition",
+        ] {
             assert!(
                 FIELD_NAMES.contains(&required),
                 "{required} is written by the miner but missing from the note type"

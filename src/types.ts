@@ -33,6 +33,9 @@ export type FeatureSettings = {
   allowMp3Conversion: boolean;
   autoAddFuriganaAfterAnkiPush: boolean;
   translateAfterTranscription: boolean;
+  // Look the new words in a mined line up in the dictionary the popup uses, and
+  // write what comes back onto the card. Needs the Anki add-on running.
+  addDefinitionsToMinedCards: boolean;
 };
 
 export type AnkiFieldMapping = {
@@ -52,6 +55,7 @@ export type AnkiFieldMapping = {
   // that tag as a player, and treats it as media it owns, so it works on the phone clients
   // and Check Media counts it. Empty = unmapped, which is what turns clip capture off.
   video: string;
+  definition: string;
 };
 
 export type AnkiSettings = {
