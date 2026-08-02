@@ -2090,7 +2090,6 @@ input::placeholder {
 .transcript-segment-gutter {
   display: flex;
   align-items: center;
-  height: calc(var(--reading-base) * var(--leading-reading));
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: var(--timestamp-color);
@@ -2098,18 +2097,32 @@ input::placeholder {
   user-select: none;
 }
 
-.transcript-pane.is-cjk .transcript-segment-gutter {
+/* An untimed row has a single dot to place, so its gutter is pinned to one line
+   of text and the dot centres against it.
+ *
+ * Scoped to :not(.has-timing) rather than being set for everyone and undone for
+ * timed rows. That undoing used to lose: the CJK override below is three classes
+ * to `.has-timing`'s two, so on a Japanese transcript — the only kind this app is
+ * really for — a timed gutter was locked to one line's height while holding a
+ * play control, a timestamp and a newness badge. The third spilled out of the row
+ * and landed on the next row's play button. Written this way there is no override
+ * to lose: the height only ever applies where a fixed height is wanted. */
+.transcript-segment-gutter:not(.has-timing) {
+  height: calc(var(--reading-base) * var(--leading-reading));
+}
+
+.transcript-pane.is-cjk .transcript-segment-gutter:not(.has-timing) {
   height: calc(var(--reading-base-cjk) * var(--leading-reading-cjk));
 }
 
-/* Timed rows stack the play control above its timestamp; the row aligns items
-   to the top, so a slightly taller gutter sits flush with the first text line. */
+/* Timed rows stack the play control, its timestamp and the newness badge. The row
+   aligns items to the top, so the stack sits flush with the first text line and
+   grows the row when it is taller than the text. */
 .transcript-segment-gutter.has-timing {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
   gap: var(--space-1);
-  height: auto;
   padding-top: 2px;
 }
 
