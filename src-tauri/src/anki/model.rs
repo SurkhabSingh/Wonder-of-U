@@ -163,6 +163,9 @@ const CARD_CSS: &str = r#".card {
   font-size: 0.95em;
   line-height: 1.55;
 }
+/* A line can be mined for more than one new word, and without this their lists run
+   straight into each other. */
+.wu-definition + .wu-definition { margin-top: 10px; }
 .wu-definition-field ul {
   margin: 4px 0 0;
   padding-left: 1.2em;
@@ -170,6 +173,8 @@ const CARD_CSS: &str = r#".card {
 .wu-definition-field li {
   margin-bottom: 4px;
 }
+/* `wou-` is the prefix the first cards were written with, before this settled on
+   the `wu-` the rest of the card uses. Kept so those cards still render. */
 .wu-definition-field .wu-dict,
 .wu-definition-field .wou-dict {
   color: var(--wu-muted);
@@ -225,6 +230,7 @@ const MEDIA_CSS_MARKER: &str = ".wu-video video";
 /// with the `.wu-definition-field` rules in `CARD_CSS`.
 const DEFINITION_CSS: &str = r#"
 .wu-definition-field { margin: 16px auto 0; max-width: 32em; text-align: left; font-size: 0.95em; line-height: 1.55; }
+.wu-definition + .wu-definition { margin-top: 10px; }
 .wu-definition-field ul { margin: 4px 0 0; padding-left: 1.2em; }
 .wu-definition-field li { margin-bottom: 4px; }
 .wu-definition-field .wu-dict, .wu-definition-field .wou-dict { color: var(--wu-muted); font-size: 0.88em; }"#;

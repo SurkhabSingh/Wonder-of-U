@@ -798,7 +798,19 @@ export function TranscriptViewerPage({
     }
     const panes: { paneKey: "transcript" | "translation"; rows: string[] }[] = [];
     if (viewMode !== "translation" && activeTranscript && !activeTranscript.missing) {
-      panes.push({ paneKey: "transcript", rows: transcriptLines });
+      panes.push({
+        paneKey: "transcript",
+        // A row the "One word away" filter has hidden has no element to scroll to
+        // and no mark to light up, so counting its matches would mean a find bar
+        // reading "5 of 27" and, on some of those, doing nothing at all. Blanked
+        // rather than dropped, so the indices still line up with the rendered rows.
+        rows:
+          withinReachOnly && ranking
+            ? transcriptLines.map((text, index) =>
+                ranking.lines[index]?.withinReach ? text : "",
+              )
+            : transcriptLines,
+      });
     }
     if (viewMode !== "transcript" && activeTranslation && !activeTranslation.missing) {
       panes.push({
@@ -824,7 +836,15 @@ export function TranscriptViewerPage({
       });
     }
     return found;
-  }, [viewMode, activeTranscript, activeTranslation, transcriptLines, query]);
+  }, [
+    viewMode,
+    activeTranscript,
+    activeTranslation,
+    transcriptLines,
+    query,
+    withinReachOnly,
+    ranking,
+  ]);
 
   const matchCount = matches.length;
   // Which match Enter / the arrows are sitting on. Null means "found them, not
@@ -850,7 +870,7 @@ export function TranscriptViewerPage({
     setActiveMatchIndex(next);
 
     const match = matches[next];
-    const row = window.document.querySelector(
+    const row = document.querySelector(
       `[data-segment="${match.paneKey}-${match.index}"]`,
     );
     // `center` rather than `nearest`: a match one row below the fold would

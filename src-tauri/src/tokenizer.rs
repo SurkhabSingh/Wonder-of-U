@@ -1,11 +1,12 @@
 //! Japanese morphological analysis: splitting text into words and reducing each to
 //! the form it would be listed under in a dictionary.
 //!
-//! Sentence ranking is the only consumer this is built for and it does not exist
-//! yet, so most of the module is unused outside its tests. It is written and tested
-//! ahead of that step to prove the seam before anything is built on it; the download
-//! path already depends on `dictionary_loads`.
-#![allow(dead_code)]
+//! Three things read this, and they ask different questions of it. Sentence
+//! ranking wants the base form, to compare against the known-word index. The
+//! vocabulary scan wants the token COUNT and whether the dictionary knows the
+//! word, to tell a word field from a sentence field. Ranking also wants the part
+//! of speech, because は and が are not vocabulary. The download path wants only
+//! `dictionary_loads`, to prove an install works before keeping it.
 
 use std::{
     path::{Path, PathBuf},

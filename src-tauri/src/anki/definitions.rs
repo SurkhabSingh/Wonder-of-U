@@ -147,7 +147,7 @@ fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
                 String::new()
             } else {
                 format!(
-                    " <span class=\"wou-dict\">({})</span>",
+                    " <span class=\"wu-dict\">({})</span>",
                     escape(&entry.dictionary)
                 )
             };
@@ -160,7 +160,7 @@ fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
 
     (!rendered.is_empty()).then(|| {
         format!(
-            "<div class=\"wou-definition\"><b>{}</b><ul>{}</ul></div>",
+            "<div class=\"wu-definition\"><b>{}</b><ul>{}</ul></div>",
             escape(word),
             rendered.join("")
         )
