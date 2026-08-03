@@ -71,6 +71,10 @@ export type AnkiSettings = {
   // How long a word has to have stuck before it counts as known, in days. 21 is
   // Anki's own "mature" line.
   knownWordIntervalDays: number;
+  // Which of the add-on's dictionaries supply meanings for mined cards, by id.
+  // Empty means every enabled one, in the add-on's own order — which is what the
+  // reading popup uses and is the default.
+  definitionDictionaryIds: number[];
 };
 
 export type VocabularySource = {
@@ -323,6 +327,25 @@ export type DictionaryDetection = {
   dictionaryPath: string | null;
   managed: boolean;
   message: string;
+};
+
+// One dictionary installed in the Anki add-on. `priority` is the order lookups
+// consult them in, which is why it is shown: it explains why an answer came from
+// one dictionary rather than another.
+export type LookupDictionary = {
+  id: number;
+  title: string;
+  revision: string;
+  enabled: boolean;
+  priority: number;
+  termCount: number;
+};
+
+// `status` is "ready" or "unavailable" — Anki being closed is ordinary here.
+export type LookupDictionaries = {
+  status: string;
+  message: string;
+  dictionaries: LookupDictionary[];
 };
 
 // One line handed to a batch mine.

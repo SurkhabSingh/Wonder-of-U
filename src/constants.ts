@@ -349,6 +349,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       clipPaddingMs: 250,
       vocabularySources: [],
       knownWordIntervalDays: 21,
+      definitionDictionaryIds: [],
     },
     features: {
       transcription: true,

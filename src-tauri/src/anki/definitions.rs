@@ -17,7 +17,7 @@ use crate::app_runtime::now_ms;
 
 use super::{
     known_words::normalize_expression,
-    lookup::{lookup_term_inner, LookupEntry},
+    lookup::{lookup_exact_word, LookupEntry},
     sentence_ranking::line_unknown_words,
 };
 
@@ -31,9 +31,8 @@ const ENTRIES_PER_WORD: usize = 3;
 /// How many glosses to keep from one entry, for the same reason.
 const GLOSSES_PER_ENTRY: usize = 4;
 
-/// How many entries to ASK for. Higher than the cap on purpose: the add-on answers
-/// about every prefix of the word as well as the word itself, and those are filtered
-/// out afterwards — ask for only three and all three can be prefixes.
+/// How many entries to ASK for. Higher than the cap so that entries dropped by
+/// `entry_is_about`, or by a dictionary the user has excluded, leave enough behind.
 const LOOKUP_LIMIT: u32 = 12;
 
 /// How much of one gloss to keep.
@@ -100,11 +99,11 @@ fn tidy_gloss(gloss: &str) -> String {
 
 /// Whether this entry is about the word asked for, rather than a piece of it.
 ///
-/// The add-on is asked with every prefix of the word, because that is what the
-/// popup needs when someone clicks mid-sentence — so asking about カフェ answers
-/// with カフェ, then カフ, then カ, and asking about おすすめ answers with おすすめ,
-/// 雄【おす】 and 汚【お】. Taking the top three verbatim put two wrong words on
-/// every card.
+/// A safeguard rather than the fix. Prefix answers came from asking with prefixes,
+/// which `lookup_exact_word` no longer does — measured against the real add-on, the
+/// word alone answers about the word alone. This stays because a dictionary is free
+/// to return a related headword for its own reasons, and a card is the wrong place
+/// to find that out.
 ///
 /// Matched on the reading as well as the headword, because a kana word's entry is
 /// filed under its kanji: asking for わかる answers with 分かる【わかる】, which is
@@ -188,7 +187,11 @@ pub(super) enum Definitions {
 /// so, which is what `Unavailable` is for. The first version of this collapsed
 /// every outcome into `None`, and a card silently missing what the toggle promised
 /// is indistinguishable from a toggle that does nothing.
-pub(super) fn definitions_for<R: Runtime>(app: &AppHandle<R>, line: &str) -> Definitions {
+pub(super) fn definitions_for<R: Runtime>(
+    app: &AppHandle<R>,
+    line: &str,
+    dictionary_ids: &[i64],
+) -> Definitions {
     let words = match line_unknown_words(app, line) {
         Ok(words) => words,
         Err(error) => return Definitions::Unavailable(error),
@@ -205,7 +208,7 @@ pub(super) fn definitions_for<R: Runtime>(app: &AppHandle<R>, line: &str) -> Def
     let mut sections = Vec::new();
     let mut problem = None;
     for word in words {
-        match lookup_term_inner(word.clone(), 0, Some(LOOKUP_LIMIT)) {
+        match lookup_exact_word(&word, LOOKUP_LIMIT, dictionary_ids) {
             Ok(result) if result.status == "ready" || result.status == "empty" => {
                 note_lookups_available();
                 if let Some(html) = entries_html(&word, &result.entries) {

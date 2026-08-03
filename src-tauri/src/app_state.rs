@@ -158,6 +158,18 @@ pub(crate) fn normalize_settings<R: Runtime>(
             // Zero would make every word ever added "known"; the ceiling stops a hand-edited
             // value from making the index permanently empty.
             known_word_interval_days: settings.anki.known_word_interval_days.clamp(1, 3650),
+            // De-duplicated with the order kept: the order chosen is the order the
+            // meanings appear in on the card.
+            definition_dictionary_ids: {
+                let mut seen = std::collections::HashSet::new();
+                settings
+                    .anki
+                    .definition_dictionary_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| seen.insert(*id))
+                    .collect()
+            },
         },
         features: FeatureSettings {
             transcription: settings.features.transcription,

@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import type {
   AnkiCatalog,
   AnkiFieldMapping,
   AppSettings,
   BusyAction,
+  LookupDictionaries,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
 import { ThemedSelect } from "../ui/ThemedSelect";
@@ -38,6 +40,46 @@ export function AnkiMappingSettingsPage({
   //
   // Re-running this on a note type that already exists UPDATES it rather than skipping,
   // which is how an older note type picks up the furigana filter and hover styling.
+  // The dictionaries the add-on can answer from. Loaded only while the feature is
+  // on: it is an HTTP call to Anki, and a page nobody is configuring should not make
+  // one. Null until it has been asked for, which is what tells the empty case from
+  // the not-yet-loaded one.
+  const [dictionaries, setDictionaries] = useState<LookupDictionaries | null>(null);
+  const definitionsOn = settingsDraft.features.addDefinitionsToMinedCards;
+  const chosenIds = settingsDraft.anki.definitionDictionaryIds ?? [];
+
+  useEffect(() => {
+    if (!definitionsOn) {
+      return;
+    }
+    void invoke<LookupDictionaries>("lookup_dictionaries")
+      .then(setDictionaries)
+      .catch(() => {
+        // Anki closed, or an add-on too old to have the endpoint. The block below
+        // says so; it is not an error worth a toast on a settings page.
+        setDictionaries(null);
+      });
+  }, [definitionsOn]);
+
+  const toggleDictionary = (id: number) => {
+    onUpdateSettings({
+      anki: {
+        definitionDictionaryIds: chosenIds.includes(id)
+          ? chosenIds.filter((chosen) => chosen !== id)
+          : [...chosenIds, id],
+      },
+    });
+  };
+
+  // Ids that were chosen and are no longer installed. Shown rather than dropped:
+  // updating a dictionary gives it a new id, so silently discarding these would mean
+  // card meanings quietly stopping the day a dictionary is updated.
+  const missingIds = dictionaries
+    ? chosenIds.filter(
+        (id) => !dictionaries.dictionaries.some((entry) => entry.id === id),
+      )
+    : [];
+
   const handleCreateNoteType = async () => {
     try {
       const noteType = await invoke<string>("create_anki_note_type");
@@ -384,12 +426,81 @@ export function AnkiMappingSettingsPage({
         {/* A toggle with nowhere to write is a toggle that does nothing, and from the
             outside that is indistinguishable from a broken feature. Say it here rather
             than letting every mined card be the thing that reports it. */}
-        {settingsDraft.features.addDefinitionsToMinedCards &&
-        !settingsDraft.anki.fields.definition ? (
+        {definitionsOn && !settingsDraft.anki.fields.definition ? (
           <p className="microcopy field-warning">
             Map the definitions field above for this to have anywhere to write. On the
             app&rsquo;s own note type, &ldquo;Create or update&rdquo; adds it.
           </p>
+        ) : null}
+
+        {definitionsOn ? (
+          <div className="dictionary-choice">
+            <span className="field-label-with-help">
+              <span>Meanings come from</span>
+              <TooltipBadge
+                label="?"
+                description="Which of your dictionaries are allowed to answer for a mined card. Choose none to use all of them in the order Anki already consults them — that order suits reading, where a monolingual dictionary first is what you want, and it is not always what belongs on a card."
+              />
+            </span>
+
+            {dictionaries === null ? (
+              <p className="microcopy">
+                Open Anki to choose &mdash; your dictionaries live in the add-on.
+              </p>
+            ) : dictionaries.status !== "ready" ? (
+              <p className="microcopy">{dictionaries.message}</p>
+            ) : (
+              <>
+                <p className="microcopy">
+                  {chosenIds.length === 0
+                    ? "All of them, in the order Anki consults them."
+                    : `${chosenIds.length} chosen. Cards use only these.`}
+                </p>
+                <div className="dictionary-choice-list">
+                  {dictionaries.dictionaries.map((entry) => (
+                    <label className="dictionary-choice-row" key={entry.id}>
+                      <input
+                        type="checkbox"
+                        checked={chosenIds.includes(entry.id)}
+                        onChange={() => toggleDictionary(entry.id)}
+                      />
+                      <span className="dictionary-choice-title">{entry.title}</span>
+                      <span className="dictionary-choice-count">
+                        {entry.termCount > 0
+                          ? `${entry.termCount.toLocaleString()} entries`
+                          : "no terms"}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {missingIds.length > 0 ? (
+              <p className="microcopy field-warning">
+                {missingIds.length === 1 ? "A dictionary" : `${missingIds.length} dictionaries`}{" "}
+                you chose {missingIds.length === 1 ? "is" : "are"} no longer installed
+                &mdash; updating a dictionary replaces it with a new one. Tick a
+                replacement, then{" "}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() =>
+                    onUpdateSettings({
+                      anki: {
+                        definitionDictionaryIds: chosenIds.filter(
+                          (id) => !missingIds.includes(id),
+                        ),
+                      },
+                    })
+                  }
+                >
+                  forget the missing {missingIds.length === 1 ? "one" : "ones"}
+                </button>
+                .
+              </p>
+            ) : null}
+          </div>
         ) : null}
       </div>
 

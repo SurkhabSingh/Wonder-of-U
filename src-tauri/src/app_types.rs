@@ -314,6 +314,20 @@ pub(crate) struct AnkiSettings {
     /// by interval for exactly this reason, and 21 days is the maturity both default to.
     #[serde(default = "default_known_word_interval_days")]
     pub(crate) known_word_interval_days: u32,
+    /// Which of the add-on's dictionaries supply meanings for mined cards, by id.
+    ///
+    /// Empty means every enabled one, in the add-on's own order — which is what the
+    /// reading popup uses, and is deliberately the default. A card wants something
+    /// narrower: the order that suits immersion puts a 500,000-entry encyclopedia
+    /// above JMdict, which is not what belongs on a card.
+    ///
+    /// Ids rather than titles, though NEITHER survives a dictionary being updated —
+    /// the add-on keys uniqueness on title AND revision, so an update is a new row
+    /// with a new id, and the title carries its release date. A stored id that no
+    /// longer exists is therefore REPORTED rather than quietly dropped, or card
+    /// meanings would stop appearing the day a dictionary is updated.
+    #[serde(default)]
+    pub(crate) definition_dictionary_ids: Vec<i64>,
 }
 
 impl Default for AnkiSettings {
@@ -325,6 +339,7 @@ impl Default for AnkiSettings {
             clip_padding_ms: default_clip_padding_ms(),
             vocabulary_sources: Vec::new(),
             known_word_interval_days: default_known_word_interval_days(),
+            definition_dictionary_ids: Vec::new(),
         }
     }
 }

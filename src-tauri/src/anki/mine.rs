@@ -635,7 +635,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             // because from the outside this looks exactly like the feature not working.
             definition_problem = Some("no Anki field is mapped for them".to_string());
         } else {
-            match definitions_for(app, trimmed_text) {
+            match definitions_for(app, trimmed_text, &anki.definition_dictionary_ids) {
                 Definitions::Ready(html) => {
                     fields.insert(
                         anki.fields.definition.clone(),

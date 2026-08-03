@@ -1477,6 +1477,52 @@ input::placeholder {
 /* A labelled block inside a settings section, with its action on the same line as
    its label — the shape `.panel-header` uses, so a block reads as a section rather
    than as a stray control above a list. */
+/* Which dictionaries may answer for a mined card. A wrapped list rather than a
+   tall column: seven of them should not push the rest of the page down. */
+.dictionary-choice {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.dictionary-choice-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin-top: var(--space-4);
+}
+
+.dictionary-choice-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.dictionary-choice-row input {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* The title is what identifies the dictionary, so it takes the space and truncates
+   last; the entry count is context and gives way first. */
+.dictionary-choice-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+.dictionary-choice-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
 /* A setting that is switched on but cannot act — usually because the field it
    writes to is unmapped. Warning-coloured rather than error: nothing is broken,
    something is unfinished. */
@@ -3750,7 +3796,11 @@ input::placeholder {
   cursor: default;
 }
 
+/* An action worded as part of a sentence, sized and coloured as text so the
+   sentence still reads as one. `min-height: 0` undoes the 36px every button
+   inherits — a link that tall breaks the line it sits in. */
 .link-button {
+  min-height: 0;
   padding: 0;
   border: none;
   background: none;

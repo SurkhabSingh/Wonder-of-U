@@ -16,6 +16,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 const ANKI_LOOKUP_URL: &str = "http://127.0.0.1:8766/lookup";
+const ANKI_DICTIONARIES_URL: &str = "http://127.0.0.1:8766/dictionaries";
 /// Longer than the furigana call: a lookup deinflects several candidates and ranks
 /// entries across seven dictionaries, and it runs on Anki's UI thread.
 const LOOKUP_TIMEOUT: Duration = Duration::from_millis(4000);
@@ -99,6 +100,89 @@ struct LookupBridgeResponse {
 /// morphological analyser is needed: the backend deinflects each candidate and the
 /// longest dictionary hit wins. Splitting the sentence into words first would be a
 /// second, worse segmenter.
+/// One dictionary installed in the add-on.
+///
+/// `priority` is the order lookups consult them in, which is why it is carried
+/// rather than dropped: it is what explains why an answer came from one dictionary
+/// rather than another.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LookupDictionary {
+    pub(crate) id: i64,
+    #[serde(default)]
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) revision: String,
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) priority: i64,
+    #[serde(default)]
+    pub(crate) term_count: i64,
+}
+
+/// What the add-on has installed. `status` is `ready` or `unavailable` — Anki being
+/// closed is an ordinary state here, exactly as it is for a lookup.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LookupDictionaries {
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) dictionaries: Vec<LookupDictionary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DictionariesBridgeResponse {
+    ok: bool,
+    #[serde(default)]
+    dictionaries: Vec<LookupDictionary>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// Lists the dictionaries the add-on can answer from.
+///
+/// Read-only. Which are enabled, and in what order, belongs to the add-on's own
+/// dictionary manager; this only reports it so the app can offer a subset for
+/// mined cards without changing what the reading popup sees.
+pub(crate) fn lookup_dictionaries_inner() -> Result<LookupDictionaries, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(LOOKUP_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let response = match client.get(ANKI_DICTIONARIES_URL).send() {
+        Ok(response) => response,
+        Err(_) => {
+            return Ok(LookupDictionaries {
+                status: "unavailable".into(),
+                message: "Open Anki to see your dictionaries — they live in the add-on.".into(),
+                dictionaries: Vec::new(),
+            })
+        }
+    };
+
+    let body = response
+        .text()
+        .map_err(|error| format!("The dictionary list could not be read. {error}"))?;
+    let parsed = serde_json::from_str::<DictionariesBridgeResponse>(&body).map_err(|error| {
+        // An add-on too old to have the endpoint answers 404 with a body this cannot
+        // parse, so say what to do rather than showing a parse error.
+        format!("Your Anki add-on is too old to list dictionaries. Update it and restart Anki. ({error})")
+    })?;
+    if !parsed.ok {
+        return Err(parsed
+            .error
+            .unwrap_or_else(|| "The dictionaries could not be listed.".into()));
+    }
+
+    Ok(LookupDictionaries {
+        status: "ready".into(),
+        message: String::new(),
+        dictionaries: parsed.dictionaries,
+    })
+}
+
 pub(crate) fn lookup_candidates(text: &str, offset: usize) -> Vec<String> {
     let characters = text.chars().collect::<Vec<_>>();
     if offset >= characters.len() {
@@ -113,6 +197,28 @@ pub(crate) fn lookup_candidates(text: &str, offset: usize) -> Vec<String> {
         }
     }
     candidates
+}
+
+/// Looks a word up directly, without offering the add-on any prefixes.
+///
+/// The scanner cannot know where a word ends — someone clicked into the middle of a
+/// sentence — so it hands over every prefix and lets the add-on pick. The card
+/// enricher is in the opposite position: the word came out of the tokenizer, so it
+/// is already exactly one word.
+///
+/// Sending prefixes there was a bug with a visible symptom. Measured against the
+/// real add-on: asking about カフェ WITH prefixes answers カフェ, カフ and カ — the
+/// middle one a manga character — while asking with the word alone answers カフェ
+/// five times over and nothing else.
+///
+/// `dictionary_ids` narrows the answer to chosen dictionaries; empty means every
+/// enabled one, exactly as before this existed.
+pub(super) fn lookup_exact_word(
+    word: &str,
+    limit: u32,
+    dictionary_ids: &[i64],
+) -> Result<LookupResult, String> {
+    post_lookup(word, &[word.to_string()], word, limit, dictionary_ids)
 }
 
 pub(crate) fn lookup_term_inner(
@@ -130,17 +236,39 @@ pub(crate) fn lookup_term_inner(
         });
     };
 
+    // No dictionary filter: the scanner reads what the user reads while immersing,
+    // which is what the add-on's own priority order is for.
+    post_lookup(&term, &candidates, &text, limit.unwrap_or(20), &[])
+}
+
+/// The one request both callers make, so the two can never answer in different
+/// shapes — the same reason the add-on serializes both its consumers through
+/// `lookup_result`.
+fn post_lookup(
+    term: &str,
+    candidates: &[String],
+    sentence: &str,
+    limit: u32,
+    dictionary_ids: &[i64],
+) -> Result<LookupResult, String> {
+    let term = term.to_string();
     let client = reqwest::blocking::Client::builder()
         .timeout(LOOKUP_TIMEOUT)
         .build()
         .map_err(|error| error.to_string())?;
 
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "term": term,
         "candidates": candidates,
-        "sentence": text,
-        "limit": limit.unwrap_or(20),
+        "sentence": sentence,
+        "limit": limit,
     });
+    // Omitted entirely when empty rather than sent as `[]`. Both mean the same thing
+    // to the add-on, but a request that carries no filter is one that provably cannot
+    // be filtered — and this is the request the verified scanner makes.
+    if !dictionary_ids.is_empty() {
+        payload["dictionaryIds"] = serde_json::json!(dictionary_ids);
+    }
 
     let response = match client
         .post(ANKI_LOOKUP_URL)

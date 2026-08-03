@@ -25,7 +25,7 @@ pub(crate) use self::{
     vocabulary_scan::scan_vocabulary_sources_inner,
     known_words_store::{known_words_snapshot_from_state, restore_known_words_index},
     furigana_update::add_furigana_to_anki_inner,
-    lookup::{lookup_term_inner, LookupResult},
+    lookup::{lookup_dictionaries_inner, lookup_term_inner, LookupDictionaries, LookupResult},
     mine::{
         hide_command_window, mine_segment_to_anki_inner, mine_segments_to_anki_inner,
         mine_watched_line_inner,

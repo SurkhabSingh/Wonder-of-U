@@ -31,6 +31,7 @@ use crate::{
 use crate::{
     anki::{
         add_furigana_to_anki_inner, create_recommended_note_type_inner, load_anki_catalog_inner,
+        lookup_dictionaries_inner, LookupDictionaries,
         load_mined_sentences_inner, mine_segment_to_anki_inner, mine_segments_to_anki_inner,
         push_recordings_to_anki_deck_inner,
         push_recordings_to_anki_inner, rank_transcript_lines_inner, refresh_known_words_inner,
@@ -198,6 +199,18 @@ pub(crate) async fn load_anki_catalog(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Lists the dictionaries the Anki add-on can look words up in.
+///
+/// Read-only: which are enabled, and in what order, belongs to the add-on's own
+/// dictionary manager. This only reports them so a subset can be chosen for mined
+/// cards without changing what the reading popup sees.
+#[tauri::command]
+pub(crate) async fn lookup_dictionaries() -> Result<LookupDictionaries, String> {
+    tauri::async_runtime::spawn_blocking(lookup_dictionaries_inner)
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// Mines several lines from one recording in one pass.
