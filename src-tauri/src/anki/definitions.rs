@@ -16,7 +16,6 @@ use tauri::{AppHandle, Runtime};
 use crate::app_runtime::now_ms;
 
 use super::{
-    known_words::normalize_expression,
     lookup::{lookup_exact_word, LookupEntry},
     sentence_ranking::line_unknown_words,
 };
@@ -97,21 +96,6 @@ fn tidy_gloss(gloss: &str) -> String {
     format!("{cut}…")
 }
 
-/// Whether this entry is about the word asked for, rather than a piece of it.
-///
-/// A safeguard rather than the fix. Prefix answers came from asking with prefixes,
-/// which `lookup_exact_word` no longer does — measured against the real add-on, the
-/// word alone answers about the word alone. This stays because a dictionary is free
-/// to return a related headword for its own reasons, and a card is the wrong place
-/// to find that out.
-///
-/// Matched on the reading as well as the headword, because a kana word's entry is
-/// filed under its kanji: asking for わかる answers with 分かる【わかる】, which is
-/// the right entry under a different spelling.
-fn entry_is_about(entry: &LookupEntry, word: &str) -> bool {
-    normalize_expression(&entry.expression) == word || normalize_expression(&entry.reading) == word
-}
-
 /// Renders one word's entries as the card will show them.
 ///
 /// The reading rides with the headword rather than in its own column, because a
@@ -119,11 +103,17 @@ fn entry_is_about(entry: &LookupEntry, word: &str) -> bool {
 /// The dictionary's name is kept: with several installed, which one a gloss came
 /// from is part of judging it.
 fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
-    // Filtered BEFORE the cap, not after: the prefix answers arrive interleaved
-    // with the real ones, so capping first would spend the three slots on them.
+    // Taken as the add-on returned them, in its priority order.
+    //
+    // There used to be a filter here rejecting any entry whose headword was not the
+    // word asked for. It was written when the request carried every PREFIX of the
+    // word and half the answers were about カフ; sending the exact word solved that,
+    // and the filter then did nothing but harm — the add-on DEINFLECTS, so asking
+    // about 出会える correctly answers 出会う【であう】 with `inflection_reasons:
+    // ["potential"]`, and the filter threw both entries away and left the card blank.
+    // The add-on knows better than this module which entries are about the word.
     let rendered: Vec<String> = entries
         .iter()
-        .filter(|entry| entry_is_about(entry, word))
         .take(ENTRIES_PER_WORD)
         .filter_map(|entry| {
             let glosses: Vec<String> = entry
@@ -175,7 +165,13 @@ pub(super) enum Definitions {
     /// Nothing to write, and nothing wrong: no new words in the line, or the
     /// feature is not set up far enough to know.
     NothingToAdd,
-    Ready(String),
+    /// Something to write, and possibly some words the dictionaries had nothing for.
+    /// Both, because a card can carry one meaning and be missing another, and only
+    /// saying which is missing lets the reader judge whether to widen their choice.
+    Ready {
+        html: String,
+        missing: Vec<String>,
+    },
     /// Asked for and not obtained.
     Unavailable(String),
 }
@@ -206,13 +202,19 @@ pub(super) fn definitions_for<R: Runtime>(
     }
 
     let mut sections = Vec::new();
+    let mut missing = Vec::new();
     let mut problem = None;
     for word in words {
         match lookup_exact_word(&word, LOOKUP_LIMIT, dictionary_ids) {
             Ok(result) if result.status == "ready" || result.status == "empty" => {
                 note_lookups_available();
-                if let Some(html) = entries_html(&word, &result.entries) {
-                    sections.push(html);
+                match entries_html(&word, &result.entries) {
+                    Some(html) => sections.push(html),
+                    // A word the chosen dictionaries simply do not have. Recorded
+                    // rather than passed over: "no entry for this" and "the lookup
+                    // failed" are different answers, and until this was reported the
+                    // only symptom of either was a card that looked untouched.
+                    None => missing.push(word.clone()),
                 }
             }
             // Anything else means the add-on did not answer. Stop for a while
@@ -231,10 +233,18 @@ pub(super) fn definitions_for<R: Runtime>(
     }
 
     match (sections.is_empty(), problem) {
-        (false, _) => Definitions::Ready(sections.join("")),
+        (false, _) => Definitions::Ready {
+            html: sections.join(""),
+            missing,
+        },
         (true, Some(problem)) => Definitions::Unavailable(problem),
-        // Every word was asked about and the dictionary simply had nothing. Not a
-        // failure, and not worth telling anyone about.
+        // Nothing rendered and nothing broke: the chosen dictionaries have no entry
+        // for any of these words. Said out loud, because the alternative is a card
+        // that looks exactly like the feature being switched off.
+        (true, None) if !missing.is_empty() => Definitions::Unavailable(format!(
+            "your chosen dictionaries have no entry for {}",
+            missing.join("、")
+        )),
         (true, None) => Definitions::NothingToAdd,
     }
 }
@@ -283,49 +293,54 @@ mod tests {
         assert!(entries_html("本", &[]).is_none());
     }
 
-    /// The bug that put two wrong words on every card.
+    /// The bug that left cards blank, and the reason there is no headword filter.
     ///
-    /// The add-on is asked with every prefix of the word, so カフェ answers with
-    /// カフェ, カフ and カ. Measured against the real dictionary before this filter
-    /// existed: all three were rendered.
+    /// The add-on deinflects: asking about 出会える answers 出会う【であう】 with
+    /// `inflection_reasons: ["potential"]`. A filter comparing the headword to the
+    /// word asked for threw exactly those entries away — the useful ones — and the
+    /// card came out empty with nothing to say why.
     #[test]
-    fn entries_about_a_prefix_of_the_word_are_dropped() {
+    fn a_deinflected_entry_is_kept() {
         let html = entries_html(
-            "カフェ",
-            &[
-                entry("カフェ", "カフェ", "JMdict", &["cafe"]),
-                entry("カフ", "カフ", "Pixiv", &["a character"]),
-                entry("カ", "カ", "Pixiv", &["the kana ka"]),
-            ],
+            "出会える",
+            &[entry("出会う", "であう", "JMdict", &["to meet"])],
         )
-        .unwrap();
-        assert!(html.contains("cafe"), "{html}");
-        assert!(!html.contains("a character"), "{html}");
-        assert!(!html.contains("the kana ka"), "{html}");
+        .expect("the add-on deinflected to this entry, so it is about the word");
+        assert!(html.contains("出会う"), "{html}");
+        assert!(html.contains("to meet"), "{html}");
+        // Titled by the word that was looked up, so the card names the word being
+        // learned rather than the dictionary's spelling of its base form.
+        assert!(html.contains("<b>出会える</b>"), "{html}");
     }
 
-    /// A kana word's entry is filed under its kanji: わかる answers with
-    /// 分かる【わかる】, which is the right entry under a different spelling.
+    /// A kana word's entry is filed under its kanji, and that is the entry wanted.
     #[test]
     fn an_entry_found_under_its_kanji_is_kept() {
         let html = entries_html(
             "わかる",
-            &[
-                entry("分かる", "わかる", "JMdict", &["to understand"]),
-                entry("和歌", "わか", "JMdict", &["waka poetry"]),
-            ],
+            &[entry("分かる", "わかる", "JMdict", &["to understand"])],
         )
         .unwrap();
         assert!(html.contains("to understand"), "{html}");
-        assert!(!html.contains("waka poetry"), "{html}");
     }
 
+    /// Which entries are about the word is the add-on's judgement, not this
+    /// module's — it deinflects and ranks, and second-guessing it is what produced
+    /// the blank cards. Narrowing is the dictionary picker's job instead.
     #[test]
-    fn a_word_with_only_prefix_matches_renders_nothing() {
-        assert!(entries_html("カフェ", &[entry("カ", "カ", "Pixiv", &["ka"])]).is_none());
+    fn entries_are_taken_in_the_order_the_addon_returned_them() {
+        let html = entries_html(
+            "本",
+            &[
+                entry("本", "ほん", "First", &["book"]),
+                entry("本", "ほん", "Second", &["origin"]),
+            ],
+        )
+        .unwrap();
+        assert!(html.find("First") < html.find("Second"), "{html}");
     }
 
-    /// A monolingual entry arrives as a whole article, newlines and all. Left as
+    /// A monolingual entry arrives as a whole article    /// A monolingual entry arrives as a whole article, newlines and all. Left as
     /// they are, HTML collapses them and welds the senses into one run of text.
     #[test]
     fn a_gloss_is_flattened_and_cut_to_length() {
@@ -389,10 +404,13 @@ mod tests {
     #[test]
     #[ignore = "requires Anki running with the lookup add-on"]
     fn explain_a_real_lookup() {
-        use crate::anki::lookup::lookup_term_inner;
+        use crate::anki::lookup::lookup_exact_word;
 
-        for word in ["単品", "カフェ", "卵", "わかる", "おすすめ"] {
-            match lookup_term_inner(word.to_string(), 0, Some(3)) {
+        // Through the card path, not the scanner's. The scanner sends every prefix
+        // and its answers include them; a card never does, and a diagnostic that
+        // showed カフ under カフェ would be reporting a problem cards do not have.
+        for word in ["単品", "カフェ", "卵", "わかる", "おすすめ", "出会える"] {
+            match lookup_exact_word(word, super::LOOKUP_LIMIT, &[]) {
                 Ok(result) => {
                     println!(
                         "  {word:<8} status={:<12} term={:<10} entries={}",

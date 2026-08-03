@@ -73,9 +73,19 @@ export function AnkiMappingSettingsPage({
     });
   };
 
+  // Only dictionaries holding terms can answer with a meaning. A kanji or
+  // pitch-accent dictionary has none, so listing it offers a choice that could not
+  // do anything if taken.
+  const usableDictionaries =
+    dictionaries?.dictionaries.filter((entry) => entry.termCount > 0) ?? [];
+  const hiddenCount =
+    (dictionaries?.dictionaries.length ?? 0) - usableDictionaries.length;
+
   // Ids that were chosen and are no longer installed. Shown rather than dropped:
   // updating a dictionary gives it a new id, so silently discarding these would mean
   // card meanings quietly stopping the day a dictionary is updated.
+  // Checked against the FULL list, not the filtered one — otherwise hiding a
+  // dictionary would report it as uninstalled, which it is not.
   const missingIds = dictionaries
     ? chosenIds.filter(
         (id) => !dictionaries.dictionaries.some((entry) => entry.id === id),
@@ -468,11 +478,14 @@ export function AnkiMappingSettingsPage({
             <>
               <p className="microcopy">
                 {chosenIds.length === 0
-                  ? "All of them, in the order Anki consults them."
+                  ? "Nothing chosen yet."
                   : `${chosenIds.length} chosen. Cards use only these.`}
+                {hiddenCount > 0
+                  ? ` ${hiddenCount} more hold no meanings and are not listed.`
+                  : ""}
               </p>
               <div className="dictionary-choice-list">
-                {dictionaries.dictionaries.map((entry) => (
+                {usableDictionaries.map((entry) => (
                   <label className="dictionary-choice-row" key={entry.id}>
                     <input
                       type="checkbox"

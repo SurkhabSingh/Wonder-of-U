@@ -644,11 +644,15 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             definition_problem = Some("no dictionaries are chosen for them".to_string());
         } else {
             match definitions_for(app, trimmed_text, &anki.definition_dictionary_ids) {
-                Definitions::Ready(html) => {
+                Definitions::Ready { html, missing } => {
                     fields.insert(
                         anki.fields.definition.clone(),
                         serde_json::Value::String(html),
                     );
+                    if !missing.is_empty() {
+                        definition_problem =
+                            Some(format!("no entry for {}", missing.join("、")));
+                    }
                 }
                 Definitions::Unavailable(reason) => definition_problem = Some(reason),
                 Definitions::NothingToAdd => {}
