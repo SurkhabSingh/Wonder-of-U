@@ -211,8 +211,9 @@ pub(crate) fn lookup_candidates(text: &str, offset: usize) -> Vec<String> {
 /// middle one a manga character — while asking with the word alone answers カフェ
 /// five times over and nothing else.
 ///
-/// `dictionary_ids` narrows the answer to chosen dictionaries; empty means every
-/// enabled one, exactly as before this existed.
+/// `dictionary_ids` narrows the answer to chosen dictionaries. Empty sends no
+/// filter at all, which the add-on reads as every enabled one — the card enricher
+/// never calls it that way, because for a card nothing chosen means nothing.
 pub(super) fn lookup_exact_word(
     word: &str,
     limit: u32,

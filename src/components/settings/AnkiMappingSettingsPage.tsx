@@ -495,6 +495,16 @@ export function AnkiMappingSettingsPage({
             </>
           )}
 
+          {definitionsOn &&
+          settingsDraft.anki.fields.definition &&
+          chosenIds.length === 0 &&
+          dictionaries?.status === "ready" ? (
+            <p className="microcopy field-warning">
+              Tick at least one, or mined cards get no meanings. Nothing chosen
+              means none &mdash; the mine says so too.
+            </p>
+          ) : null}
+
           {missingIds.length > 0 ? (
             <p className="microcopy field-warning">
               {missingIds.length === 1

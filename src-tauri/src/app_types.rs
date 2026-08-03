@@ -316,10 +316,14 @@ pub(crate) struct AnkiSettings {
     pub(crate) known_word_interval_days: u32,
     /// Which of the add-on's dictionaries supply meanings for mined cards, by id.
     ///
-    /// Empty means every enabled one, in the add-on's own order — which is what the
-    /// reading popup uses, and is deliberately the default. A card wants something
-    /// narrower: the order that suits immersion puts a 500,000-entry encyclopedia
-    /// above JMdict, which is not what belongs on a card.
+    /// **Empty means none, not all.** It meant "every enabled one" at first, on the
+    /// reasoning that an absent filter is no filter — true of the request and wrong
+    /// on the screen, where a list of unticked boxes says nothing is chosen and
+    /// cards then arrived with meanings anyway.
+    ///
+    /// Narrowing is the point: the add-on's order suits immersion, where a
+    /// monolingual dictionary first is what you want, and it puts a 500,000-entry
+    /// encyclopedia above JMdict — not what belongs on a card.
     ///
     /// Ids rather than titles, though NEITHER survives a dictionary being updated —
     /// the add-on keys uniqueness on title AND revision, so an update is a new row

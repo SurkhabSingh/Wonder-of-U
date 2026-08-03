@@ -634,6 +634,14 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             // The toggle is on and there is nowhere to put the answer. Said out loud,
             // because from the outside this looks exactly like the feature not working.
             definition_problem = Some("no Anki field is mapped for them".to_string());
+        } else if anki.definition_dictionary_ids.is_empty() {
+            // Nothing chosen means nothing, not everything.
+            //
+            // It used to mean "every dictionary", on the reasoning that an absent
+            // filter is no filter. That reads correctly in the request and wrongly on
+            // the screen: a list of unticked boxes says none are chosen, and cards
+            // arriving with meanings anyway is the widget contradicting itself.
+            definition_problem = Some("no dictionaries are chosen for them".to_string());
         } else {
             match definitions_for(app, trimmed_text, &anki.definition_dictionary_ids) {
                 Definitions::Ready(html) => {
