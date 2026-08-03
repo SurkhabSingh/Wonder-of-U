@@ -405,3 +405,33 @@ mod tests {
         assert_eq!(candidates, vec!["本語".to_string(), "本".to_string()]);
     }
 }
+
+#[cfg(test)]
+mod bridge_tests {
+    /// Asks the real add-on for its dictionaries.
+    ///
+    /// The client had never been exercised end to end — the settings toggle that
+    /// triggers it was off, so the first "it does not work" report could not tell a
+    /// broken client from a hidden UI. Needs Anki running.
+    ///
+    ///   cargo test dictionaries_from_the_real_addon -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires Anki running with the lookup add-on"]
+    fn dictionaries_from_the_real_addon() {
+        let listing = super::lookup_dictionaries_inner().expect("the bridge should answer");
+        println!("  status={} count={}", listing.status, listing.dictionaries.len());
+        for entry in &listing.dictionaries {
+            println!(
+                "    id={:<3} prio={:<3} enabled={:<5} terms={:<9} {}",
+                entry.id, entry.priority, entry.enabled, entry.term_count, entry.title
+            );
+        }
+        assert_eq!(listing.status, "ready");
+        assert!(!listing.dictionaries.is_empty());
+
+        // The field the desktop keys everything on. A zero here would mean the
+        // camelCase mapping silently dropped it and every id would collide.
+        assert!(listing.dictionaries.iter().all(|entry| entry.id > 0));
+        assert!(listing.dictionaries.iter().any(|entry| entry.term_count > 0));
+    }
+}

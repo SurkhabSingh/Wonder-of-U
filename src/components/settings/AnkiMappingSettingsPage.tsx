@@ -44,7 +44,9 @@ export function AnkiMappingSettingsPage({
   // on: it is an HTTP call to Anki, and a page nobody is configuring should not make
   // one. Null until it has been asked for, which is what tells the empty case from
   // the not-yet-loaded one.
-  const [dictionaries, setDictionaries] = useState<LookupDictionaries | null>(null);
+  const [dictionaries, setDictionaries] = useState<LookupDictionaries | null>(
+    null,
+  );
   const definitionsOn = settingsDraft.features.addDefinitionsToMinedCards;
   const chosenIds = settingsDraft.anki.definitionDictionaryIds ?? [];
 
@@ -162,12 +164,13 @@ export function AnkiMappingSettingsPage({
       <div className="info-note">
         <p className="microcopy">
           No matching note type? Create the app&rsquo;s &ldquo;Wonder of U
-          Listening&rdquo; note type in one click &mdash; a listening card that plays the
-          audio on the front and reveals the screenshot, transcript, translation, and
-          source on the back &mdash; and the fields below map automatically. If you already
-          have it, this brings it up to date instead: readings render as furigana and stay
-          hidden until you hover. Your own styling is kept &mdash; the rules are appended,
-          never overwritten.
+          Listening&rdquo; note type in one click &mdash; a listening card that
+          plays the audio on the front and reveals the screenshot, transcript,
+          translation, and source on the back &mdash; and the fields below map
+          automatically. If you already have it, this brings it up to date
+          instead: readings render as furigana and stay hidden until you hover.
+          Your own styling is kept &mdash; the rules are appended, never
+          overwritten.
         </p>
         <button
           type="button"
@@ -232,7 +235,9 @@ export function AnkiMappingSettingsPage({
             options={[
               { value: "", label: "Choose note type" },
               ...(settingsDraft.anki.noteType &&
-              !displayedAnkiCatalog.noteTypes.includes(settingsDraft.anki.noteType)
+              !displayedAnkiCatalog.noteTypes.includes(
+                settingsDraft.anki.noteType,
+              )
                 ? [
                     {
                       value: settingsDraft.anki.noteType,
@@ -397,8 +402,8 @@ export function AnkiMappingSettingsPage({
         </label>
         <p className="microcopy">
           Extra audio kept on each side of a mined sentence&rsquo;s clip so it
-          doesn&rsquo;t cut the first or last syllable. Larger values add more lead-in
-          and tail; smaller values make tighter clips.
+          doesn&rsquo;t cut the first or last syllable. Larger values add more
+          lead-in and tail; smaller values make tighter clips.
         </p>
       </div>
 
@@ -415,93 +420,106 @@ export function AnkiMappingSettingsPage({
               })
             }
           />
-          <span>Add dictionary meanings for the words you don&rsquo;t know yet</span>
+          <span>
+            Add dictionary meanings for the words you don&rsquo;t know yet
+          </span>
         </label>
         <p className="microcopy">
-          When a mined line contains a word you haven&rsquo;t learned, its meaning is
-          looked up and written to the definitions field above. Needs Anki open and
-          your vocabulary set up under Study Picks. If a meaning can&rsquo;t be found
-          the card is still made, just without it &mdash; and the mine says so.
+          When a mined line contains a word you haven&rsquo;t learned, its
+          meaning is looked up and written to the definitions field above. Needs
+          Anki open and your vocabulary set up under Study Picks. If a meaning
+          can&rsquo;t be found the card is still made, just without it &mdash;
+          and the mine says so.
         </p>
         {/* A toggle with nowhere to write is a toggle that does nothing, and from the
             outside that is indistinguishable from a broken feature. Say it here rather
             than letting every mined card be the thing that reports it. */}
         {definitionsOn && !settingsDraft.anki.fields.definition ? (
           <p className="microcopy field-warning">
-            Map the definitions field above for this to have anywhere to write. On the
-            app&rsquo;s own note type, &ldquo;Create or update&rdquo; adds it.
+            Map the definitions field above for this to have anywhere to write.
+            On the app&rsquo;s own note type, &ldquo;Create or update&rdquo;
+            adds it.
           </p>
         ) : null}
 
-        {definitionsOn ? (
-          <div className="dictionary-choice">
-            <span className="field-label-with-help">
-              <span>Meanings come from</span>
-              <TooltipBadge
-                label="?"
-                description="Which of your dictionaries are allowed to answer for a mined card. Choose none to use all of them in the order Anki already consults them — that order suits reading, where a monolingual dictionary first is what you want, and it is not always what belongs on a card."
-              />
-            </span>
+        {/* Always shown, even with the toggle off. Hiding it behind the toggle made
+            an unused feature look like a missing one: the section simply was not
+            there, and nothing said why. */}
+        <div className="dictionary-choice">
+          <span className="field-label-with-help">
+            <span>Meanings come from</span>
+            <TooltipBadge
+              label="?"
+              description="Which of your dictionaries are allowed to answer for a mined card. Choose none to use all of them in the order Anki already consults them — that order suits reading, where a monolingual dictionary first is what you want, and it is not always what belongs on a card."
+            />
+          </span>
 
-            {dictionaries === null ? (
+          {!definitionsOn ? (
+            <p className="microcopy">
+              Turn on meanings above to choose which dictionaries answer.
+            </p>
+          ) : dictionaries === null ? (
+            <p className="microcopy">
+              Open Anki to choose &mdash; your dictionaries live in the add-on.
+            </p>
+          ) : dictionaries.status !== "ready" ? (
+            <p className="microcopy">{dictionaries.message}</p>
+          ) : (
+            <>
               <p className="microcopy">
-                Open Anki to choose &mdash; your dictionaries live in the add-on.
+                {chosenIds.length === 0
+                  ? "All of them, in the order Anki consults them."
+                  : `${chosenIds.length} chosen. Cards use only these.`}
               </p>
-            ) : dictionaries.status !== "ready" ? (
-              <p className="microcopy">{dictionaries.message}</p>
-            ) : (
-              <>
-                <p className="microcopy">
-                  {chosenIds.length === 0
-                    ? "All of them, in the order Anki consults them."
-                    : `${chosenIds.length} chosen. Cards use only these.`}
-                </p>
-                <div className="dictionary-choice-list">
-                  {dictionaries.dictionaries.map((entry) => (
-                    <label className="dictionary-choice-row" key={entry.id}>
-                      <input
-                        type="checkbox"
-                        checked={chosenIds.includes(entry.id)}
-                        onChange={() => toggleDictionary(entry.id)}
-                      />
-                      <span className="dictionary-choice-title">{entry.title}</span>
-                      <span className="dictionary-choice-count">
-                        {entry.termCount > 0
-                          ? `${entry.termCount.toLocaleString()} entries`
-                          : "no terms"}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </>
-            )}
+              <div className="dictionary-choice-list">
+                {dictionaries.dictionaries.map((entry) => (
+                  <label className="dictionary-choice-row" key={entry.id}>
+                    <input
+                      type="checkbox"
+                      checked={chosenIds.includes(entry.id)}
+                      onChange={() => toggleDictionary(entry.id)}
+                    />
+                    <span className="dictionary-choice-title">
+                      {entry.title}
+                    </span>
+                    <span className="dictionary-choice-count">
+                      {entry.termCount > 0
+                        ? `${entry.termCount.toLocaleString()} entries`
+                        : "no terms"}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
 
-            {missingIds.length > 0 ? (
-              <p className="microcopy field-warning">
-                {missingIds.length === 1 ? "A dictionary" : `${missingIds.length} dictionaries`}{" "}
-                you chose {missingIds.length === 1 ? "is" : "are"} no longer installed
-                &mdash; updating a dictionary replaces it with a new one. Tick a
-                replacement, then{" "}
-                <button
-                  type="button"
-                  className="link-button"
-                  onClick={() =>
-                    onUpdateSettings({
-                      anki: {
-                        definitionDictionaryIds: chosenIds.filter(
-                          (id) => !missingIds.includes(id),
-                        ),
-                      },
-                    })
-                  }
-                >
-                  forget the missing {missingIds.length === 1 ? "one" : "ones"}
-                </button>
-                .
-              </p>
-            ) : null}
-          </div>
-        ) : null}
+          {missingIds.length > 0 ? (
+            <p className="microcopy field-warning">
+              {missingIds.length === 1
+                ? "A dictionary"
+                : `${missingIds.length} dictionaries`}{" "}
+              you chose {missingIds.length === 1 ? "is" : "are"} no longer
+              installed &mdash; updating a dictionary replaces it with a new
+              one. Tick a replacement, then{" "}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() =>
+                  onUpdateSettings({
+                    anki: {
+                      definitionDictionaryIds: chosenIds.filter(
+                        (id) => !missingIds.includes(id),
+                      ),
+                    },
+                  })
+                }
+              >
+                forget the missing {missingIds.length === 1 ? "one" : "ones"}
+              </button>
+              .
+            </p>
+          ) : null}
+        </div>
       </div>
 
       <div className="info-note">
@@ -520,16 +538,16 @@ export function AnkiMappingSettingsPage({
           <span>Automatically add furigana to Japanese cards</span>
         </label>
         <p className="microcopy">
-          Applies to mined sentences and to whole recordings alike. Anki needs to be
-          open; if it is not, the card is still made and you are told furigana was
-          skipped.
+          Applies to mined sentences and to whole recordings alike. Anki needs
+          to be open; if it is not, the card is still made and you are told
+          furigana was skipped.
         </p>
       </div>
 
       <div className="info-note">
         <strong>
-          Listening card: Replay audio -&gt; Audio (Front), transcript -&gt; Sentence
-          (Back).
+          Listening card: Replay audio -&gt; Audio (Front), transcript -&gt;
+          Sentence (Back).
         </strong>
         <p className="microcopy">
           Furigana is applied directly to the sentence/transcript field, not a
