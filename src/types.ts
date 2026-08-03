@@ -36,6 +36,10 @@ export type FeatureSettings = {
   // Look the new words in a mined line up in the dictionary the popup uses, and
   // write what comes back onto the card. Needs the Anki add-on running.
   addDefinitionsToMinedCards: boolean;
+  // Whether "Mine all" may make more than one card for the same new word. Off by
+  // default: a transcript often teaches a word twice, and two cards for one word is
+  // review load without extra learning.
+  allowDuplicateMinedWords: boolean;
 };
 
 export type AnkiFieldMapping = {

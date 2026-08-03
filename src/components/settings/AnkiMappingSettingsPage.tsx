@@ -551,6 +551,30 @@ export function AnkiMappingSettingsPage({
         <label className="toggle inline-toggle">
           <input
             type="checkbox"
+            checked={settingsDraft.features.allowDuplicateMinedWords}
+            onChange={(event) =>
+              onUpdateSettings({
+                features: {
+                  allowDuplicateMinedWords: event.currentTarget.checked,
+                },
+              })
+            }
+          />
+          <span>Allow more than one card for the same new word</span>
+        </label>
+        <p className="microcopy">
+          Affects &ldquo;Mine all&rdquo; only. A transcript often teaches a word
+          twice &mdash; a song repeats its lines &mdash; and two cards for one word
+          is review load without extra learning. Off, the line with the most context
+          around the word is the one mined. On, every line within reach is, which is
+          what you want if you collect several examples of a word.
+        </p>
+      </div>
+
+      <div className="info-note">
+        <label className="toggle inline-toggle">
+          <input
+            type="checkbox"
             checked={settingsDraft.features.autoAddFuriganaAfterAnkiPush}
             onChange={(event) =>
               onUpdateSettings({

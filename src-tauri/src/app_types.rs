@@ -244,6 +244,14 @@ pub(crate) struct FeatureSettings {
     /// without — that should be chosen, not inherited.
     #[serde(default)]
     pub(crate) add_definitions_to_mined_cards: bool,
+    /// Whether "Mine all" may make more than one card for the same new word.
+    ///
+    /// Off by default. A transcript often teaches a word twice — a song repeats its
+    /// lines, and 生まれ変わる arrives in two of them — and two cards for one word is
+    /// review load without extra learning. On, every line within reach is mined,
+    /// which is what someone collecting several examples of a word wants.
+    #[serde(default)]
+    pub(crate) allow_duplicate_mined_words: bool,
 }
 
 impl Default for FeatureSettings {
@@ -255,6 +263,7 @@ impl Default for FeatureSettings {
             auto_add_furigana_after_anki_push: false,
             translate_after_transcription: false,
             add_definitions_to_mined_cards: false,
+            allow_duplicate_mined_words: false,
         }
     }
 }

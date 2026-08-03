@@ -1087,6 +1087,9 @@ function App() {
                 recording={viewingRecording}
                 transcriptionLanguage={settingsDraft.whisper.language}
                 clipPaddingMs={settingsDraft.anki.clipPaddingMs}
+                allowDuplicateMinedWords={
+                  settingsDraft.features.allowDuplicateMinedWords
+                }
           knownWordsBuiltAtMs={bootstrap.knownWords.builtAtMs}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>

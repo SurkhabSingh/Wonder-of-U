@@ -302,6 +302,7 @@ export function TranscriptViewerPage({
   lastTranscriptionOutcome,
   transcriptionLanguage,
   clipPaddingMs,
+  allowDuplicateMinedWords,
   knownWordsBuiltAtMs,
 }: {
   recording: RecentRecording;
@@ -353,6 +354,10 @@ export function TranscriptViewerPage({
   // Milliseconds the miner pads a clip by on each side. Playback uses the same value so a
   // previewed sentence and the card made from it cannot drift apart.
   clipPaddingMs: number;
+  // Whether "Mine all" may make more than one card for the same new word. Changes
+  // the count on the button as well as what it mines, so it is read here rather
+  // than only at mining time.
+  allowDuplicateMinedWords: boolean;
   // When the known-word list was last read from Anki. Only a re-rank trigger: a
   // Refresh has to update the badges on a transcript already open, or the words
   // learned this morning would not show until the page was left and returned to.
@@ -467,6 +472,7 @@ export function TranscriptViewerPage({
   const [editedSegments, setEditedSegments] = useState<RecordingSegment[]>([]);
   // Narrows the transcript to the lines a single word from being readable.
   const [withinReachOnly, setWithinReachOnly] = useState(false);
+  const allowDuplicateWords = allowDuplicateMinedWords;
   // Why a batch mine could not make a card of a row, keyed like the mined markers.
   const [mineFailures, setMineFailures] = useState<Map<string, string>>(
     new Map(),
@@ -592,7 +598,7 @@ export function TranscriptViewerPage({
     if (!ranking || ranking.status !== "ready") {
       return [];
     }
-    return editedSegments
+    const candidates = editedSegments
       .map((segment, index) => ({ segment, index }))
       .filter(({ segment, index }) => {
         const key = segmentMineKey(segment);
@@ -602,13 +608,49 @@ export function TranscriptViewerPage({
           !minedKeysFromAnki.has(key)
         );
       });
-  }, [ranking, editedSegments, minedKeys, minedKeysFromAnki]);
+    if (allowDuplicateWords) {
+      return candidates;
+    }
+
+    // One line per new word. A transcript teaches a word twice often enough to
+    // matter — a song repeats its lines, and this one has 生まれ変わる in two — and
+    // two cards for one word is review load without extra learning.
+    //
+    // The line with the MOST content words wins, earliest on a tie. Same reasoning
+    // as "i+1 needs an i": of two sentences a word away, the one with more around
+    // it is the one you can infer the word from.
+    const bestForWord = new Map<string, { segment: RecordingSegment; index: number }>();
+    for (const candidate of candidates) {
+      const line = ranking.lines[candidate.index];
+      const word = line?.unknownWords[0];
+      if (word === undefined) {
+        continue;
+      }
+      const held = bestForWord.get(word);
+      if (
+        !held ||
+        (ranking.lines[candidate.index]?.contentWordCount ?? 0) >
+          (ranking.lines[held.index]?.contentWordCount ?? 0)
+      ) {
+        bestForWord.set(word, candidate);
+      }
+    }
+    // Back into recording order: the list is read alongside the audio, and mining
+    // is reported against it.
+    return [...bestForWord.values()].sort((a, b) => a.index - b.index);
+  }, [
+    ranking,
+    editedSegments,
+    minedKeys,
+    minedKeysFromAnki,
+    allowDuplicateWords,
+  ]);
 
   // How many one-word-away lines the batch will NOT mine because the sentence is
   // already a card. Counted so the difference can be SAID: the transcript shows a
   // badge on every line within reach, the button offers fewer, and without this the
   // gap between the two numbers has no explanation anywhere on screen.
-  const skippedAsMined = useMemo(() => {
+  const skippedWithinReach = useMemo(() => {
     if (!ranking || ranking.status !== "ready") {
       return 0;
     }
@@ -1024,17 +1066,15 @@ export function TranscriptViewerPage({
                 mineDisabledReason ??
                 (minableWithinReach.length === 0
                   ? "Every line here is already a card"
-                  : skippedAsMined > 0
-                    ? `Make a card of every line shown. ${skippedAsMined} of them ${
-                        skippedAsMined === 1 ? "is" : "are"
-                      } skipped — the same sentence is already in your deck, marked "In deck" on the row.`
+                  : skippedWithinReach > 0
+                    ? `Make a card of every line shown. ${skippedWithinReach} skipped: already in your deck (marked "In deck"), or teaching a word another line here already covers.`
                     : "Make a card of every line shown, one word at a time")
               }
             >
               {isBatchMining
                 ? "Mining…"
-                : skippedAsMined > 0
-                  ? `Mine all ${minableWithinReach.length} · ${skippedAsMined} in deck`
+                : skippedWithinReach > 0
+                  ? `Mine all ${minableWithinReach.length} · ${skippedWithinReach} skipped`
                   : `Mine all ${minableWithinReach.length}`}
             </button>
           ) : null}

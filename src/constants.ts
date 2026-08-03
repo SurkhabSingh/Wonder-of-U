@@ -358,6 +358,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       autoAddFuriganaAfterAnkiPush: false,
       translateAfterTranscription: false,
       addDefinitionsToMinedCards: false,
+      allowDuplicateMinedWords: false,
     },
     translation: {
       provider: "google-translate",

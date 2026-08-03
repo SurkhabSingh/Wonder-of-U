@@ -180,6 +180,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
             auto_add_furigana_after_anki_push: settings.features.auto_add_furigana_after_anki_push,
             translate_after_transcription: settings.features.translate_after_transcription,
             add_definitions_to_mined_cards: settings.features.add_definitions_to_mined_cards,
+            allow_duplicate_mined_words: settings.features.allow_duplicate_mined_words,
         },
         translation: TranslationSettings {
             provider: normalize_translation_provider(&settings.translation.provider),
