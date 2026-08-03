@@ -479,13 +479,15 @@ export function AnkiMappingSettingsPage({
                       checked={chosenIds.includes(entry.id)}
                       onChange={() => toggleDictionary(entry.id)}
                     />
-                    <span className="dictionary-choice-title">
-                      {entry.title}
-                    </span>
-                    <span className="dictionary-choice-count">
-                      {entry.termCount > 0
-                        ? `${entry.termCount.toLocaleString()} entries`
-                        : "no terms"}
+                    <span className="dictionary-choice-text">
+                      <span className="dictionary-choice-title">
+                        {entry.title}
+                      </span>
+                      <span className="dictionary-choice-count">
+                        {entry.termCount > 0
+                          ? `${entry.termCount.toLocaleString()} entries`
+                          : "no terms"}
+                      </span>
                     </span>
                   </label>
                 ))}

@@ -1487,37 +1487,48 @@ input::placeholder {
 
 .dictionary-choice-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-  gap: var(--space-3) var(--space-5);
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: var(--space-4) var(--space-5);
   margin-top: var(--space-4);
 }
 
+/* Checkbox, then the name and its size stacked beside it.
+ *
+ * The first version laid all three out in one flex line with the title ellipsised.
+ * A dictionary name is long and Japanese — 旺文社国語辞典 第十一版 — and the title
+ * was the only item allowed to shrink, so it collapsed to nothing and the row read
+ * as a checkbox next to an entry count with no name at all. Stacking removes the
+ * competition: the text column is `minmax(0, 1fr)`, so it shrinks by WRAPPING, and
+ * there is no width at which the name can disappear. */
 .dictionary-choice-row {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
   gap: var(--space-3);
   min-width: 0;
   cursor: pointer;
 }
 
 .dictionary-choice-row input {
-  flex: 0 0 auto;
   min-height: 0;
+  margin-top: 3px;
 }
 
-/* The title is what identifies the dictionary, so it takes the space and truncates
-   last; the entry count is context and gives way first. */
-.dictionary-choice-title {
-  flex: 1 1 auto;
+.dictionary-choice-text {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.dictionary-choice-title {
+  display: block;
   font-size: var(--text-sm);
+  /* A dictionary name has no spaces to break at, so without this a long one
+     overflows its column rather than wrapping inside it. */
+  overflow-wrap: anywhere;
 }
 
 .dictionary-choice-count {
-  flex: 0 0 auto;
+  display: block;
+  margin-top: 1px;
   color: var(--text-muted);
   font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;

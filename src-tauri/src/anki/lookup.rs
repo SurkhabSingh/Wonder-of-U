@@ -435,3 +435,29 @@ mod bridge_tests {
         assert!(listing.dictionaries.iter().any(|entry| entry.term_count > 0));
     }
 }
+
+#[cfg(test)]
+mod serialization_tests {
+    /// What the webview actually receives. The struct is deserialized from the
+    /// add-on AND serialized to the frontend through the same `rename_all`, so a
+    /// key that is wrong in one direction is invisible in the other.
+    #[test]
+    fn a_dictionary_reaches_the_frontend_with_every_field() {
+        let listing = super::LookupDictionaries {
+            status: "ready".into(),
+            message: String::new(),
+            dictionaries: vec![super::LookupDictionary {
+                id: 3,
+                title: "JMdict [2025-11-01]".into(),
+                revision: "r1".into(),
+                enabled: true,
+                priority: 2,
+                term_count: 513033,
+            }],
+        };
+        let json = serde_json::to_string(&listing).unwrap();
+        println!("  {json}");
+        assert!(json.contains(r#""title":"JMdict [2025-11-01]""#), "{json}");
+        assert!(json.contains(r#""termCount":513033"#), "{json}");
+    }
+}
