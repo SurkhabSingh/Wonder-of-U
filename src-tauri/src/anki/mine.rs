@@ -633,7 +633,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         if anki.fields.definition.is_empty() {
             // The toggle is on and there is nowhere to put the answer. Said out loud,
             // because from the outside this looks exactly like the feature not working.
-            definition_problem = Some("no Anki field is mapped for them".to_string());
+            definition_problem = Some("definitions (no Anki field is mapped)".to_string());
         } else if anki.definition_dictionary_ids.is_empty() {
             // Nothing chosen means nothing, not everything.
             //
@@ -641,7 +641,8 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             // filter is no filter. That reads correctly in the request and wrongly on
             // the screen: a list of unticked boxes says none are chosen, and cards
             // arriving with meanings anyway is the widget contradicting itself.
-            definition_problem = Some("no dictionaries are chosen for them".to_string());
+            definition_problem =
+                Some("definitions (no dictionaries are chosen for them)".to_string());
         } else {
             match definitions_for(app, trimmed_text, &anki.definition_dictionary_ids) {
                 Definitions::Ready { html, missing } => {
@@ -650,11 +651,18 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
                         serde_json::Value::String(html),
                     );
                     if !missing.is_empty() {
-                        definition_problem =
-                            Some(format!("no entry for {}", missing.join("、")));
+                        // Names the WORD, not "definitions": some were added, and
+                        // "without definitions" would say the opposite of what the
+                        // card carries.
+                        definition_problem = Some(format!(
+                            "a meaning for {} (not in your chosen dictionaries)",
+                            missing.join("、")
+                        ));
                     }
                 }
-                Definitions::Unavailable(reason) => definition_problem = Some(reason),
+                Definitions::Unavailable(reason) => {
+                    definition_problem = Some(format!("definitions ({reason})"))
+                }
                 Definitions::NothingToAdd => {}
             }
         }
@@ -734,7 +742,10 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
                     screenshot_problem.map(|problem| format!("a screenshot ({problem})")),
                     video_problem.map(|problem| format!("a video clip ({problem})")),
                     furigana_problem.map(|problem| format!("furigana ({problem})")),
-                    definition_problem.map(|problem| format!("definitions ({problem})")),
+                    // Already a whole phrase: what is missing differs between "no
+                    // definitions at all" and "a meaning for one word of several",
+                    // and a fixed wrapper could only say one of them.
+                    definition_problem,
                 ]
                 .into_iter()
                 .flatten()

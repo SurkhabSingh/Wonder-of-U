@@ -30,8 +30,11 @@ const ENTRIES_PER_WORD: usize = 3;
 /// How many glosses to keep from one entry, for the same reason.
 const GLOSSES_PER_ENTRY: usize = 4;
 
-/// How many entries to ASK for. Higher than the cap so that entries dropped by
-/// `entry_is_about`, or by a dictionary the user has excluded, leave enough behind.
+/// How many entries to ASK for.
+///
+/// Higher than the cap kept above, because the add-on applies `limit` before this
+/// module's dictionary filter can see the entries — ask for three from seven
+/// dictionaries and a selection of one can be trimmed away entirely.
 const LOOKUP_LIMIT: u32 = 12;
 
 /// How much of one gloss to keep.
