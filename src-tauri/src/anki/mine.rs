@@ -957,6 +957,20 @@ pub(crate) fn mine_segments_to_anki_inner<R: Runtime>(
         if item.status == "failed" {
             failed += 1;
             consecutive_failures += 1;
+            // Logged, not just returned. The result is shown once and cleared by the
+            // next run, so a batch that pushed nine of eleven left no record of which
+            // two or why — and a failure that succeeds on a retry is exactly the kind
+            // that cannot be reproduced on demand.
+            log_event(
+                app,
+                "WARN",
+                "mine.batch_line_failed",
+                serde_json::json!({
+                    "startMs": line.start_ms,
+                    "text": line.text,
+                    "message": item.message,
+                }),
+            );
             outcomes.push(mined_outcome(line, "failed", item.message));
             stopped_early = consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT;
         } else {
@@ -990,6 +1004,18 @@ pub(crate) fn mine_segments_to_anki_inner<R: Runtime>(
     } else {
         format!("{added} {} added to Anki.", if added == 1 { "card" } else { "cards" })
     };
+
+    log_event(
+        app,
+        if failed > 0 { "WARN" } else { "INFO" },
+        "mine.batch_finished",
+        serde_json::json!({
+            "requested": total,
+            "added": added,
+            "failed": failed,
+            "stoppedEarly": stopped_early,
+        }),
+    );
 
     update_shell_snapshot(app, |shell| {
         shell.status_text = message.clone();
