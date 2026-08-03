@@ -604,6 +604,18 @@ export function TranscriptViewerPage({
       });
   }, [ranking, editedSegments, minedKeys, minedKeysFromAnki]);
 
+  // How many one-word-away lines the batch will NOT mine because the sentence is
+  // already a card. Counted so the difference can be SAID: the transcript shows a
+  // badge on every line within reach, the button offers fewer, and without this the
+  // gap between the two numbers has no explanation anywhere on screen.
+  const skippedAsMined = useMemo(() => {
+    if (!ranking || ranking.status !== "ready") {
+      return 0;
+    }
+    const withinReach = ranking.lines.filter((line) => line.withinReach).length;
+    return Math.max(0, withinReach - minableWithinReach.length);
+  }, [ranking, minableWithinReach]);
+
   const handleMineWithinReach = async () => {
     if (minableWithinReach.length === 0 || isBatchMining) {
       return;
@@ -1012,12 +1024,18 @@ export function TranscriptViewerPage({
                 mineDisabledReason ??
                 (minableWithinReach.length === 0
                   ? "Every line here is already a card"
-                  : "Make a card of every line shown, one word at a time")
+                  : skippedAsMined > 0
+                    ? `Make a card of every line shown. ${skippedAsMined} of them ${
+                        skippedAsMined === 1 ? "is" : "are"
+                      } skipped — the same sentence is already in your deck, marked "In deck" on the row.`
+                    : "Make a card of every line shown, one word at a time")
               }
             >
               {isBatchMining
                 ? "Mining…"
-                : `Mine all ${minableWithinReach.length}`}
+                : skippedAsMined > 0
+                  ? `Mine all ${minableWithinReach.length} · ${skippedAsMined} in deck`
+                  : `Mine all ${minableWithinReach.length}`}
             </button>
           ) : null}
 

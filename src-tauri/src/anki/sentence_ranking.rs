@@ -390,6 +390,12 @@ mod tests {
             }
             if counted {
                 within_reach_by_content_words[bucket] += 1;
+                // Listed, not just counted. Which lines qualify is the question every
+                // "why did N go in and M come out" needs answering, and a histogram
+                // cannot answer it.
+                let new_word = words.iter().find(|word| !known.contains(word.as_str()));
+                println!("  +1  {line}
+        new: {}", new_word.map(String::as_str).unwrap_or(""));
             }
         }
         let labels = ["1 word", "2 words", "3-4 words", "5+ words"];
