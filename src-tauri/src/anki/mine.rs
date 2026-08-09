@@ -371,32 +371,51 @@ fn mine_single_segment<R: Runtime>(
         app,
         file_path,
         &source,
-        text,
-        start_ms,
-        end_ms,
-        translation,
+        &MinedLine {
+            text,
+            start_ms,
+            end_ms,
+            translation,
+            target_word,
+        },
         None,
-        target_word,
     )
 }
 
 /// Mines one sentence from any media source. Shared by the transcript viewer and the
 /// watch session; see `MineSource`.
+/// The line a card is being made from, and what it is being made FOR.
+///
+/// Grouped rather than passed as five more parameters, and not only for the count:
+/// `translation` and `target_word` are both `Option<&str>`, so a call site could
+/// swap them and compile. Named fields make that impossible to write by accident,
+/// which a ninth positional argument did not.
+pub(super) struct MinedLine<'a> {
+    pub(super) text: &'a str,
+    pub(super) start_ms: u64,
+    pub(super) end_ms: u64,
+    pub(super) translation: Option<&'a str>,
+    /// The one word this card is being mined FOR, when the user pointed at a word
+    /// rather than a line. Changes two things and nothing else: the Word field is
+    /// filled, and the meanings are of THIS word instead of the ones the ranking
+    /// worked out for the sentence.
+    pub(super) target_word: Option<&'a str>,
+}
+
 pub(super) fn mine_media_to_anki<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
     source: &MineSource,
-    text: &str,
-    start_ms: u64,
-    end_ms: u64,
-    translation: Option<&str>,
+    line: &MinedLine<'_>,
     padding_override: Option<ClipPadding>,
-    // The one word this card is being mined FOR, when the user pointed at a word
-    // rather than a line. Changes two things and nothing else: the Word field is
-    // filled, and the meanings are of THIS word instead of the ones the ranking
-    // worked out for the sentence.
-    target_word: Option<&str>,
 ) -> (RecordingActionItem, &'static str) {
+    let MinedLine {
+        text,
+        start_ms,
+        end_ms,
+        translation,
+        target_word,
+    } = *line;
     let failed = |message: String| {
         (
             RecordingActionItem {
@@ -846,12 +865,15 @@ pub(crate) fn mine_watched_line_inner<R: Runtime>(
             app,
             &video_path,
             &source,
-            &text,
-            start_ms,
-            end_ms,
-            None,
+            &MinedLine {
+                text: &text,
+                start_ms,
+                end_ms,
+                translation: None,
+                // The watch session mines the line on screen, never a single word.
+                target_word: None,
+            },
             padding,
-            None,
         );
     let message = item.message.clone();
 
