@@ -303,6 +303,8 @@ export function TranscriptViewerPage({
   transcriptionLanguage,
   clipPaddingMs,
   allowDuplicateMinedWords,
+  externallyMinedKeys,
+  onLinesMined,
   knownWordsBuiltAtMs,
 }: {
   recording: RecentRecording;
@@ -358,6 +360,16 @@ export function TranscriptViewerPage({
   // the count on the button as well as what it mines, so it is read here rather
   // than only at mining time.
   allowDuplicateMinedWords: boolean;
+  // Lines mined this session from somewhere other than a row — today that means the
+  // dictionary popup, which mines a word with its line. Without it the row goes on
+  // offering "Mine" for a line that already has a card, and pressing it can only
+  // fail as a duplicate.
+  externallyMinedKeys: ReadonlySet<string>;
+  // Reports back every line this page has mined, so the popup — which lives above
+  // this one — stops offering to mine a line that already has a card. Reported from
+  // one effect rather than from each handler, so a mining path added later is
+  // covered without anyone remembering to call it.
+  onLinesMined: (keys: ReadonlySet<string>) => void;
   // When the known-word list was last read from Anki. Only a re-rank trigger: a
   // Refresh has to update the badges on a transcript already open, or the words
   // learned this morning would not show until the page was left and returned to.
@@ -494,6 +506,20 @@ export function TranscriptViewerPage({
   // cards actually in Anki, so it covers earlier sessions too, then extended as
   // the user mines.
   const [minedKeys, setMinedKeys] = useState<Set<string>>(new Set());
+  // What the rows are judged against: mined here, or mined elsewhere in this session
+  // for the same line. Both spend a row's Mine button, because both mean the card
+  // exists — where it was made from does not change that.
+  const minedInThisSession = useMemo(
+    () => new Set([...minedKeys, ...externallyMinedKeys]),
+    [minedKeys, externallyMinedKeys],
+  );
+
+  // Only what THIS page mined goes up. Sending the union back would return the
+  // caller's own keys to it, which is harmless but circular, and the sort of loop
+  // that stops being harmless the day someone derives state from it.
+  useEffect(() => {
+    onLinesMined(minedKeys);
+  }, [minedKeys, onLinesMined]);
   // The single row with a mine request in flight, so only it shows "Mining…".
   const [miningKey, setMiningKey] = useState<string | null>(null);
 
@@ -547,7 +573,7 @@ export function TranscriptViewerPage({
     // in the mouse UI, so the keyboard path must refuse the duplicate too. A row
     // matched only against the deck is deliberately NOT refused: it still offers
     // "Mine again", and Enter has to agree with the button.
-    if (minedKeys.has(key)) {
+    if (minedInThisSession.has(key)) {
       return;
     }
     setMiningKey(key);
@@ -604,7 +630,7 @@ export function TranscriptViewerPage({
         const key = segmentMineKey(segment);
         return (
           (ranking.lines[index]?.withinReach ?? false) &&
-          !minedKeys.has(key) &&
+          !minedInThisSession.has(key) &&
           !minedKeysFromAnki.has(key)
         );
       });
@@ -641,7 +667,7 @@ export function TranscriptViewerPage({
   }, [
     ranking,
     editedSegments,
-    minedKeys,
+    minedInThisSession,
     minedKeysFromAnki,
     allowDuplicateWords,
   ]);
@@ -1348,7 +1374,7 @@ export function TranscriptViewerPage({
               onMineSegment={
                 recording.audioDeleted ? undefined : handleMineSegment
               }
-              minedKeys={minedKeys}
+              minedKeys={minedInThisSession}
               deckMinedKeys={minedKeysFromAnki}
               miningKey={miningKey}
               isMining={isMining}

@@ -793,6 +793,20 @@ function App() {
     setMinedLineKeys((previous) => new Set(previous).add(minedLineKey(text, startMs, endMs)));
   };
 
+  // Everything the transcript page has mined, folded in so the popup knows about it
+  // too — a line mined by "Mine all" is as much a card as one mined from the popup.
+  //
+  // Stable identity, because the page reports through an effect: a new function each
+  // render would make that effect fire every render.
+  const absorbMinedLines = useCallback((keys: ReadonlySet<string>) => {
+    setMinedLineKeys((previous) => {
+      const missing = [...keys].filter((key) => !previous.has(key));
+      // Same set back when nothing is new, so React bails out of the re-render
+      // rather than looping through the effect that called this.
+      return missing.length === 0 ? previous : new Set([...previous, ...missing]);
+    });
+  }, []);
+
   // A different recording is a different set of lines; carrying the old keys over
   // would mark rows in the new one that were never mined.
   useEffect(() => {
@@ -1161,6 +1175,8 @@ function App() {
                 allowDuplicateMinedWords={
                   settingsDraft.features.allowDuplicateMinedWords
                 }
+                externallyMinedKeys={minedLineKeys}
+                onLinesMined={absorbMinedLines}
           knownWordsBuiltAtMs={bootstrap.knownWords.builtAtMs}
                 onBack={closeTranscriptViewer}
                 onReTranscribe={(force) =>
@@ -1209,9 +1225,6 @@ function App() {
                     translation,
                   );
                   const item = result?.items[0];
-                  if (item && item.status === "success") {
-                    rememberMinedLine(text, startMs, endMs);
-                  }
                   const mined = Boolean(
                     item && item.status === "success" && item.noteId !== null,
                   );
