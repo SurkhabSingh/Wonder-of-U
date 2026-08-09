@@ -345,6 +345,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
         image: "",
         video: "",
         definition: "",
+        word: "",
       },
       clipPaddingMs: 250,
       vocabularySources: [],

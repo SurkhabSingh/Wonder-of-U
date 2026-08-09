@@ -17,11 +17,12 @@ const CARD_TEMPLATE_NAME: &str = "Listening";
 /// pushed" keeps working. Display is template-driven, so the sentence being field 1
 /// does not put it on the front. `Audio` holds the `[sound:...]` the app fills;
 /// `Reading` is an optional manual kana aid, left unmapped by default.
-const FIELD_NAMES: [&str; 10] = [
+const FIELD_NAMES: [&str; 11] = [
     "Sentence",
     "Audio",
     "Image",
     "Video",
+    "Word",
     "Translation",
     "Definition",
     "Reading",
@@ -64,6 +65,7 @@ const BACK_TEMPLATE: &str = r#"<div class="wu-card wu-back">
   {{#Sentence}}<div class="wu-sentence">{{furigana:Sentence}}</div>{{/Sentence}}
   {{#Reading}}<div class="wu-reading">{{Reading}}</div>{{/Reading}}
   {{#Translation}}<div class="wu-translation">{{Translation}}</div>{{/Translation}}
+  {{#Word}}<div class="wu-word">{{Word}}</div>{{/Word}}
   {{#Definition}}<div class="wu-definition-field">{{Definition}}</div>{{/Definition}}
   <div class="wu-meta">
     {{#Title}}<span class="wu-title">{{Title}}</span>{{/Title}}
@@ -154,6 +156,14 @@ const CARD_CSS: &str = r#".card {
   margin: 14px auto 0;
   max-width: 32em;
 }
+/* The word a card was mined FOR, when it was mined for a word rather than a
+   sentence. Bigger than the meanings under it and set apart, because it is the
+   thing being learned and the rest is explanation. */
+.wu-word {
+  margin: 16px auto 0;
+  font-size: 1.25em;
+  font-weight: 600;
+}
 /* Dictionary definitions for the words the line was mined for. Set left rather than
    centred like the sentence: it is a list to read down, not a line to take in. */
 .wu-definition-field {
@@ -229,6 +239,7 @@ const MEDIA_CSS_MARKER: &str = ".wu-video video";
 /// Styling for the definitions block, for note types that predate it. Kept in step
 /// with the `.wu-definition-field` rules in `CARD_CSS`.
 const DEFINITION_CSS: &str = r#"
+.wu-word { margin: 16px auto 0; font-size: 1.25em; font-weight: 600; }
 .wu-definition-field { margin: 16px auto 0; max-width: 32em; text-align: left; font-size: 0.95em; line-height: 1.55; }
 .wu-definition + .wu-definition { margin-top: 10px; }
 .wu-definition-field ul { margin: 4px 0 0; padding-left: 1.2em; }
@@ -250,12 +261,22 @@ const LEADING_BACK_BLOCKS: [(&str, &str); 2] = [
     ),
 ];
 
-/// Blocks that follow the answer. Definitions explain the sentence, so they belong
-/// after it — led with, they would sit above the line they are about.
-const TRAILING_BACK_BLOCKS: [(&str, &str); 1] = [(
-    "{{Definition}}",
-    "  {{#Definition}}<div class=\"wu-definition-field\">{{Definition}}</div>{{/Definition}}\n",
-)];
+/// Blocks that follow the answer. The word a card was mined for, and the meanings
+/// that explain it, belong after the sentence — led with, they would sit above the
+/// line they are about, and the word alone would give the answer away.
+///
+/// Word before Definition: the definitions are of the word, so the word introduces
+/// them rather than trailing them.
+const TRAILING_BACK_BLOCKS: [(&str, &str); 2] = [
+    (
+        "{{Word}}",
+        "  {{#Word}}<div class=\"wu-word\">{{Word}}</div>{{/Word}}\n",
+    ),
+    (
+        "{{Definition}}",
+        "  {{#Definition}}<div class=\"wu-definition-field\">{{Definition}}</div>{{/Definition}}\n",
+    ),
+];
 
 /// Adds the blocks a back template is missing, leaving everything else alone.
 ///
@@ -483,7 +504,7 @@ mod tests {
         assert!(FRONT_TEMPLATE.contains("{{Video}}"));
         assert!(FRONT_TEMPLATE.contains("{{Image}}"));
         assert!(FRONT_TEMPLATE.contains("{{Audio}}"));
-        for answer in ["Sentence", "Translation", "Reading", "Definition"] {
+        for answer in ["Sentence", "Translation", "Reading", "Definition", "Word"] {
             assert!(
                 !FRONT_TEMPLATE.contains(&format!("{{{{{answer}}}}}")),
                 "{answer} would give the answer away on the front"
@@ -590,7 +611,7 @@ mod tests {
     /// existing note type silently swallows whatever the miner writes there.
     #[test]
     fn every_field_the_miner_writes_has_a_block() {
-        for field in ["Image", "Video", "Definition"] {
+        for field in ["Image", "Video", "Definition", "Word"] {
             let reference = format!("{{{{{field}}}}}");
             assert!(
                 LEADING_BACK_BLOCKS
@@ -614,6 +635,7 @@ mod tests {
             "Video",
             "Translation",
             "Definition",
+            "Word",
         ] {
             assert!(
                 FIELD_NAMES.contains(&required),

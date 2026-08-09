@@ -776,6 +776,44 @@ function App() {
     debounceMs: settingsDraft.scanner.debounceMs,
   });
 
+  // Mining a word from the popup is offered only when everything it needs is on
+  // hand: a recording open with its audio still present, and a scanned line that
+  // carries a moment. A translation row and a live transcript segment both have
+  // text and nothing behind it, so neither gets the button rather than getting one
+  // that fails.
+  const scannedLine = lookup.target;
+  const canMineScannedWord = Boolean(
+    viewingRecording &&
+      !viewingRecording.audioDeleted &&
+      scannedLine &&
+      scannedLine.startMs !== undefined &&
+      scannedLine.endMs !== undefined,
+  );
+
+  const mineScannedWord = async (word: string) => {
+    if (!viewingRecording || !scannedLine) {
+      return;
+    }
+    const { startMs, endMs, text } = scannedLine;
+    if (startMs === undefined || endMs === undefined || !text) {
+      return;
+    }
+    // The line goes in as the sentence, exactly as mining that row would send it,
+    // so a word card and a sentence card from the same line are the same card plus
+    // a word — and Anki's duplicate check sees the same first field either way.
+    const result = await mineSegment(
+      viewingRecording.filePath,
+      text,
+      startMs,
+      endMs,
+      null,
+      word,
+    );
+    if (result?.items[0]?.status === "success") {
+      lookup.close();
+    }
+  };
+
   return (
     <main className="app-shell">
       <TooltipPrimitive.Provider delayDuration={180}>
@@ -1261,6 +1299,8 @@ function App() {
           fontFamily={settingsDraft.scanner.fontFamily}
           fontSizePx={settingsDraft.scanner.fontSizePx}
           onClose={lookup.close}
+          onMine={canMineScannedWord ? mineScannedWord : undefined}
+          isMining={busyAction === "mineSegment"}
         />
       ) : null}
     </main>

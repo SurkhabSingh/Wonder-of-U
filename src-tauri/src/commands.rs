@@ -925,6 +925,9 @@ pub(crate) async fn mine_segment_to_anki(
     start_ms: u64,
     end_ms: u64,
     translation: Option<String>,
+    // Present when the mine came from the lookup popup: the card is being made FOR
+    // this word, with the line as its context, rather than for the line itself.
+    target_word: Option<String>,
 ) -> Result<RecordingBatchResult, String> {
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -935,6 +938,7 @@ pub(crate) async fn mine_segment_to_anki(
             start_ms,
             end_ms,
             translation,
+            target_word,
         )
     })
     .await

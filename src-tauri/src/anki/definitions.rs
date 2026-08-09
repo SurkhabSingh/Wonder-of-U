@@ -16,6 +16,7 @@ use tauri::{AppHandle, Runtime};
 use crate::app_runtime::now_ms;
 
 use super::{
+    known_words::normalize_expression,
     lookup::{lookup_exact_word, LookupEntry},
     sentence_ranking::line_unknown_words,
 };
@@ -177,6 +178,50 @@ pub(super) enum Definitions {
     },
     /// Asked for and not obtained.
     Unavailable(String),
+}
+
+/// Looks one chosen word up, for a card mined FOR that word.
+///
+/// Skips `line_unknown_words` entirely, and that is the point: the user pointed at
+/// this word. Whether the known-word index already has it, whether the tokenizer
+/// would have picked it out of the line, and whether the feature is set up far
+/// enough to judge are all beside the point once someone has asked for it.
+pub(super) fn definitions_for_word<R: Runtime>(
+    app: &AppHandle<R>,
+    word: &str,
+    dictionary_ids: &[i64],
+) -> Definitions {
+    let _ = app;
+    let word = normalize_expression(word);
+    if word.is_empty() {
+        return Definitions::NothingToAdd;
+    }
+    if !lookups_are_worth_attempting() {
+        return Definitions::Unavailable("the dictionary was not answering a moment ago".into());
+    }
+
+    match lookup_exact_word(&word, LOOKUP_LIMIT, dictionary_ids) {
+        Ok(result) if result.status == "ready" || result.status == "empty" => {
+            note_lookups_available();
+            match entries_html(&word, &result.entries) {
+                Some(html) => Definitions::Ready {
+                    html,
+                    missing: Vec::new(),
+                },
+                None => Definitions::Unavailable(format!(
+                    "your chosen dictionaries have no entry for {word}"
+                )),
+            }
+        }
+        Ok(result) => {
+            note_lookups_unavailable();
+            Definitions::Unavailable(result.message)
+        }
+        Err(error) => {
+            note_lookups_unavailable();
+            Definitions::Unavailable(error)
+        }
+    }
 }
 
 /// Looks up every word this line is meant to teach and renders them for the card.

@@ -167,7 +167,11 @@ export function TranscriptSegmentRow({
           can be looked up wherever it is read, not only on the watch page. Search
           highlighting is unaffected — the scanner reads text nodes, not elements. */}
       <p className="transcript-segment-body">
-        <ScannableText ownerKey={`row:${segmentKey}`}>
+        <ScannableText
+          ownerKey={`row:${segmentKey}`}
+          startMs={startMs}
+          endMs={endMs}
+        >
           {highlightMatches(text, query, activeMatchOccurrence)}
         </ScannableText>
       </p>

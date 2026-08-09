@@ -24,11 +24,36 @@ export const SCANNABLE_CLASS = "scannable-text";
 /// Names the line a scan belongs to, so a stale popup cannot highlight a line that has
 /// since scrolled away or been replaced.
 export const SCANNABLE_OWNER_ATTRIBUTE = "data-scan-owner";
+/// When the line has a moment in a recording, the moment. Read off the same element
+/// the owner is, in the same walk — a line that has timing can be mined for the word
+/// under the pointer, and one that has none (a translation row, a live transcript
+/// segment) simply cannot, which is the only thing a caller needs to know.
+export const SCANNABLE_START_ATTRIBUTE = "data-scan-start-ms";
+export const SCANNABLE_END_ATTRIBUTE = "data-scan-end-ms";
+
+/// The line's moment, if the element carries one.
+///
+/// Both or neither: a start without an end cannot cut a clip, and returning half a
+/// range would push that check onto every caller. Anything unparseable is treated as
+/// absent rather than as zero — a clip from 0 to 0 is a silent card, which is worse
+/// than no offer to mine.
+function timingOf(element: Element): { startMs?: number; endMs?: number } {
+  const start = Number(element.getAttribute(SCANNABLE_START_ATTRIBUTE));
+  const end = Number(element.getAttribute(SCANNABLE_END_ATTRIBUTE));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return {};
+  }
+  return { startMs: start, endMs: end };
+}
 
 const HIGHLIGHT_NAME = "wonder-of-u-scan";
 
 export type ScanTarget = {
   ownerKey: string;
+  /// The line's moment in its recording, when it has one. Both present or both
+  /// absent — half a range cannot cut a clip.
+  startMs?: number;
+  endMs?: number;
   /// The whole line, which is what the backend deinflects against.
   text: string;
   /// The clicked character, in UTF-16 code units — the DOM's own units.
@@ -270,7 +295,14 @@ export function useWordScanner({
       paintHighlight(range);
 
       const anchor = range?.getBoundingClientRect() ?? element.getBoundingClientRect();
-      const scanTarget: ScanTarget = { ownerKey, text, offset: start, anchor };
+      const timing = timingOf(element);
+      const scanTarget: ScanTarget = {
+        ownerKey,
+        text,
+        offset: start,
+        anchor,
+        ...timing,
+      };
 
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);

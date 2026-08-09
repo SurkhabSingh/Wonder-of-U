@@ -60,6 +60,9 @@ export type AnkiFieldMapping = {
   // and Check Media counts it. Empty = unmapped, which is what turns clip capture off.
   video: string;
   definition: string;
+  // The one word a card was mined FOR, when it was mined from the lookup popup
+  // rather than from a row. Empty on every card made by mining a line.
+  word: string;
 };
 
 export type AnkiSettings = {

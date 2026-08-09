@@ -107,6 +107,31 @@
     transition: opacity 120ms ease;
 }
 
+/* Mine the word the popup is showing.
+ *
+ * Overrides the 22px square every other header control is: those are icons, and
+ * this one carries the word itself, because "mine 出会う" is not a thing to guess at
+ * from a glyph. `margin-right: auto` pushes the close button to the far edge, so the
+ * two never sit next to each other and get mistaken for one another.
+ *
+ * It does NOT take the recessive opacity below — a control that fades out while you
+ * read is fine for close and pin, and wrong for the one action you opened the popup
+ * intending to take. */
+.anki-lookup-popup .anki-lookup__mine {
+    width: auto;
+    min-width: 0;
+    padding: 0 8px;
+    margin-right: auto;
+    font-size: 0.85em;
+    font-weight: 600;
+    white-space: nowrap;
+    opacity: 1;
+}
+
+.anki-lookup-popup .anki-lookup__mine:disabled {
+    opacity: 0.5;
+}
+
 /* Present but recessive: reachable the moment you go looking, invisible while you
    are reading. */
 .anki-lookup-popup:hover .anki-lookup__header-control,

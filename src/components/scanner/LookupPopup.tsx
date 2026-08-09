@@ -29,6 +29,8 @@ export function LookupPopup({
   fontFamily,
   fontSizePx,
   onClose,
+  onMine,
+  isMining = false,
 }: {
   anchor: DOMRect;
   result: LookupResult | null;
@@ -39,6 +41,13 @@ export function LookupPopup({
   fontFamily: string;
   fontSizePx: number;
   onClose: () => void;
+  /// Makes a card for the word this popup is showing, with the line it came from and
+  /// that line's audio. Absent whenever there is nothing to make one from — no
+  /// recording open, or a line with no moment behind it — so the button is offered
+  /// only where it can work rather than appearing and then failing.
+  onMine?: (word: string) => void | Promise<void>;
+  /// Live while a mine is in flight, so the button can say so and refuse a second.
+  isMining?: boolean;
 }) {
   const panelRef = useRef<HTMLElement | null>(null);
   const [placement, setPlacement] = useState({
@@ -123,6 +132,20 @@ export function LookupPopup({
       }}
     >
       <header className="anki-lookup__header">
+        {/* Only when there is a word to mine and somewhere to mine it from. The term
+            comes from the add-on, so it is the DEINFLECTED form — mining 出会える
+            makes a card for 出会う, which is the word you would look up. */}
+        {onMine && result?.term ? (
+          <button
+            type="button"
+            className="anki-lookup__header-control anki-lookup__mine"
+            onClick={() => void onMine(result.term)}
+            disabled={isMining}
+            title={`Make a card for ${result.term}, with this line and its audio`}
+          >
+            {isMining ? "Mining…" : `Mine ${result.term}`}
+          </button>
+        ) : null}
         <button
           type="button"
           className="anki-lookup__header-control anki-lookup__close"

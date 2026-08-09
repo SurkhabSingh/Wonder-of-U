@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use super::{
     clip::capture_clip,
-    definitions::{definitions_for, Definitions},
+    definitions::{definitions_for, definitions_for_word, Definitions},
     client::{anki_connect_health_check, anki_connect_request, anki_offline_message},
     fields::{
         anki_media_file_name, html_escape, prepend_anki_field_value, user_friendly_anki_error,
@@ -320,6 +320,7 @@ fn mine_single_segment<R: Runtime>(
     start_ms: u64,
     end_ms: u64,
     translation: Option<&str>,
+    target_word: Option<&str>,
 ) -> (RecordingActionItem, &'static str) {
     let failed = |message: String| {
         (
@@ -366,7 +367,17 @@ fn mine_single_segment<R: Runtime>(
         supports_furigana: transcript_looks_japanese(text.trim()),
     };
 
-    mine_media_to_anki(app, file_path, &source, text, start_ms, end_ms, translation, None)
+    mine_media_to_anki(
+        app,
+        file_path,
+        &source,
+        text,
+        start_ms,
+        end_ms,
+        translation,
+        None,
+        target_word,
+    )
 }
 
 /// Mines one sentence from any media source. Shared by the transcript viewer and the
@@ -380,6 +391,11 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
     end_ms: u64,
     translation: Option<&str>,
     padding_override: Option<ClipPadding>,
+    // The one word this card is being mined FOR, when the user pointed at a word
+    // rather than a line. Changes two things and nothing else: the Word field is
+    // filled, and the meanings are of THIS word instead of the ones the ranking
+    // worked out for the sentence.
+    target_word: Option<&str>,
 ) -> (RecordingActionItem, &'static str) {
     let failed = |message: String| {
         (
@@ -628,6 +644,18 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
     // is still the card mining has always made — which was wrong: the toggle IS the
     // request, and a card missing what it promised is indistinguishable from a
     // toggle that does nothing at all.
+    // The word the card was mined for, written whether or not its meaning could be
+    // fetched: the word is what the user picked, and a card naming it with no gloss
+    // is still the card they asked for.
+    if let Some(word) = target_word.map(str::trim).filter(|word| !word.is_empty()) {
+        if !anki.fields.word.is_empty() {
+            fields.insert(
+                anki.fields.word.clone(),
+                serde_json::Value::String(html_escape(word)),
+            );
+        }
+    }
+
     let mut definition_problem = None;
     if settings.features.add_definitions_to_mined_cards {
         if anki.fields.definition.is_empty() {
@@ -644,7 +672,11 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             definition_problem =
                 Some("definitions (no dictionaries are chosen for them)".to_string());
         } else {
-            match definitions_for(app, trimmed_text, &anki.definition_dictionary_ids) {
+            let found = match target_word.map(str::trim).filter(|word| !word.is_empty()) {
+                Some(word) => definitions_for_word(app, word, &anki.definition_dictionary_ids),
+                None => definitions_for(app, trimmed_text, &anki.definition_dictionary_ids),
+            };
+            match found {
                 Definitions::Ready { html, missing } => {
                     fields.insert(
                         anki.fields.definition.clone(),
@@ -810,7 +842,17 @@ pub(crate) fn mine_watched_line_inner<R: Runtime>(
     };
 
     let (item, batch_status) =
-        mine_media_to_anki(app, &video_path, &source, &text, start_ms, end_ms, None, padding);
+        mine_media_to_anki(
+            app,
+            &video_path,
+            &source,
+            &text,
+            start_ms,
+            end_ms,
+            None,
+            padding,
+            None,
+        );
     let message = item.message.clone();
 
     // Tell the watch page which line was mined, so its row shows the mark.
@@ -865,6 +907,8 @@ pub(crate) fn mine_segment_to_anki_inner<R: Runtime>(
     start_ms: u64,
     end_ms: u64,
     translation: Option<String>,
+    // Set when the mine came from the lookup popup rather than a row's Mine button.
+    target_word: Option<String>,
 ) -> Result<RecordingBatchResult, String> {
     let (item, batch_status) = mine_single_segment(
         app,
@@ -873,6 +917,7 @@ pub(crate) fn mine_segment_to_anki_inner<R: Runtime>(
         start_ms,
         end_ms,
         translation.as_deref(),
+        target_word.as_deref(),
     );
     let message = item.message.clone();
 
@@ -964,6 +1009,7 @@ pub(crate) fn mine_segments_to_anki_inner<R: Runtime>(
             line.start_ms,
             line.end_ms,
             line.translation.as_deref(),
+            None,
         );
         if item.status == "failed" {
             failed += 1;

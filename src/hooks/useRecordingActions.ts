@@ -198,6 +198,9 @@ export function useRecordingActions({
       startMs: number,
       endMs: number,
       translation: string | null,
+      // Set when the mine came from the lookup popup: the card is FOR this word,
+      // with the line as its context.
+      targetWord?: string | null,
     ): Promise<RecordingBatchResult | null> => {
       try {
         setBusyAction("mineSegment");
@@ -208,6 +211,7 @@ export function useRecordingActions({
           startMs,
           endMs,
           translation,
+          targetWord: targetWord ?? null,
         });
         applyBootstrap(result.bootstrap);
         const message = result.message;
@@ -217,7 +221,9 @@ export function useRecordingActions({
       } catch (error) {
         const message = errorMessage(
           error,
-          "The sentence could not be mined to Anki.",
+          targetWord
+            ? `${targetWord} could not be mined to Anki.`
+            : "The sentence could not be mined to Anki.",
         );
         if (message.toLowerCase().includes("anki")) {
           showWarning(message);

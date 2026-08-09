@@ -111,6 +111,7 @@ export function AnkiMappingSettingsPage({
             image: "Image",
             video: "Video",
             definition: "Definition",
+            word: "Word",
           },
         },
       });
@@ -278,6 +279,7 @@ export function AnkiMappingSettingsPage({
                     image: "",
                     video: "",
                     definition: "",
+                    word: "",
                   },
                 },
               });
@@ -357,6 +359,14 @@ export function AnkiMappingSettingsPage({
           label="Video clip field"
           description="Optional short video of the mined line, cut to the same window as the audio. Like the screenshot, only lines mined while watching a video get one. Leave unmapped to skip it — clips are far larger than stills and sync to AnkiWeb with everything else."
           currentValue={settingsDraft.anki.fields.video}
+          fieldOptions={displayedAnkiCatalog.fields}
+          onChange={onUpdateAnkiField}
+        />
+        <AnkiFieldSelect
+          field="word"
+          label="Mined word field"
+          description="Receives the single word when you mine one from the dictionary popup, rather than mining a whole line. Left empty on every card made by mining a line, which is what tells the two kinds apart on the card."
+          currentValue={settingsDraft.anki.fields.word}
           fieldOptions={displayedAnkiCatalog.fields}
           onChange={onUpdateAnkiField}
         />

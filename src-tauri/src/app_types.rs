@@ -297,6 +297,14 @@ pub(crate) struct AnkiFieldMapping {
     /// to teach. Empty = unmapped, which switches the lookup off for that card as
     /// surely as the feature toggle does.
     pub(crate) definition: String,
+    /// Target field for the one word a card was mined FOR, when it was mined for a
+    /// word rather than for its sentence. Empty on every card made by mining a line,
+    /// which is what tells the two apart on the card itself.
+    ///
+    /// Deliberately NOT the first field: Anki keys duplicate detection on field one,
+    /// and the sentence has to keep that job or "already mined" stops working for
+    /// every card the app has ever made.
+    pub(crate) word: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

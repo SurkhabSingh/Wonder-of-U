@@ -135,6 +135,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 image: settings.anki.fields.image.trim().to_string(),
                 video: settings.anki.fields.video.trim().to_string(),
                 definition: settings.anki.fields.definition.trim().to_string(),
+                word: settings.anki.fields.word.trim().to_string(),
             },
             // Clamp the mined-clip padding to a sane ceiling so a hand-edited value can't
             // produce a clip that swallows the neighbouring sentences.
