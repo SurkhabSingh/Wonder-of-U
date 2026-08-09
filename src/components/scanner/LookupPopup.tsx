@@ -31,6 +31,7 @@ export function LookupPopup({
   onClose,
   onMine,
   isMining = false,
+  isMined = false,
 }: {
   anchor: DOMRect;
   result: LookupResult | null;
@@ -48,6 +49,9 @@ export function LookupPopup({
   onMine?: (word: string) => void | Promise<void>;
   /// Live while a mine is in flight, so the button can say so and refuse a second.
   isMining?: boolean;
+  /// This line already has a card — mined just now, or found to be in the deck
+  /// already when a mine was refused as a duplicate.
+  isMined?: boolean;
 }) {
   const panelRef = useRef<HTMLElement | null>(null);
   const [placement, setPlacement] = useState({
@@ -138,12 +142,21 @@ export function LookupPopup({
         {onMine && result?.term ? (
           <button
             type="button"
-            className="anki-lookup__header-control anki-lookup__mine"
+            className={`anki-lookup__header-control anki-lookup__mine${
+              isMined ? " anki-lookup__mine--done" : ""
+            }`}
             onClick={() => void onMine(result.term)}
-            disabled={isMining}
-            title={`Make a card for ${result.term}, with this line and its audio`}
+            // Disabled rather than left clickable to explain itself: a card for
+            // this line exists, so the only thing a second press could do is fail
+            // as a duplicate. The label says so, and the tooltip says why.
+            disabled={isMining || isMined}
+            title={
+              isMined
+                ? "This line is already a card — Anki keeps one per sentence"
+                : `Make a card for ${result.term}, with this line and its audio`
+            }
           >
-            {isMining ? "Mining…" : `Mine ${result.term}`}
+            {isMining ? "Mining…" : isMined ? "✓ Mined" : `Mine ${result.term}`}
           </button>
         ) : null}
         <button

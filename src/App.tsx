@@ -776,6 +776,29 @@ function App() {
     debounceMs: settingsDraft.scanner.debounceMs,
   });
 
+  // Lines this session has turned into cards, however they were mined.
+  //
+  // App sees BOTH paths — a row's Mine button and the popup's — so one set covers
+  // both, and word-mining a line the row already mined reads as already mined
+  // rather than as a duplicate failure.
+  //
+  // Keyed by moment and text, the way the viewer keys its own markers, so editing a
+  // line by merging or splitting it correctly reads as a different line.
+  const [minedLineKeys, setMinedLineKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const minedLineKey = (text: string, startMs: number, endMs: number) =>
+    `${startMs}:${endMs}:${text}`;
+  const rememberMinedLine = (text: string, startMs: number, endMs: number) => {
+    setMinedLineKeys((previous) => new Set(previous).add(minedLineKey(text, startMs, endMs)));
+  };
+
+  // A different recording is a different set of lines; carrying the old keys over
+  // would mark rows in the new one that were never mined.
+  useEffect(() => {
+    setMinedLineKeys(new Set());
+  }, [viewingRecording?.filePath]);
+
   // Mining a word from the popup is offered only when everything it needs is on
   // hand: a recording open with its audio still present, and a scanned line that
   // carries a moment. A translation row and a live transcript segment both have
@@ -809,9 +832,19 @@ function App() {
       null,
       word,
     );
-    if (result?.items[0]?.status === "success") {
-      lookup.close();
+    const item = result?.items[0];
+    // Remembered on a duplicate as well as on success: the card exists either way,
+    // and the button saying "Mine" next to a line that already has one is the thing
+    // being fixed. The phrase is the one `user_friendly_anki_error` writes for
+    // Anki's duplicate refusal — both ends of that string are ours.
+    if (
+      item &&
+      (item.status === "success" || item.message.includes("already exists"))
+    ) {
+      rememberMinedLine(text, startMs, endMs);
     }
+    // Left open on purpose, unlike before. The button turning to "Mined" IS the
+    // confirmation, and closing the popup the instant it changes would hide it.
   };
 
   return (
@@ -1176,6 +1209,9 @@ function App() {
                     translation,
                   );
                   const item = result?.items[0];
+                  if (item && item.status === "success") {
+                    rememberMinedLine(text, startMs, endMs);
+                  }
                   const mined = Boolean(
                     item && item.status === "success" && item.noteId !== null,
                   );
@@ -1301,6 +1337,17 @@ function App() {
           onClose={lookup.close}
           onMine={canMineScannedWord ? mineScannedWord : undefined}
           isMining={busyAction === "mineSegment"}
+          isMined={
+            scannedLine?.startMs !== undefined && scannedLine.endMs !== undefined
+              ? minedLineKeys.has(
+                  minedLineKey(
+                    scannedLine.text,
+                    scannedLine.startMs,
+                    scannedLine.endMs,
+                  ),
+                )
+              : false
+          }
         />
       ) : null}
     </main>

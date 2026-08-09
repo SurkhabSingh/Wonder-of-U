@@ -132,6 +132,16 @@
     opacity: 0.5;
 }
 
+/* Already a card. Full opacity despite being disabled: this is an answer, not a
+   control that happens to be unavailable, and dimming it would read as "still
+   loading" rather than "done". */
+.anki-lookup-popup .anki-lookup__mine--done,
+.anki-lookup-popup .anki-lookup__mine--done:disabled {
+    opacity: 1;
+    color: var(--anki-lookup-accent, inherit);
+    cursor: default;
+}
+
 /* Present but recessive: reachable the moment you go looking, invisible while you
    are reading. */
 .anki-lookup-popup:hover .anki-lookup__header-control,
