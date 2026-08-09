@@ -61,3 +61,15 @@ windows-sys = { version = "0.61.2", features = [
 
 [dev-dependencies]
 tempfile = "3"
+
+# Line tables instead of full debug info for the dev profile.
+#
+# The default is everything, and it is the single biggest thing in target/: full
+# DWARF for roughly five hundred dependency crates, none of which anyone steps
+# through. Line tables keep what is actually read — a panic and a failing test
+# still name the file and line — and drop the rest.
+#
+# Release is untouched and already carries no debug info; this changes nothing a
+# user runs.
+[profile.dev]
+debug = "line-tables-only"
