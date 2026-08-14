@@ -124,6 +124,7 @@ pub fn run() {
             forget_watched_video,
             missing_watched_videos,
             mark_watched_video_opened,
+            set_watched_video_position,
             download_recommended_alass,
             jimaku_search,
             jimaku_files,
