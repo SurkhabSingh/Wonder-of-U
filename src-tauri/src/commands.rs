@@ -5,8 +5,8 @@ use tauri::{AppHandle, Manager};
 use crate::{
     recording_library::import::probe_duration_ms,
     watch::library::{
-        capture_thumbnail, normalize_origin, now_ms, remove_watched_video, upsert_watched_video,
-        ORIGIN_GENERATED, ORIGIN_SYNCED,
+        capture_thumbnail, normalize_origin, now_ms, remove_watched_video, resume_point_ms,
+        upsert_watched_video, ORIGIN_GENERATED, ORIGIN_SYNCED,
     },
     watch::transcribe::{generate_watch_subtitles_inner, GeneratedSubtitles},
     app_types::SharedPersistedState,
@@ -304,22 +304,33 @@ pub(crate) async fn start_watch_session(
     subtitle_path: Option<String>,
 ) -> Result<WatchSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let settings = {
+        // Settings and the resume point come out of one lock. Two reads would mean releasing
+        // and reacquiring for values that belong to the same launch decision.
+        let (settings, resume_position_ms) = {
             let persisted_state = app.state::<SharedPersistedState>();
             let persisted = persisted_state
                 .0
                 .lock()
                 .map_err(|_| "Could not read the app settings.".to_string())?;
-            persisted.settings.clone()
+            let resume_position_ms = persisted
+                .watched_videos
+                .iter()
+                .find(|video| video.video_path == video_path)
+                .and_then(|video| video.resume_position_ms);
+            (persisted.settings.clone(), resume_position_ms)
         };
         let detection = detect_local_mpv(&settings);
         let executable_path = detection.executable_path.clone().ok_or_else(|| {
             "mpv is required to watch a video; install it in Setup.".to_string()
         })?;
+        // The stored value is already the answer: `resume_point_ms` judged it when it was
+        // written, so there is nothing to re-decide here. A video never played, or played to
+        // the end, simply has `None` and starts from the beginning.
         start_watch_session_inner(
             Path::new(&executable_path),
             Path::new(&video_path),
             subtitle_path.as_deref().map(Path::new),
+            resume_position_ms,
         )?;
 
         // Re-apply the overlay setting to the player that just started.
@@ -570,6 +581,32 @@ pub(crate) async fn mark_watched_video_opened(
             video.last_opened_at_ms = Some(now_ms());
         })?;
         build_app_bootstrap(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Remember where the user is in a video, so the next open picks it up there.
+///
+/// Takes `duration_ms` from the caller's live snapshot rather than reading the stored entry:
+/// mpv is playing the file and knows its length exactly, while the stored duration is a probe
+/// that may be 0 for a video that could not be read at add time. The "have I finished this"
+/// question is only answerable against a real length.
+///
+/// Writes through `upsert_watched_video` like every other mutation, so a video played from
+/// outside the library still lands in it — the same way `mark_watched_video_opened` behaves.
+#[tauri::command]
+pub(crate) async fn set_watched_video_position(
+    app: AppHandle,
+    video_path: String,
+    position_ms: u64,
+    duration_ms: u64,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let resume = resume_point_ms(position_ms, duration_ms);
+        upsert_watched_video(&app, &video_path, |video| {
+            video.resume_position_ms = resume;
+        })
     })
     .await
     .map_err(|error| error.to_string())?

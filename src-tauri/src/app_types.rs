@@ -628,14 +628,6 @@ impl RecentRecording {
     }
 }
 
-/// The whole of `state.json`.
-///
-/// Carries a container-level `default` for the same reason every settings struct does, and with
-/// a heavier consequence. Serde requires every field of a struct unless it can default, so
-/// adding a field here would make every state file written before it fail to parse — and an
-/// unparseable state file is not a small loss: `load_persisted_data` moves it aside and starts
-/// from scratch, taking the recording library and every setting with it. A field added later
-/// must be able to be absent, because on the first launch after an update it always is.
 /// A video the user has added to the video library, and the subtitle it is paired with.
 ///
 /// The pairing is the whole point. Picking a video and its subtitle used to live in component
@@ -662,6 +654,15 @@ pub(crate) struct WatchedVideo {
     pub(crate) added_at_ms: u64,
     /// `None` until the video has actually been played once.
     pub(crate) last_opened_at_ms: Option<u64>,
+    /// Where to pick this video up, in milliseconds from the start.
+    ///
+    /// Holds a position only while one is worth returning to, which is why the whole field is
+    /// an `Option` rather than a `u64` that happens to be 0. `resume_point_ms` is the single
+    /// judge of that, applied when the position is written rather than when it is read: the
+    /// player, the library row and any future caller then all see the same answer, and none of
+    /// them can drift by reimplementing the rule. Finishing a video stores `None`, which is
+    /// what makes the next open start from the beginning.
+    pub(crate) resume_position_ms: Option<u64>,
 }
 
 /// The whole of `state.json`.

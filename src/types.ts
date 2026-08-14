@@ -226,6 +226,12 @@ export type WatchedVideo = {
   addedAtMs: number;
   // Null until the video has actually been played once.
   lastOpenedAtMs: number | null;
+  // Where to pick the video up. Null means start from the beginning — either it has never
+  // been watched far enough in to be worth resuming, or it was watched to the end.
+  //
+  // Already judged by the backend when it was written, so this is a position to use, not one
+  // to second-guess. Rendering it and resuming to it therefore cannot disagree.
+  resumePositionMs: number | null;
 };
 
 export type RecentRecording = {

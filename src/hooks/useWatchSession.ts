@@ -22,6 +22,16 @@ const DISCONNECTED: WatchSnapshot = {
 // re-rendering the page 60 times a second.
 const POLL_INTERVAL_MS = 250;
 
+// How far playback must MOVE before the resume point is written again.
+//
+// Measured against the position, not the clock, which is what makes a paused video free: it
+// stops moving, so it stops writing. Every save serializes the whole of state.json — 68KB and
+// growing with the recording library — and then re-emits the app snapshot, so saving on each
+// 250ms tick would be four full rewrites a second for as long as someone watches. At 30s that
+// is roughly 48 writes across a 24-minute episode, and the most anyone can lose is the last
+// 30 seconds of progress, which is invisible when you pick the video back up.
+const SAVE_EVERY_MS = 30_000;
+
 // Drives an external mpv: start it on a video, watch what it is showing, stop it.
 //
 // Polling only runs while a session is live, so a user who never opens the watch page
@@ -63,6 +73,39 @@ export function useWatchSession() {
   const connectedRef = useRef(false);
   connectedRef.current = snapshot.connected;
 
+  // The video this session was STARTED on, which is the key the resume point is stored under.
+  //
+  // Not `snapshot.path`: that is mpv echoing back its own idea of the file, and matching it
+  // against a library entry would mean trusting two path spellings to agree. The path handed
+  // to `start` is the one the library holds, so there is nothing to match.
+  const playingPathRef = useRef<string | null>(null);
+  // The last position actually written, so the next write can be spaced from it.
+  const savedPositionRef = useRef<number | null>(null);
+  // The last position seen while connected. mpv reports nothing once it is gone, so the final
+  // save — the one that catches closing the window mid-episode — has to use what we last saw.
+  const seenPositionRef = useRef<number | null>(null);
+  const seenDurationRef = useRef<number>(0);
+
+  // Fire-and-forget: this runs on a poll tick and when a session ends, and a failure to
+  // remember a position is not something to interrupt someone's viewing over. It is also
+  // deliberately not awaited by the poll, so a slow disk cannot stall the interval.
+  const savePosition = useCallback((positionMs: number, durationMs: number) => {
+    const videoPath = playingPathRef.current;
+    if (!videoPath) {
+      return;
+    }
+    savedPositionRef.current = positionMs;
+    void invoke("set_watched_video_position", {
+      videoPath,
+      positionMs: Math.round(positionMs),
+      durationMs: Math.round(durationMs),
+    }).catch((caught) => {
+      if (import.meta.env.DEV) {
+        console.debug("set_watched_video_position failed:", caught);
+      }
+    });
+  }, []);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -70,14 +113,51 @@ export function useWatchSession() {
     };
   }, []);
 
+  // Persist where we got to, then stop treating the session as live.
+  //
+  // Called on every path that ends a session — mpv closed, the channel died, the read threw —
+  // because closing the window mid-episode is the single case this whole feature exists for,
+  // and it is also the one moment mpv can no longer be asked anything.
+  const endSession = useCallback(() => {
+    const position = seenPositionRef.current;
+    // Unconditional, deliberately. Skipping this when the position matches the last save
+    // would be reasonable if `savedPositionRef` meant "on disk" — but it is set optimistically
+    // before the write resolves, because it doubles as the in-flight guard that keeps a failed
+    // write from retrying every 250ms. So a save that FAILED still looks saved, and a dedupe
+    // check here would turn one dropped write into a silently lost resume point. This runs once
+    // per session; the cost of always writing is one more write, and it is the retry.
+    if (position !== null) {
+      savePosition(position, seenDurationRef.current);
+    }
+    playingPathRef.current = null;
+    seenPositionRef.current = null;
+    savedPositionRef.current = null;
+    seenDurationRef.current = 0;
+  }, [savePosition]);
+
   const refresh = useCallback(async () => {
     try {
       const next = await invoke<WatchSnapshot>("watch_snapshot");
+      if (next.connected && next.positionMs !== null) {
+        seenPositionRef.current = next.positionMs;
+        // Kept for the final save: a disconnected snapshot reports no duration either, and
+        // the finished check is only meaningful against a real one.
+        seenDurationRef.current = next.durationMs ?? seenDurationRef.current;
+        const saved = savedPositionRef.current;
+        // Absolute difference, so seeking BACKWARD saves too. A comparison in one direction
+        // would leave someone who rewound with a resume point ahead of where they actually are.
+        if (saved === null || Math.abs(next.positionMs - saved) >= SAVE_EVERY_MS) {
+          savePosition(next.positionMs, seenDurationRef.current);
+        }
+      } else if (!next.connected) {
+        endSession();
+      }
       if (mountedRef.current) {
         setSnapshot(next);
       }
     } catch (caught) {
       // A read failure means the player is gone, which is an ordinary end to a session.
+      endSession();
       if (mountedRef.current) {
         setSnapshot(DISCONNECTED);
         if (import.meta.env.DEV) {
@@ -85,7 +165,7 @@ export function useWatchSession() {
         }
       }
     }
-  }, []);
+  }, [endSession, savePosition]);
 
   useEffect(() => {
     if (!snapshot.connected) {
@@ -99,11 +179,25 @@ export function useWatchSession() {
     async (videoPath: string, subtitlePath: string | null) => {
       setStartingPath(videoPath);
       setError(null);
+      // Flush the outgoing video's position before the new one takes over the refs. Starting
+      // a session replaces any player already running, so without this, switching straight
+      // from one episode to another would lose up to 30s of the first one's progress.
+      endSession();
       try {
         const next = await invoke<WatchSnapshot>("start_watch_session", {
           videoPath,
           subtitlePath,
         });
+        // Only after the player is actually up. Set before the call, a failed start would
+        // leave this pointing at a video that never played, and the next tick would write a
+        // resume point for it.
+        playingPathRef.current = videoPath;
+        // mpv opens AT the stored resume point, so the first position it reports is already
+        // that point. Seeding the baseline with it stops the very first tick from writing
+        // back a value the backend just handed us.
+        savedPositionRef.current = next.positionMs;
+        seenPositionRef.current = next.positionMs;
+        seenDurationRef.current = next.durationMs ?? 0;
         if (mountedRef.current) {
           setSnapshot(next);
         }
@@ -207,6 +301,10 @@ export function useWatchSession() {
   }, []);
 
   const stop = useCallback(async () => {
+    // Before the player goes away, not after: this sets the snapshot to DISCONNECTED itself
+    // rather than letting the poll notice, so it is the only path that would otherwise skip
+    // the final save and lose the position of anyone who stops from inside the app.
+    endSession();
     try {
       await invoke("stop_watch_session");
     } catch {
@@ -216,7 +314,7 @@ export function useWatchSession() {
       setSnapshot(DISCONNECTED);
       setError(null);
     }
-  }, []);
+  }, [endSession]);
 
   // Subtitle offset. mpv owns the value, so the UI never keeps its own copy — it reads
   // `snapshot.subtitleDelayMs` and asks for a new absolute value, which keeps the two from

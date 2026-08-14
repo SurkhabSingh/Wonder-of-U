@@ -360,10 +360,15 @@ impl MpvConnection {
 ///
 /// `--no-config` is NOT passed: someone who has tuned their mpv should get their own
 /// player, and the spike confirmed the IPC properties are unaffected by user config.
+///
+/// `start_at_ms` opens the file already at that position. Deliberately a launch argument
+/// rather than a seek once connected: a seek would play the opening for as long as it takes
+/// to connect and issue it, then jump, which reads as a glitch. mpv decodes from there.
 pub(crate) fn start_watch_session(
     mpv_path: &Path,
     video_path: &Path,
     subtitle_path: Option<&Path>,
+    start_at_ms: Option<u64>,
 ) -> Result<(), String> {
     if !video_path.exists() {
         return Err(format!("There is no file at {}.", video_path.display()));
@@ -400,6 +405,13 @@ pub(crate) fn start_watch_session(
         if subtitle_path.exists() {
             command.arg(format!("--sub-file={}", subtitle_path.display()));
         }
+    }
+    if let Some(start_at_ms) = start_at_ms {
+        // Seconds, which is the unit mpv's own `--start` takes. Pinned to three decimals so
+        // the argument is always a plain `seconds.milliseconds` however large the offset —
+        // `{}` would also be parseable, but its length varies with the value, and a fixed
+        // shape is one less thing for a reader to check when this ends up in a bug report.
+        command.arg(format!("--start={:.3}", start_at_ms as f64 / 1000.0));
     }
     command.arg(video_path);
 

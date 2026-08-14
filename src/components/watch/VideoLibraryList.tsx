@@ -145,6 +145,13 @@ export function VideoLibraryList({
                 <>
                   <span className="recording-meta">
                     {formatDuration(video.durationMs)}
+                    {/* Only present while there is somewhere to come back to: the backend
+                        clears it once a video is finished, so a watched-through episode
+                        stops advertising a resume point rather than pointing at its own
+                        credits. */}
+                    {video.resumePositionMs !== null
+                      ? ` · resume at ${formatDuration(video.resumePositionMs)}`
+                      : ""}
                     {video.lastOpenedAtMs
                       ? ` · opened ${formatTimestamp(video.lastOpenedAtMs)}`
                       : " · never opened"}

@@ -71,6 +71,38 @@ pub(crate) fn normalize_origin(origin: Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Below this, there is nothing to come back to. Reopening at 12 seconds is not resuming, it
+/// is the beginning with extra steps — and it would put a "resume at 0:12" on the row of a
+/// video the user has effectively not watched.
+const MINIMUM_RESUME_MS: u64 = 30_000;
+
+/// Past this fraction of the video, treat it as finished.
+///
+/// Without it, watching an episode to the end leaves a resume point in the credits, so every
+/// later open lands there — the papercut this feature exists to remove, reintroduced at the
+/// other end. Credits and endings run long, so the cut is generous rather than exact.
+const FINISHED_AFTER_FRACTION: f64 = 0.95;
+
+/// The position worth returning to, or `None` when there is not one.
+///
+/// The whole judgement lives here, and is applied where the position is *written*. Storing an
+/// already-judged value is what keeps the player and the library row honest with each other:
+/// there is no second copy of this rule for one of them to get wrong, and "the row shows a
+/// resume point" and "opening resumes" cannot disagree.
+///
+/// `duration_ms` comes from mpv rather than from the stored entry, because mpv is playing the
+/// file and knows. A duration of 0 means it did not answer; the finished check is skipped
+/// rather than guessed, since dividing by an unknown length would decide "finished" at random.
+pub(crate) fn resume_point_ms(position_ms: u64, duration_ms: u64) -> Option<u64> {
+    if position_ms < MINIMUM_RESUME_MS {
+        return None;
+    }
+    if duration_ms > 0 && position_ms as f64 >= duration_ms as f64 * FINISHED_AFTER_FRACTION {
+        return None;
+    }
+    Some(position_ms)
+}
+
 /// Insert or update the entry for `video_path`, then persist and broadcast.
 ///
 /// `mutate` receives the existing entry when there is one and a fresh entry when there is not,
@@ -208,7 +240,56 @@ pub(crate) fn capture_thumbnail(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_origin, thumbnail_at_ms, ORIGIN_SYNCED, THUMBNAIL_FALLBACK_MS};
+    use super::{
+        normalize_origin, resume_point_ms, thumbnail_at_ms, MINIMUM_RESUME_MS, ORIGIN_SYNCED,
+        THUMBNAIL_FALLBACK_MS,
+    };
+
+    /// A 24-minute episode, the length the feature was described against.
+    const EPISODE_MS: u64 = 1_440_000;
+
+    /// The ordinary case: stopped in the middle, come back to the middle.
+    #[test]
+    fn a_position_in_the_body_of_a_video_is_worth_returning_to() {
+        assert_eq!(resume_point_ms(754_000, EPISODE_MS), Some(754_000));
+    }
+
+    /// Resuming 12 seconds in is the beginning with extra steps.
+    #[test]
+    fn the_first_seconds_are_not_a_resume_point() {
+        assert_eq!(resume_point_ms(0, EPISODE_MS), None);
+        assert_eq!(resume_point_ms(12_000, EPISODE_MS), None);
+        assert_eq!(resume_point_ms(MINIMUM_RESUME_MS - 1, EPISODE_MS), None);
+        assert_eq!(
+            resume_point_ms(MINIMUM_RESUME_MS, EPISODE_MS),
+            Some(MINIMUM_RESUME_MS)
+        );
+    }
+
+    /// Watching to the end must CLEAR the point, not park it in the credits — otherwise every
+    /// later open lands at the end, which is the papercut this feature removes, mirrored.
+    #[test]
+    fn finishing_a_video_leaves_no_resume_point() {
+        assert_eq!(resume_point_ms(EPISODE_MS, EPISODE_MS), None);
+        assert_eq!(resume_point_ms(1_400_000, EPISODE_MS), None);
+        // Just inside the cut still counts as unfinished.
+        assert_eq!(resume_point_ms(1_360_000, EPISODE_MS), Some(1_360_000));
+    }
+
+    /// mpv answering 0 for the duration must not make "finished" a coin flip.
+    #[test]
+    fn an_unknown_duration_keeps_the_position_rather_than_guessing() {
+        assert_eq!(resume_point_ms(754_000, 0), Some(754_000));
+        // The minimum still applies: that rule needs no duration.
+        assert_eq!(resume_point_ms(12_000, 0), None);
+    }
+
+    /// A position past the end of the file — a video replaced by a shorter cut — reads as
+    /// finished, so the next open starts over instead of seeking past the end.
+    #[test]
+    fn a_position_beyond_the_end_is_treated_as_finished() {
+        assert_eq!(resume_point_ms(EPISODE_MS + 60_000, EPISODE_MS), None);
+    }
 
     /// An origin the chip cannot draw must cost the chip, never the mapping.
     #[test]
