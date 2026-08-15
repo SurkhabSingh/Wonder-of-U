@@ -442,15 +442,35 @@ export type KnownWordsSnapshot = {
 };
 
 export type WhisperAssetUpdateResult = {
-  kind: string;
+  // Same shared union as the download snapshot. Nothing reads this today, but it is the same
+  // six strings and there is no reason for a third hand-written copy of them.
+  kind: AssetKind;
   status: string;
   message: string;
   currentVersion: string | null;
   latestVersion: string | null;
 };
 
+// Which asset a download is for. These are the exact strings Rust's `AssetKind` serializes
+// to, and the Rust side has a test pinning them, so this list is a copy of an authoritative
+// one rather than a second opinion.
+//
+// It lives here, in one place, because it used to be written out again inside
+// DownloadProgressCard — and that copy was missing "alass". The card hides itself when the
+// snapshot's kind is not its own, so an alass download rendered no progress at all AND, since
+// every card was checking the same single snapshot, blanked the other four at the same time.
+export type AssetKind =
+  | "model"
+  | "runtime"
+  | "ffmpeg"
+  | "ytdlp"
+  | "alass"
+  | "dictionary";
+
 export type ModelDownloadSnapshot = {
-  kind: string | null;
+  // Typed, so `snapshot.kind !== kind` in the progress card is a comparison the compiler
+  // checks. As `string` it accepted any misspelling and silently never matched.
+  kind: AssetKind | null;
   status: string;
   message: string;
   downloadedBytes: number;

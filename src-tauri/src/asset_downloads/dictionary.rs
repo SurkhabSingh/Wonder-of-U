@@ -13,6 +13,7 @@ use crate::{
     tokenizer::dictionary_loads,
 };
 
+use super::asset::AssetKind;
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
     reset_model_download_control, update_model_download_snapshot,
@@ -104,7 +105,7 @@ pub(crate) fn download_recommended_dictionary_inner<R: Runtime>(
         shell.current_recording_name = None;
     })?;
     update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some("dictionary".into());
+        snapshot.kind = Some(AssetKind::Dictionary);
         snapshot.status = "starting".into();
         snapshot.message = "Preparing the Japanese dictionary download...".into();
         snapshot.downloaded_bytes = 0;
@@ -121,7 +122,7 @@ pub(crate) fn download_recommended_dictionary_inner<R: Runtime>(
                     &app_handle,
                     IPADIC_DICTIONARY_URL,
                     &archive_path,
-                    "dictionary",
+                    AssetKind::Dictionary,
                     "the Japanese dictionary",
                 )?;
 
@@ -139,7 +140,7 @@ pub(crate) fn download_recommended_dictionary_inner<R: Runtime>(
                     })?;
 
                 update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("dictionary".into());
+                    snapshot.kind = Some(AssetKind::Dictionary);
                     snapshot.status = "completed".into();
                     snapshot.message =
                         "The Japanese dictionary is ready. Sentences can be analysed word by word."
@@ -177,7 +178,7 @@ pub(crate) fn download_recommended_dictionary_inner<R: Runtime>(
             if let Err(error) = download_result {
                 let cancelled = error.ends_with("download cancelled.");
                 let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("dictionary".into());
+                    snapshot.kind = Some(AssetKind::Dictionary);
                     if cancelled {
                         snapshot.status = "cancelled".into();
                         snapshot.message = "Japanese dictionary download cancelled.".into();

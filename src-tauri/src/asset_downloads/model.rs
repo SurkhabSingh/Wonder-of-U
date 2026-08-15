@@ -13,6 +13,7 @@ use crate::{
     transcription::verify_whisper_model,
 };
 
+use super::asset::AssetKind;
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, reset_model_download_control,
     update_model_download_snapshot, DownloadSlotGuard,
@@ -86,7 +87,7 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
         shell.current_recording_name = None;
     })?;
     update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some("model".into());
+        snapshot.kind = Some(AssetKind::Model);
         snapshot.status = "starting".into();
         snapshot.message = format!("Preparing the {} model download...", model_spec.label);
         snapshot.downloaded_bytes = 0;
@@ -104,7 +105,7 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
                         &app_handle,
                         model_spec.download_url,
                         &target_path,
-                        "model",
+                        AssetKind::Model,
                         &format!("the {} Whisper model", model_spec.label),
                     )?;
                 }
@@ -119,7 +120,7 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
                         &app_handle,
                         WHISPER_VAD_MODEL_URL,
                         &vad_target,
-                        "model",
+                        AssetKind::Model,
                         "the speech-detector (VAD) model",
                     )?;
                 }
@@ -127,7 +128,7 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
                 clear_managed_model_override(&app_handle)?;
                 let detection = refresh_whisper_detection_state(&app_handle)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("model".into());
+                    snapshot.kind = Some(AssetKind::Model);
                     snapshot.status = "completed".into();
                     snapshot.message =
                         format!("{} model downloaded successfully.", model_spec.label);
@@ -170,7 +171,7 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
             if let Err(error) = download_result {
                 let cancelled = error.ends_with("download cancelled.");
                 let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("model".into());
+                    snapshot.kind = Some(AssetKind::Model);
                     if cancelled {
                         snapshot.status = "cancelled".into();
                         snapshot.message = "Model download cancelled.".into();

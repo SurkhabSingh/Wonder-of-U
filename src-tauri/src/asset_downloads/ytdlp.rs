@@ -9,6 +9,7 @@ use crate::{
     runtime_assets::{managed_ytdlp_install_directory, verify_ytdlp_binary},
 };
 
+use super::asset::AssetKind;
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, reset_model_download_control,
     update_model_download_snapshot, verify_managed_binary_or_remove, DownloadSlotGuard,
@@ -58,7 +59,7 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
         shell.current_recording_name = None;
     })?;
     update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some("ytdlp".into());
+        snapshot.kind = Some(AssetKind::Ytdlp);
         snapshot.status = "starting".into();
         snapshot.message = "Preparing the yt-dlp download...".into();
         snapshot.downloaded_bytes = 0;
@@ -76,13 +77,13 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
                     &app_handle,
                     YTDLP_RELEASE_DOWNLOAD_URL,
                     &target_path,
-                    "ytdlp",
+                    AssetKind::Ytdlp,
                     "yt-dlp",
                 )?;
 
                 verify_managed_binary_or_remove(&target_path, verify_ytdlp_binary)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("ytdlp".into());
+                    snapshot.kind = Some(AssetKind::Ytdlp);
                     snapshot.status = "completed".into();
                     snapshot.message = "yt-dlp downloaded. YouTube import is now enabled.".into();
                     snapshot.downloaded_bytes =
@@ -114,7 +115,7 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
             if let Err(error) = download_result {
                 let cancelled = error.ends_with("download cancelled.");
                 let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("ytdlp".into());
+                    snapshot.kind = Some(AssetKind::Ytdlp);
                     if cancelled {
                         snapshot.status = "cancelled".into();
                         snapshot.message = "yt-dlp download cancelled.".into();

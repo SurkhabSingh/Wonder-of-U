@@ -23,7 +23,18 @@ type UseSetupActionsOptions = {
   resolvedModelPath: string;
   openSettingsSection: (section: SettingsSection) => void;
   setBusyAction: (busyAction: BusyAction) => void;
-  setLoadError: (message: string) => void;
+  /**
+   * Reports a failure as a toast.
+   *
+   * Every failure in this hook is the outcome of one thing the user just pressed, so every
+   * one of them belongs here rather than in the app-wide error banner. The banner stays until
+   * something else replaces it, which is right for a condition the app is in ("settings could
+   * not be loaded") and wrong for an event that is already over: "There is no active model
+   * download to pause or resume" sat across the top of the window for the rest of the session,
+   * describing a download that had finished. The video library already drew this distinction;
+   * setup did not.
+   */
+  showError: (message: string) => void;
   setModelUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   setRuntimeUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   setYtdlpUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
@@ -38,7 +49,7 @@ export function useSetupActions({
   resolvedModelPath,
   openSettingsSection,
   setBusyAction,
-  setLoadError,
+  showError,
   setModelUpdateResult,
   setRuntimeUpdateResult,
   setYtdlpUpdateResult,
@@ -58,7 +69,7 @@ export function useSetupActions({
         applyBootstrap(nextBootstrap);
         openSettingsSection("whisper");
       } catch (error) {
-        setLoadError(
+        showError(
           errorMessage(error, "The selected Whisper runtime could not be prepared."),
         );
       } finally {
@@ -70,7 +81,7 @@ export function useSetupActions({
       persistSettingsIfNeeded,
       openSettingsSection,
       setBusyAction,
-      setLoadError,
+      showError,
       setRuntimeUpdateResult,
     ],
   );
@@ -86,11 +97,11 @@ export function useSetupActions({
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
-      setLoadError(errorMessage(error, "FFmpeg could not be prepared."));
+      showError(errorMessage(error, "FFmpeg could not be prepared."));
     } finally {
       setBusyAction(null);
     }
-  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+  }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
   const downloadRecommendedYtdlp = useCallback(async () => {
     try {
@@ -99,11 +110,11 @@ export function useSetupActions({
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
-      setLoadError(errorMessage(error, "yt-dlp could not be prepared."));
+      showError(errorMessage(error, "yt-dlp could not be prepared."));
     } finally {
       setBusyAction(null);
     }
-  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+  }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
   const downloadRecommendedAlass = useCallback(async () => {
     try {
@@ -112,11 +123,11 @@ export function useSetupActions({
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
-      setLoadError(errorMessage(error, "alass could not be prepared."));
+      showError(errorMessage(error, "alass could not be prepared."));
     } finally {
       setBusyAction(null);
     }
-  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+  }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
   const downloadRecommendedDictionary = useCallback(async () => {
     try {
@@ -127,13 +138,13 @@ export function useSetupActions({
       applyBootstrap(nextBootstrap);
       openSettingsSection("studyPicks");
     } catch (error) {
-      setLoadError(
+      showError(
         errorMessage(error, "The Japanese dictionary could not be prepared."),
       );
     } finally {
       setBusyAction(null);
     }
-  }, [applyBootstrap, openSettingsSection, setBusyAction, setLoadError]);
+  }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
   /**
    * Reads the collection and rebuilds the known-word list.
@@ -152,13 +163,13 @@ export function useSetupActions({
       await persistSettingsIfNeeded();
       await invoke<KnownWordsSnapshot>("refresh_known_words");
     } catch (error) {
-      setLoadError(
+      showError(
         errorMessage(error, "Your known-word list could not be rebuilt."),
       );
     } finally {
       setBusyAction(null);
     }
-  }, [persistSettingsIfNeeded, setBusyAction, setLoadError]);
+  }, [persistSettingsIfNeeded, setBusyAction, showError]);
 
   /**
    * Looks through the collection for note types that hold vocabulary.
@@ -173,14 +184,14 @@ export function useSetupActions({
         setBusyAction("scanVocabulary");
         return await invoke<VocabularySuggestions>("scan_vocabulary_sources");
       } catch (error) {
-        setLoadError(
+        showError(
           errorMessage(error, "Your Anki collection could not be searched."),
         );
         return null;
       } finally {
         setBusyAction(null);
       }
-    }, [setBusyAction, setLoadError]);
+    }, [setBusyAction, showError]);
 
   const checkYtdlpUpdate = useCallback(async () => {
     try {
@@ -188,13 +199,13 @@ export function useSetupActions({
       const result = await invoke<WhisperAssetUpdateResult>("check_ytdlp_update");
       setYtdlpUpdateResult(result);
     } catch (error) {
-      setLoadError(
+      showError(
         errorMessage(error, "The yt-dlp update check could not be completed."),
       );
     } finally {
       setBusyAction(null);
     }
-  }, [setBusyAction, setLoadError, setYtdlpUpdateResult]);
+  }, [setBusyAction, showError, setYtdlpUpdateResult]);
 
   const downloadRecommendedModel = useCallback(async () => {
     try {
@@ -207,7 +218,7 @@ export function useSetupActions({
       applyBootstrap(nextBootstrap);
       openSettingsSection("whisper");
     } catch (error) {
-      setLoadError(
+      showError(
         errorMessage(error, "The recommended Whisper model could not be prepared."),
       );
     } finally {
@@ -218,7 +229,7 @@ export function useSetupActions({
     persistSettingsIfNeeded,
     openSettingsSection,
     setBusyAction,
-    setLoadError,
+    showError,
     setModelUpdateResult,
   ]);
 
@@ -231,13 +242,13 @@ export function useSetupActions({
       );
       setRuntimeUpdateResult(result);
     } catch (error) {
-      setLoadError(
+      showError(
         errorMessage(error, "The runtime update check could not be completed."),
       );
     } finally {
       setBusyAction(null);
     }
-  }, [persistSettingsIfNeeded, setBusyAction, setLoadError, setRuntimeUpdateResult]);
+  }, [persistSettingsIfNeeded, setBusyAction, showError, setRuntimeUpdateResult]);
 
   const checkModelUpdate = useCallback(async () => {
     try {
@@ -248,37 +259,47 @@ export function useSetupActions({
       );
       setModelUpdateResult(result);
     } catch (error) {
-      setLoadError(
+      showError(
         errorMessage(error, "The model update check could not be completed."),
       );
     } finally {
       setBusyAction(null);
     }
-  }, [persistSettingsIfNeeded, setBusyAction, setLoadError, setModelUpdateResult]);
+  }, [persistSettingsIfNeeded, setBusyAction, showError, setModelUpdateResult]);
 
+  /**
+   * Pauses or resumes the running download.
+   *
+   * Nothing is applied from the call, and the command returns nothing to apply — the same
+   * reasoning as `refreshKnownWords` above, but with a sharper symptom. The download thread
+   * emits a fresh app snapshot on every 64KB chunk, so a bootstrap built at the end of this
+   * command could carry a "downloading" written microseconds after the pause was recorded,
+   * and applying it here landed it *after* the worker's own "paused" had arrived. The button
+   * then still read "Pause Download" over a paused download, so pressing it again resumed
+   * rather than paused, and the transfer looked stuck part-way.
+   *
+   * Pause is where this surfaced because pause is where the emissions stop: the worker
+   * announces "paused" once and then blocks, so nothing arrives afterwards to correct a bad
+   * overwrite. Every other status keeps emitting and heals itself within a chunk.
+   */
   const toggleDownloadPause = useCallback(async () => {
     try {
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "toggle_whisper_model_download_pause",
-      );
-      applyBootstrap(nextBootstrap);
+      await invoke("toggle_whisper_model_download_pause");
     } catch (error) {
-      setLoadError(
+      showError(
         errorMessage(error, "The active download could not be paused or resumed."),
       );
     }
-  }, [applyBootstrap, setLoadError]);
+  }, [showError]);
 
+  /** Same as `toggleDownloadPause`: the emitted snapshot is the only writer. */
   const cancelDownload = useCallback(async () => {
     try {
-      const nextBootstrap = await invoke<AppBootstrap>(
-        "cancel_whisper_model_download",
-      );
-      applyBootstrap(nextBootstrap);
+      await invoke("cancel_whisper_model_download");
     } catch (error) {
-      setLoadError(errorMessage(error, "The active download could not be cancelled."));
+      showError(errorMessage(error, "The active download could not be cancelled."));
     }
-  }, [applyBootstrap, setLoadError]);
+  }, [showError]);
 
   const browseForDirectory = useCallback(
     async (field: "outputDirectory" | "assetDirectory") => {
@@ -298,12 +319,12 @@ export function useSetupActions({
 
         updateSettings({ [field]: selection });
       } catch (error) {
-        setLoadError(errorMessage(error, "The folder chooser could not be opened."));
+        showError(errorMessage(error, "The folder chooser could not be opened."));
       } finally {
         setBusyAction(null);
       }
     },
-    [setBusyAction, setLoadError, settingsDraft, updateSettings],
+    [setBusyAction, showError, settingsDraft, updateSettings],
   );
 
   const browseForFile = useCallback(
@@ -326,7 +347,7 @@ export function useSetupActions({
 
         updateSettings({ whisper: { [field]: selection } });
       } catch (error) {
-        setLoadError(errorMessage(error, "The file chooser could not be opened."));
+        showError(errorMessage(error, "The file chooser could not be opened."));
       } finally {
         setBusyAction(null);
       }
@@ -335,7 +356,7 @@ export function useSetupActions({
       resolvedCliPath,
       resolvedModelPath,
       setBusyAction,
-      setLoadError,
+      showError,
       updateSettings,
     ],
   );

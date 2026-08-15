@@ -193,6 +193,15 @@ export function StorageSettingsPage({
           {alassReady ? "Re-download alass" : "Download alass"}
         </button>
       </div>
+      {/* alass had a button and no progress card, so downloading it showed nothing at all —
+          and because every card checks the one shared snapshot, it hid the others too. */}
+      <DownloadProgressCard
+        snapshot={bootstrap.modelDownload}
+        kind="alass"
+        downloadIsActive={downloadIsActive}
+        onTogglePause={() => void onToggleDownloadPause()}
+        onCancel={() => void onCancelDownload()}
+      />
       {ytdlpReady && ytdlpUpdateVersion ? (
         <div className="action-row compact-actions">
           <button

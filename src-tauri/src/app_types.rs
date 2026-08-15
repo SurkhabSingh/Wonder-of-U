@@ -6,7 +6,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION, recording::RecordingCaptureResult};
+use crate::{
+    app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION, asset_downloads::AssetKind,
+    recording::RecordingCaptureResult,
+};
 
 pub(crate) const START_SHORTCUT: &str = "Ctrl+Alt+R";
 pub(crate) const STOP_SHORTCUT: &str = "Ctrl+Alt+S";
@@ -918,7 +921,12 @@ impl Default for MpvDetection {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WhisperAssetUpdateResult {
-    pub(crate) kind: String,
+    /// Which asset this result is about.
+    ///
+    /// Typed for the same reason the download snapshot's is: it was a third hand-written copy
+    /// of the same six strings. Nothing reads it on the frontend today, so it could not have
+    /// drifted visibly — but that is a property of nobody looking, not of the code being safe.
+    pub(crate) kind: AssetKind,
     pub(crate) status: String,
     pub(crate) message: String,
     pub(crate) current_version: Option<String>,
@@ -928,7 +936,14 @@ pub(crate) struct WhisperAssetUpdateResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ModelDownloadSnapshot {
-    pub(crate) kind: Option<String>,
+    /// Which asset the rest of these fields are about. `None` only when nothing has
+    /// downloaded yet — a finished download leaves its kind in place so the card can keep
+    /// showing the result.
+    ///
+    /// Typed rather than a bare string: the string version had to be repeated by hand in the
+    /// downloader, in `control.rs`'s label lookup and in the frontend's union, and alass
+    /// reached two of those three.
+    pub(crate) kind: Option<AssetKind>,
     pub(crate) status: String,
     pub(crate) message: String,
     pub(crate) downloaded_bytes: u64,

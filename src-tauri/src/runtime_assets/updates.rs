@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
     app_config::YTDLP_RELEASES_API_URL,
+    asset_downloads::AssetKind,
     app_state::sanitize_runtime_version,
     app_types::{whisper_model_spec, SharedPersistedState, WhisperAssetUpdateResult},
     runtime_assets::detect_local_ytdlp,
@@ -40,7 +41,7 @@ pub(crate) fn check_whisper_runtime_update_inner<R: Runtime>(
     let detection = refresh_whisper_detection_state(app)?;
     if !detection.cli_ready {
         return Ok(WhisperAssetUpdateResult {
-            kind: "runtime".into(),
+            kind: AssetKind::Runtime,
             status: "unavailable".into(),
             message: "Install or point the app to whisper-cli before checking for runtime updates."
                 .into(),
@@ -51,7 +52,7 @@ pub(crate) fn check_whisper_runtime_update_inner<R: Runtime>(
 
     if !detection.cli_managed {
         return Ok(WhisperAssetUpdateResult {
-            kind: "runtime".into(),
+            kind: AssetKind::Runtime,
             status: "manual".into(),
             message: "Update checks are only available for the app-managed Whisper runtime.".into(),
             current_version: detection.executable_path,
@@ -84,7 +85,7 @@ pub(crate) fn check_whisper_runtime_update_inner<R: Runtime>(
         .any(|version| sanitize_runtime_version(version) == latest_version);
     let update_available = latest_version != current_version;
     Ok(WhisperAssetUpdateResult {
-        kind: "runtime".into(),
+        kind: AssetKind::Runtime,
         status: if !update_available {
             "current".into()
         } else if latest_installed {
@@ -181,7 +182,7 @@ pub(crate) fn check_ytdlp_update_inner<R: Runtime>(
     };
 
     Ok(WhisperAssetUpdateResult {
-        kind: "ytdlp".into(),
+        kind: AssetKind::Ytdlp,
         status,
         message,
         current_version: installed_version,
@@ -195,7 +196,7 @@ pub(crate) fn check_whisper_model_update_inner<R: Runtime>(
     let detection = refresh_whisper_detection_state(app)?;
     if !detection.model_ready {
         return Ok(WhisperAssetUpdateResult {
-            kind: "model".into(),
+            kind: AssetKind::Model,
             status: "unavailable".into(),
             message: "Install or point the app to a Whisper model before checking for updates."
                 .into(),
@@ -206,7 +207,7 @@ pub(crate) fn check_whisper_model_update_inner<R: Runtime>(
 
     if !detection.model_managed {
         return Ok(WhisperAssetUpdateResult {
-            kind: "model".into(),
+            kind: AssetKind::Model,
             status: "manual".into(),
             message: "Update checks are only available for the app-managed Whisper model.".into(),
             current_version: detection.model_path,
@@ -263,7 +264,7 @@ pub(crate) fn check_whisper_model_update_inner<R: Runtime>(
     };
 
     Ok(WhisperAssetUpdateResult {
-        kind: "model".into(),
+        kind: AssetKind::Model,
         status,
         message,
         current_version: Some(format!("{} ({})", model_spec.label, model_spec.file_name)),
