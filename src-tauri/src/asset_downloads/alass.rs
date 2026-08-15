@@ -9,6 +9,7 @@ use crate::{
     runtime_assets::{alass_archive_entry, managed_alass_install_directory, verify_alass_binary},
 };
 
+use super::asset::AssetKind;
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_entry_to_path,
     reset_model_download_control, update_model_download_snapshot, verify_managed_binary_or_remove,
@@ -59,7 +60,7 @@ pub(crate) fn download_recommended_alass_inner<R: Runtime>(
         shell.current_recording_name = None;
     })?;
     update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some("alass".into());
+        snapshot.kind = Some(AssetKind::Alass);
         snapshot.status = "starting".into();
         snapshot.message = "Preparing the alass download...".into();
         snapshot.downloaded_bytes = 0;
@@ -76,7 +77,7 @@ pub(crate) fn download_recommended_alass_inner<R: Runtime>(
                     &app_handle,
                     ALASS_RELEASE_DOWNLOAD_URL,
                     &archive_path,
-                    "alass",
+                    AssetKind::Alass,
                     "alass",
                 )?;
 
@@ -91,7 +92,7 @@ pub(crate) fn download_recommended_alass_inner<R: Runtime>(
 
                 verify_managed_binary_or_remove(&target_path, verify_alass_binary)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("alass".into());
+                    snapshot.kind = Some(AssetKind::Alass);
                     snapshot.status = "completed".into();
                     snapshot.message =
                         "alass downloaded. Subtitles can now be synced automatically.".into();
@@ -124,7 +125,7 @@ pub(crate) fn download_recommended_alass_inner<R: Runtime>(
             if let Err(error) = download_result {
                 let cancelled = error.ends_with("download cancelled.");
                 let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("alass".into());
+                    snapshot.kind = Some(AssetKind::Alass);
                     if cancelled {
                         snapshot.status = "cancelled".into();
                         snapshot.message = "alass download cancelled.".into();

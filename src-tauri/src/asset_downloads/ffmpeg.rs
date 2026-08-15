@@ -14,6 +14,7 @@ use crate::{
     },
 };
 
+use super::asset::AssetKind;
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
     first_runnable_binary, reset_model_download_control, update_model_download_snapshot,
@@ -95,7 +96,7 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
         shell.current_recording_name = None;
     })?;
     update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some("ffmpeg".into());
+        snapshot.kind = Some(AssetKind::Ffmpeg);
         snapshot.status = "starting".into();
         snapshot.message = "Preparing the FFmpeg download...".into();
         snapshot.downloaded_bytes = 0;
@@ -125,7 +126,7 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
                             &app_handle,
                             RECOMMENDED_FFMPEG_RUNTIME_URL,
                             &archive_path,
-                            "ffmpeg",
+                            AssetKind::Ffmpeg,
                             "FFmpeg",
                         )?;
 
@@ -141,7 +142,7 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
                     }
                 };
                 update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("ffmpeg".into());
+                    snapshot.kind = Some(AssetKind::Ffmpeg);
                     snapshot.status = "completed".into();
                     snapshot.message =
                         "FFmpeg downloaded. MP3 compression is now enabled.".into();
@@ -178,7 +179,7 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
             if let Err(error) = download_result {
                 let cancelled = error.ends_with("download cancelled.");
                 let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("ffmpeg".into());
+                    snapshot.kind = Some(AssetKind::Ffmpeg);
                     if cancelled {
                         snapshot.status = "cancelled".into();
                         snapshot.message = "FFmpeg download cancelled.".into();

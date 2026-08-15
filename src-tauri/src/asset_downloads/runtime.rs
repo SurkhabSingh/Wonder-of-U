@@ -17,6 +17,7 @@ use crate::{
     transcription::verify_whisper_cli,
 };
 
+use super::asset::AssetKind;
 use super::transfer::{
     download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
     first_runnable_binary, reset_model_download_control, update_model_download_snapshot,
@@ -161,7 +162,7 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
         shell.current_recording_name = None;
     })?;
     update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some("runtime".into());
+        snapshot.kind = Some(AssetKind::Runtime);
         snapshot.status = "starting".into();
         snapshot.message = "Preparing the Whisper runtime download...".into();
         snapshot.downloaded_bytes = 0;
@@ -192,7 +193,7 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
                                 &app_handle,
                                 &download_url,
                                 &archive_path,
-                                "runtime",
+                                AssetKind::Runtime,
                                 &format!("Whisper runtime {runtime_version}"),
                             )?;
 
@@ -216,7 +217,7 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
 
                 let detection = refresh_whisper_detection_state(&app_handle)?;
                 update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("runtime".into());
+                    snapshot.kind = Some(AssetKind::Runtime);
                     snapshot.status = "completed".into();
                     snapshot.message = format!(
                         "Whisper runtime {} downloaded and activated.",
@@ -264,7 +265,7 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
             if let Err(error) = download_result {
                 let cancelled = error.ends_with("download cancelled.");
                 let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some("runtime".into());
+                    snapshot.kind = Some(AssetKind::Runtime);
                     if cancelled {
                         snapshot.status = "cancelled".into();
                         snapshot.message = "Runtime download cancelled.".into();

@@ -2,7 +2,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -12,6 +12,8 @@ use crate::{
     app_runtime::emit_app_snapshot,
     app_types::{ModelDownloadControlState, ModelDownloadSnapshot, ModelDownloadState},
 };
+
+use super::asset::{paused_message, AssetKind};
 
 fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
@@ -23,10 +25,11 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-pub(super) fn update_model_download_snapshot<R: Runtime, F>(
-    app: &AppHandle<R>,
-    update: F,
-) -> Result<(), String>
+/// Records new download state without telling anyone.
+///
+/// Separated from the emit because the byte loop needs to keep the state exact — every chunk —
+/// while announcing it far less often. See `ProgressEmitter`.
+fn write_download_snapshot<R: Runtime, F>(app: &AppHandle<R>, update: F) -> Result<(), String>
 where
     F: FnOnce(&mut ModelDownloadSnapshot),
 {
@@ -36,8 +39,99 @@ where
         .lock()
         .map_err(|_| "Could not update the model download state.".to_string())?;
     update(&mut snapshot);
-    drop(snapshot);
+    Ok(())
+}
+
+pub(super) fn update_model_download_snapshot<R: Runtime, F>(
+    app: &AppHandle<R>,
+    update: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut ModelDownloadSnapshot),
+{
+    write_download_snapshot(app, update)?;
     emit_app_snapshot(app);
+    Ok(())
+}
+
+/// How often a download in flight may announce its progress.
+///
+/// An emit is not cheap. `emit_app_snapshot` rebuilds the *entire* bootstrap — it deep-clones
+/// the persisted state, runs four live detections including a recursive directory walk for
+/// ffmpeg, serialises the lot, and pushes it across the IPC boundary, where React re-renders
+/// the whole app. The measured payload floor is the size of `state.json`: **67 KB, every time**.
+///
+/// The byte loop was calling that once per 64 KB chunk, so the cost scaled with the download:
+///
+/// | asset      | size   | emits | JSON pushed |
+/// |------------|--------|-------|-------------|
+/// | yt-dlp     |  18 MB |   288 |      19 MB  |
+/// | alass      |  25 MB |   403 |      26 MB  |
+/// | ffmpeg     |  73 MB | 1,174 |      77 MB  |
+/// | model      | 466 MB | 7,456 |     487 MB  |
+///
+/// Past roughly 400 emits the webview cannot drain the queue as fast as it fills, so events
+/// back up and the interface falls behind the download it is describing. That is what made
+/// ffmpeg look broken while the smaller assets seemed fine: **nothing about ffmpeg differs —
+/// it was simply the largest thing anyone had paused.** Pressing Pause enqueued a "paused"
+/// behind hundreds of stale "downloading"s, so the button kept its old label, and pressing it
+/// again just toggled the download back on.
+///
+/// 200ms caps it at five emits a second whatever the size, which is well inside what the eye
+/// reads as a live progress bar.
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Rate-limits progress announcements for one transfer.
+///
+/// Owned by the byte loop rather than kept globally, so there is no clock to reset between
+/// downloads and no state shared across them. `now` is a parameter so the policy can be tested
+/// without sleeping.
+pub(super) struct ProgressEmitter {
+    last_emit: Option<Instant>,
+    interval: Duration,
+}
+
+impl ProgressEmitter {
+    pub(super) fn new(interval: Duration) -> Self {
+        Self {
+            last_emit: None,
+            interval,
+        }
+    }
+
+    /// True when enough time has passed. The first call is always true, so a download says
+    /// something immediately rather than appearing dead for its first interval.
+    pub(super) fn should_emit(&mut self, now: Instant) -> bool {
+        let due = match self.last_emit {
+            None => true,
+            Some(last) => now.duration_since(last) >= self.interval,
+        };
+        if due {
+            self.last_emit = Some(now);
+        }
+        due
+    }
+}
+
+/// A progress tick: always records the new byte count, announces it at most every interval.
+///
+/// **Only in-flight progress may be throttled.** A status *transition* — starting, paused,
+/// cancelled, completed, failed — must go out immediately, because those are exactly the
+/// moments the interface has to react to, and some of them are the last thing a download ever
+/// says. Pause in particular emits once and then blocks, so a swallowed pause would never be
+/// followed by anything to correct it.
+fn update_download_progress<R: Runtime, F>(
+    app: &AppHandle<R>,
+    emitter: &mut ProgressEmitter,
+    update: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut ModelDownloadSnapshot),
+{
+    write_download_snapshot(app, update)?;
+    if emitter.should_emit(Instant::now()) {
+        emit_app_snapshot(app);
+    }
     Ok(())
 }
 
@@ -274,11 +368,15 @@ pub(super) fn extract_zip_entry_to_path(
     Ok(())
 }
 
+/// `kind` says which asset this is; `label` is the wording for this particular transfer,
+/// which is not always the asset's own name — the model download names the chosen model and
+/// the runtime names its version. They were two adjacent `&str` parameters, so a call site
+/// could swap them and still compile; typing `kind` makes that swap impossible.
 pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     app: &AppHandle<R>,
     url: &str,
     target_path: &Path,
-    kind: &str,
+    kind: AssetKind,
     label: &str,
 ) -> Result<(), String> {
     let client = http_client()?;
@@ -293,9 +391,11 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     let mut file = fs::File::create(&temp_path).map_err(|error| error.to_string())?;
     let mut buffer = [0u8; 64 * 1024];
     let mut downloaded_bytes = 0u64;
+    let mut progress_emitter = ProgressEmitter::new(PROGRESS_EMIT_INTERVAL);
 
+    // The transition into "downloading" is not throttled — only the per-chunk ticks below are.
     update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some(kind.to_string());
+        snapshot.kind = Some(kind);
         snapshot.status = "downloading".into();
         snapshot.message = format!("Downloading {label}...");
         snapshot.downloaded_bytes = 0;
@@ -315,9 +415,12 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
             while control.active && control.paused && !control.cancel_requested {
                 drop(control);
                 update_model_download_snapshot(app, |snapshot| {
-                    snapshot.kind = Some(kind.to_string());
+                    snapshot.kind = Some(kind);
                     snapshot.status = "paused".into();
-                    snapshot.message = format!("{label} download paused.");
+                    // Shared with `control.rs`, which writes this same message the instant the
+                    // user presses Pause. Both land; wording them separately made the card
+                    // change its mind about what it was doing.
+                    snapshot.message = paused_message(kind.label());
                 })?;
                 control =
                     control_state
@@ -331,7 +434,7 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
             if control.cancel_requested {
                 drop(control);
                 update_model_download_snapshot(app, |snapshot| {
-                    snapshot.kind = Some(kind.to_string());
+                    snapshot.kind = Some(kind);
                     snapshot.status = "cancelled".into();
                     snapshot.message = format!("{label} download cancelled.");
                 })?;
@@ -351,8 +454,10 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
             .map_err(|error| error.to_string())?;
         downloaded_bytes = downloaded_bytes.saturating_add(read_bytes as u64);
 
-        update_model_download_snapshot(app, |snapshot| {
-            snapshot.kind = Some(kind.to_string());
+        // The hot path: once per 64KB. Recorded every time, announced at most five times a
+        // second — see PROGRESS_EMIT_INTERVAL for what an announcement actually costs.
+        update_download_progress(app, &mut progress_emitter, |snapshot| {
+            snapshot.kind = Some(kind);
             snapshot.status = "downloading".into();
             snapshot.message = format!("Downloading {label}...");
             snapshot.downloaded_bytes = downloaded_bytes;
@@ -375,8 +480,82 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::{first_runnable_binary, verify_managed_binary_or_remove, PartialDownloadGuard};
-    use std::path::Path;
+    use super::{
+        first_runnable_binary, verify_managed_binary_or_remove, PartialDownloadGuard,
+        ProgressEmitter,
+    };
+    use std::{
+        path::Path,
+        time::{Duration, Instant},
+    };
+
+    /// A download must say something at once, or it looks dead for its first interval.
+    #[test]
+    fn the_first_tick_always_announces_itself() {
+        let mut emitter = ProgressEmitter::new(Duration::from_millis(200));
+        assert!(emitter.should_emit(Instant::now()));
+    }
+
+    /// The whole point: chunks arriving faster than the interval are recorded but silent.
+    /// Each announcement rebuilds and ships the entire ~67 KB bootstrap.
+    #[test]
+    fn ticks_inside_the_interval_stay_quiet() {
+        let start = Instant::now();
+        let mut emitter = ProgressEmitter::new(Duration::from_millis(200));
+
+        assert!(emitter.should_emit(start));
+        assert!(!emitter.should_emit(start + Duration::from_millis(1)));
+        assert!(!emitter.should_emit(start + Duration::from_millis(199)));
+    }
+
+    /// ...and it must still announce once the interval is up, or the bar would freeze.
+    #[test]
+    fn a_tick_past_the_interval_announces_again() {
+        let start = Instant::now();
+        let mut emitter = ProgressEmitter::new(Duration::from_millis(200));
+
+        assert!(emitter.should_emit(start));
+        assert!(emitter.should_emit(start + Duration::from_millis(200)));
+        assert!(emitter.should_emit(start + Duration::from_millis(400)));
+    }
+
+    /// The interval is measured from the last ANNOUNCEMENT, not the last tick. Measuring from
+    /// the last tick would let a steady stream of quiet chunks hold the announcement off for
+    /// the whole download, which is the failure this replaced.
+    #[test]
+    fn a_steady_stream_of_quiet_ticks_cannot_starve_the_next_announcement() {
+        let start = Instant::now();
+        let mut emitter = ProgressEmitter::new(Duration::from_millis(200));
+
+        assert!(emitter.should_emit(start));
+        for millis in [50, 100, 150] {
+            assert!(!emitter.should_emit(start + Duration::from_millis(millis)));
+        }
+        assert!(emitter.should_emit(start + Duration::from_millis(200)));
+    }
+
+    /// A 73 MB ffmpeg download is 1,174 chunks. At five announcements a second it should cost
+    /// a couple of hundred, not one per chunk.
+    #[test]
+    fn an_ffmpeg_sized_download_announces_a_few_hundred_times_not_a_few_thousand() {
+        let start = Instant::now();
+        let mut emitter = ProgressEmitter::new(Duration::from_millis(200));
+
+        // 1,174 chunks spread evenly across a 30-second download. u64 throughout: the
+        // microsecond product overflows a 32-bit index well before the last chunk.
+        let chunks: u64 = 1_174;
+        let announced = (0..chunks)
+            .filter(|index| {
+                let elapsed = Duration::from_micros(index * 30_000_000 / chunks);
+                emitter.should_emit(start + elapsed)
+            })
+            .count();
+
+        assert!(
+            (140..=160).contains(&announced),
+            "expected ~150 announcements across 30s, got {announced}"
+        );
+    }
 
     #[test]
     fn a_binary_that_fails_verification_is_removed() {

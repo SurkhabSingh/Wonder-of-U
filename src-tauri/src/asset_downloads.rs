@@ -1,3 +1,4 @@
+mod asset;
 mod dictionary;
 mod control;
 mod alass;
@@ -7,6 +8,7 @@ mod runtime;
 mod transfer;
 mod ytdlp;
 
+pub(crate) use asset::AssetKind;
 pub(crate) use control::{
     cancel_whisper_model_download_inner, toggle_whisper_model_download_pause_inner,
 };

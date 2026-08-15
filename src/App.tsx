@@ -576,7 +576,7 @@ function App() {
     resolvedModelPath,
     openSettingsSection,
     setBusyAction,
-    setLoadError,
+    showError,
     setModelUpdateResult,
     setRuntimeUpdateResult,
     setYtdlpUpdateResult,

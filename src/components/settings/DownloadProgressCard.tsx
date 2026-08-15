@@ -1,5 +1,5 @@
 import { fileNameFromPath, formatProgressBytes } from "../../lib/format";
-import type { ModelDownloadSnapshot } from "../../types";
+import type { AssetKind, ModelDownloadSnapshot } from "../../types";
 
 export function DownloadProgressCard({
   snapshot,
@@ -9,7 +9,9 @@ export function DownloadProgressCard({
   onCancel,
 }: {
   snapshot: ModelDownloadSnapshot;
-  kind: "runtime" | "model" | "ffmpeg" | "ytdlp" | "dictionary";
+  // The shared AssetKind, not a union rewritten here. The local copy this replaces had
+  // drifted from Rust's list, and the asset it was missing simply never showed progress.
+  kind: AssetKind;
   downloadIsActive: boolean;
   onTogglePause: () => void;
   onCancel: () => void;

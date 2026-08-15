@@ -137,16 +137,31 @@ pub(crate) async fn check_ytdlp_update(app: AppHandle) -> Result<WhisperAssetUpd
         .map_err(|error| error.to_string())?
 }
 
+/// Returns nothing, deliberately.
+///
+/// Pausing already emits an app snapshot, so handing the caller a second copy of the same
+/// state gives that state two writers with no ordering between them. The download thread emits
+/// on every chunk, so a snapshot built here — a few microseconds later — could be built from a
+/// "downloading" the worker wrote in the gap, and the frontend applied it *after* the
+/// worker's "paused" arrived. The button then read "Pause Download" over an already-paused
+/// download, pressing it resumed instead of pausing, and the transfer looked stuck.
+///
+/// Pause is where this shows because pause is where the events stop: the worker emits "paused"
+/// once and then blocks on the condvar, so nothing follows to correct a bad overwrite. Every
+/// other status keeps emitting and heals itself, which is why only this one stuck.
+///
+/// `refresh_known_words` reached the same conclusion for the same reason — see the comment on
+/// its caller. Returning `()` is what makes it structural rather than a convention: there is
+/// no stale snapshot for a call site to apply, now or later.
 #[tauri::command]
-pub(crate) fn toggle_whisper_model_download_pause(app: AppHandle) -> Result<AppBootstrap, String> {
-    toggle_whisper_model_download_pause_inner(&app)?;
-    build_app_bootstrap(&app)
+pub(crate) fn toggle_whisper_model_download_pause(app: AppHandle) -> Result<(), String> {
+    toggle_whisper_model_download_pause_inner(&app)
 }
 
+/// Returns nothing, for the same reason as `toggle_whisper_model_download_pause`.
 #[tauri::command]
-pub(crate) fn cancel_whisper_model_download(app: AppHandle) -> Result<AppBootstrap, String> {
-    cancel_whisper_model_download_inner(&app)?;
-    build_app_bootstrap(&app)
+pub(crate) fn cancel_whisper_model_download(app: AppHandle) -> Result<(), String> {
+    cancel_whisper_model_download_inner(&app)
 }
 
 #[tauri::command]
