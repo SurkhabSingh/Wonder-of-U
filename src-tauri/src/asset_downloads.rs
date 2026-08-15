@@ -1,4 +1,5 @@
 mod asset;
+mod envelope;
 mod dictionary;
 mod control;
 mod alass;
