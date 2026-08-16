@@ -3,50 +3,38 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 use crate::{
     app_config::{RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL},
-    app_runtime::{log_event, update_shell_snapshot},
-    app_types::{SharedPersistedState, SharedShellState},
     runtime_assets::{
         collect_managed_ffmpeg_candidates, managed_ffmpeg_install_directory, verify_ffmpeg_binary,
     },
 };
 
 use super::asset::AssetKind;
+use super::envelope::{run_asset_download, AssetDownloadPlan, Installed};
 use super::transfer::{
-    download_file_to_path_with_progress, ensure_directory_exists, extract_zip_archive_to_directory,
-    first_runnable_binary, reset_model_download_control, update_model_download_snapshot,
-    verify_managed_binary_or_remove, DownloadSlotGuard,
+    asset_directory, ensure_directory_exists, extract_zip_archive_to_directory,
+    first_runnable_binary, verify_managed_binary_or_remove,
 };
 
-fn recommended_ffmpeg_archive_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let persisted_state = app.state::<SharedPersistedState>();
-    let persisted = persisted_state
-        .0
-        .lock()
-        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
-    let asset_directory = PathBuf::from(&persisted.settings.asset_directory);
-    let downloads_directory = asset_directory.join("downloads");
-    drop(persisted);
-
-    ensure_directory_exists(&downloads_directory)?;
-    Ok(downloads_directory.join(RECOMMENDED_FFMPEG_RUNTIME_FILE))
+/// Where ffmpeg's archive is staged and where it unpacks to.
+///
+/// Staged through the shared `downloads/` directory and removed only on success, the same way
+/// the dictionary does it — and the opposite of alass.
+struct FfmpegPaths {
+    archive: PathBuf,
+    install: PathBuf,
 }
 
-fn recommended_ffmpeg_install_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let persisted_state = app.state::<SharedPersistedState>();
-    let persisted = persisted_state
-        .0
-        .lock()
-        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
-    let asset_directory = PathBuf::from(&persisted.settings.asset_directory);
-    drop(persisted);
-
-    let install_directory = managed_ffmpeg_install_directory(&asset_directory);
-    ensure_directory_exists(&install_directory)?;
-    Ok(install_directory)
+fn ffmpeg_paths(asset_directory: &Path) -> FfmpegPaths {
+    FfmpegPaths {
+        archive: asset_directory
+            .join("downloads")
+            .join(RECOMMENDED_FFMPEG_RUNTIME_FILE),
+        install: managed_ffmpeg_install_directory(asset_directory),
+    }
 }
 
 fn find_existing_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> {
@@ -71,66 +59,52 @@ fn find_runnable_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> 
 pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(), String> {
-    {
-        let shell_state = app.state::<SharedShellState>();
-        let shell = shell_state
-            .0
-            .lock()
-            .map_err(|_| "Could not inspect the shell state.".to_string())?;
-        if shell.phase != "idle" && shell.phase != "error" {
-            return Err("Finish the current task before downloading FFmpeg.".into());
-        }
-    }
+    let asset_directory = asset_directory(app)?;
+    let paths = ffmpeg_paths(&asset_directory);
+    ensure_directory_exists(
+        paths
+            .archive
+            .parent()
+            .ok_or_else(|| "The downloads directory has no parent.".to_string())?,
+    )?;
+    ensure_directory_exists(&paths.install)?;
 
-    let download_slot =
-        DownloadSlotGuard::acquire(app, "Another download is already in progress.")?;
+    let shell_start_text = format!("Downloading FFmpeg to {}...", paths.install.display());
+    // Names the archive while fetching; the finished card names the binary that was found.
+    let starting_target_path = paths.archive.clone();
 
-    let archive_path = recommended_ffmpeg_archive_path(app)?;
-    let install_directory = recommended_ffmpeg_install_directory(app)?;
-    let app_handle = app.clone();
-
-    update_shell_snapshot(app, |shell| {
-        shell.phase = "downloading-model".into();
-        shell.status_text = format!("Downloading FFmpeg to {}...", install_directory.display());
-        shell.started_at_ms = None;
-        shell.current_recording_name = None;
-    })?;
-    update_model_download_snapshot(app, |snapshot| {
-        snapshot.kind = Some(AssetKind::Ffmpeg);
-        snapshot.status = "starting".into();
-        snapshot.message = "Preparing the FFmpeg download...".into();
-        snapshot.downloaded_bytes = 0;
-        snapshot.total_bytes = None;
-        snapshot.progress_percent = None;
-        snapshot.target_path = Some(archive_path.display().to_string());
-    })?;
-
-    std::thread::Builder::new()
-        .name("ffmpeg-download".into())
-        .spawn(move || {
-            let download_result = (|| -> Result<(), String> {
-                let asset_directory = {
-                    let persisted_state = app_handle.state::<SharedPersistedState>();
-                    let persisted = persisted_state
-                        .0
-                        .lock()
-                        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
-                    PathBuf::from(&persisted.settings.asset_directory)
-                };
-
+    run_asset_download(
+        app,
+        AssetDownloadPlan {
+            kind: AssetKind::Ffmpeg,
+            thread_name: "ffmpeg-download",
+            shell_busy_message: "Finish the current task before downloading FFmpeg.".into(),
+            slot_busy_message: "Another download is already in progress.".into(),
+            shell_start_text,
+            starting_message: "Preparing the FFmpeg download...".into(),
+            starting_target_path,
+            cancelled_message: "FFmpeg download cancelled.".into(),
+            cancelled_shell_text: "FFmpeg download cancelled.".into(),
+            failed_message_prefix: "FFmpeg download failed".into(),
+            failed_shell_prefix: "FFmpeg download failed".into(),
+            success_log_event: "ffmpeg.downloaded",
+            failure_log_event: "ffmpeg.download_failed",
+            install: Box::new(move |context| {
+                // Skip-if-runnable, and note the test is *runnable*, not *present*. This is
+                // deliberate and must survive: the Settings button is hidden entirely while
+                // detection reports ready, so the only way to reach this with a working ffmpeg
+                // installed is a re-download of something detection cannot see.
                 let ffmpeg_path = match find_runnable_managed_ffmpeg_path(&asset_directory) {
                     // Already run by the search, so nothing to check again here.
                     Some(existing_path) => existing_path,
                     None => {
-                        download_file_to_path_with_progress(
-                            &app_handle,
+                        context.fetch(
                             RECOMMENDED_FFMPEG_RUNTIME_URL,
-                            &archive_path,
-                            AssetKind::Ffmpeg,
+                            &paths.archive,
                             "FFmpeg",
                         )?;
 
-                        extract_zip_archive_to_directory(&archive_path, &install_directory)?;
+                        extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
                         let downloaded_path = find_existing_managed_ffmpeg_path(&asset_directory)
                             .ok_or_else(|| {
                                 "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string()
@@ -141,73 +115,58 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
                         downloaded_path
                     }
                 };
-                update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some(AssetKind::Ffmpeg);
-                    snapshot.status = "completed".into();
-                    snapshot.message =
-                        "FFmpeg downloaded. MP3 compression is now enabled.".into();
-                    snapshot.downloaded_bytes =
-                        snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
-                    snapshot.progress_percent = Some(100.0);
-                    snapshot.target_path = Some(ffmpeg_path.display().to_string());
-                })?;
-                reset_model_download_control(&app_handle)?;
 
-                update_shell_snapshot(&app_handle, |shell| {
-                    shell.phase = "idle".into();
-                    shell.status_text = format!(
+                let log_details = serde_json::json!({
+                    "archivePath": paths.archive.display().to_string(),
+                    "ffmpegPath": ffmpeg_path.display().to_string()
+                });
+                // Success only, like the dictionary. A no-op on the skip path, where no
+                // archive was ever fetched.
+                let _ = fs::remove_file(&paths.archive);
+
+                Ok(Installed {
+                    completed_message: "FFmpeg downloaded. MP3 compression is now enabled."
+                        .into(),
+                    shell_success_text: format!(
                         "FFmpeg is ready at {}. Future transcribed recordings will be compressed to MP3.",
                         ffmpeg_path.display()
-                    );
-                    shell.started_at_ms = None;
-                })?;
+                    ),
+                    target_path: ffmpeg_path,
+                    log_details,
+                })
+            }),
+        },
+    )
+}
 
-                log_event(
-                    &app_handle,
-                    "INFO",
-                    "ffmpeg.downloaded",
-                    serde_json::json!({
-                        "archivePath": archive_path.display().to_string(),
-                        "ffmpegPath": ffmpeg_path.display().to_string()
-                    }),
-                );
+#[cfg(test)]
+mod tests {
+    use super::ffmpeg_paths;
+    use std::path::Path;
 
-                let _ = fs::remove_file(&archive_path);
-                Ok(())
-            })();
+    /// ffmpeg stages through `downloads/` and installs somewhere else entirely. Both halves
+    /// matter: extraction clears the install directory, so pointing it at `downloads/` would
+    /// wipe the staging area mid-download.
+    #[test]
+    fn the_archive_and_the_install_directory_are_different_places() {
+        let paths = ffmpeg_paths(Path::new("C:/assets"));
 
-            if let Err(error) = download_result {
-                let cancelled = error.ends_with("download cancelled.");
-                let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                    snapshot.kind = Some(AssetKind::Ffmpeg);
-                    if cancelled {
-                        snapshot.status = "cancelled".into();
-                        snapshot.message = "FFmpeg download cancelled.".into();
-                    } else {
-                        snapshot.status = "failed".into();
-                        snapshot.message = format!("FFmpeg download failed: {error}");
-                    }
-                });
-                let _ = reset_model_download_control(&app_handle);
-                let _ = update_shell_snapshot(&app_handle, |shell| {
-                    shell.phase = "idle".into();
-                    shell.status_text = if cancelled {
-                        "FFmpeg download cancelled.".into()
-                    } else {
-                        format!("FFmpeg download failed: {error}")
-                    };
-                    shell.started_at_ms = None;
-                });
-                log_event(
-                    &app_handle,
-                    "ERROR",
-                    "ffmpeg.download_failed",
-                    serde_json::json!({ "message": error }),
-                );
-            }
-        })
-        .map_err(|error| error.to_string())?;
-    download_slot.disarm();
-
-    Ok(())
+        assert!(
+            paths
+                .archive
+                .components()
+                .any(|part| part.as_os_str() == "downloads"),
+            "expected downloads/ staging: {:?}",
+            paths.archive
+        );
+        assert_ne!(paths.archive.parent(), Some(paths.install.as_path()));
+        assert!(
+            !paths
+                .install
+                .components()
+                .any(|part| part.as_os_str() == "downloads"),
+            "the install directory is wiped on extract and must not be downloads/: {:?}",
+            paths.install
+        );
+    }
 }

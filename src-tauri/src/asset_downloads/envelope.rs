@@ -107,6 +107,13 @@ impl<R: Runtime> DownloadContext<R> {
         download_file_to_path_with_progress(&self.app, url, target, self.kind, label)
             .map_err(DownloadFailure::from_transfer_error)
     }
+
+    /// For the two installs that do more than write files: the runtime activates the version
+    /// it just fetched and refreshes whisper detection, and the model clears a stale override.
+    /// Both write persisted settings, which needs the handle.
+    pub(super) fn app(&self) -> &AppHandle<R> {
+        &self.app
+    }
 }
 
 /// Phase G: everything specific to one asset, and nothing else.
