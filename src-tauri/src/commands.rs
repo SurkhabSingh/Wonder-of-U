@@ -46,6 +46,7 @@ use crate::{
     asset_downloads::{
         cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
         download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
+        download_whisper_vad_model_inner,
         download_recommended_alass_inner, download_recommended_dictionary_inner,
         download_recommended_ytdlp_inner,
         download_whisper_runtime_version_inner,
@@ -75,6 +76,15 @@ pub(crate) fn get_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> 
 #[tauri::command]
 pub(crate) fn download_recommended_whisper_model(app: AppHandle) -> Result<AppBootstrap, String> {
     download_recommended_whisper_model_inner(&app)?;
+    build_app_bootstrap(&app)
+}
+
+/// Fetches only the speech detector, for the repair offered when it is missing but the model
+/// is not. Kept apart from the model download so that button cannot start a multi-gigabyte
+/// transfer — see `download_whisper_vad_model_inner` for why that was possible.
+#[tauri::command]
+pub(crate) fn download_whisper_vad_model(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_whisper_vad_model_inner(&app)?;
     build_app_bootstrap(&app)
 }
 

@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::{
     app_state::write_persisted_data,
     app_types::{
-        whisper_model_spec, SharedPersistedState, WhisperModelSpec, WHISPER_VAD_MODEL_FILE,
+        whisper_model_spec, whisper_vad_model_path, SharedPersistedState, WhisperModelSpec,
         WHISPER_VAD_MODEL_URL,
     },
     runtime_assets::refresh_whisper_detection_state,
@@ -54,10 +54,9 @@ struct ModelPaths {
 }
 
 fn model_paths(asset_directory: &Path, model_file_name: &str) -> ModelPaths {
-    let models_directory = asset_directory.join("models");
     ModelPaths {
-        model: models_directory.join(model_file_name),
-        vad: models_directory.join(WHISPER_VAD_MODEL_FILE),
+        model: asset_directory.join("models").join(model_file_name),
+        vad: whisper_vad_model_path(asset_directory),
     }
 }
 
@@ -159,10 +158,92 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
     )
 }
 
+/// Fetches **only** the speech-detector model, never the transcription model.
+///
+/// This exists because the repair offered in Settings has to be safe to press, and the full
+/// model download is not. That download writes to `<asset_dir>/models/` and skips only what is
+/// already *there* — but detection accepts a managed model in six different places (the models
+/// directory, three runtime directories, and two beside the CLI), and a manual override can put
+/// it anywhere at all. So "the model is installed" does not imply "the model is at the path the
+/// download would write to", and a repair built on the full download could quietly start a
+/// multi-gigabyte transfer for someone whose model simply lives somewhere else.
+///
+/// Reusing `AssetKind::Model` is deliberate rather than a shortcut: this *is* part of
+/// provisioning the model, and it belongs in the same progress card. Every sentence the user
+/// reads comes from the plan below, so nothing claims to be downloading the model itself.
+pub(crate) fn download_whisper_vad_model_inner<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    let asset_directory = asset_directory(app)?;
+    let vad_path = whisper_vad_model_path(&asset_directory);
+    ensure_directory_exists(
+        vad_path
+            .parent()
+            .ok_or_else(|| "The models directory has no parent.".to_string())?,
+    )?;
+
+    let shell_start_text = format!(
+        "Downloading the speech detector to {}...",
+        vad_path.display()
+    );
+    let starting_target_path = vad_path.clone();
+
+    run_asset_download(
+        app,
+        AssetDownloadPlan {
+            kind: AssetKind::Model,
+            thread_name: "whisper-vad-download",
+            shell_busy_message: "Finish the current task before downloading the speech detector."
+                .into(),
+            slot_busy_message: "A model download is already in progress.".into(),
+            shell_start_text,
+            starting_message: "Preparing the speech-detector download...".into(),
+            starting_target_path,
+            cancelled_message: "Speech-detector download cancelled.".into(),
+            cancelled_shell_text: "Speech-detector download cancelled.".into(),
+            failed_message_prefix: "Speech-detector download failed".into(),
+            failed_shell_prefix: "Speech-detector download failed".into(),
+            success_log_event: "whisper.vad_model_downloaded",
+            failure_log_event: "whisper.vad_model_download_failed",
+            install: Box::new(move |context| {
+                // One file, and the only one. There is no branch here that could reach the
+                // transcription model, which is the whole point of this being separate.
+                if !vad_path.exists() {
+                    context.fetch(
+                        WHISPER_VAD_MODEL_URL,
+                        &vad_path,
+                        "the speech-detector (VAD) model",
+                    )?;
+                }
+                // Detection stores its result rather than re-deriving it per snapshot, so
+                // without this the interface would keep offering a repair already done.
+                let detection = refresh_whisper_detection_state(context.app())?;
+
+                Ok(Installed {
+                    completed_message: "The speech detector is ready. Transcription can run again."
+                        .into(),
+                    shell_success_text: if detection.status == "ready" {
+                        "The speech detector is ready. Transcription can run again.".to_string()
+                    } else {
+                        format!(
+                            "Speech detector downloaded, but Whisper still needs setup: {}",
+                            detection.message
+                        )
+                    },
+                    log_details: serde_json::json!({
+                        "vadModelPath": vad_path.display().to_string()
+                    }),
+                    target_path: vad_path,
+                })
+            }),
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::model_paths;
-    use crate::app_types::{WHISPER_MODEL_SPECS, WHISPER_VAD_MODEL_FILE};
+    use crate::app_types::{whisper_vad_model_path, WHISPER_MODEL_SPECS, WHISPER_VAD_MODEL_FILE};
     use std::path::Path;
 
     /// One download provisions two files, and both belong in `models/` — the VAD model is
@@ -180,6 +261,19 @@ mod tests {
                 .any(|part| part.as_os_str() == "models"),
             "{:?}",
             paths.model
+        );
+    }
+
+    /// The full download and the repair must agree on where the detector goes, or the repair
+    /// would write a file the gate is not looking for and offer itself again forever. They
+    /// agree because they call the same function — this fails the moment one stops.
+    #[test]
+    fn the_download_and_the_gate_resolve_the_same_detector_path() {
+        let asset_directory = Path::new("C:/assets");
+
+        assert_eq!(
+            model_paths(asset_directory, "ggml-small.bin").vad,
+            whisper_vad_model_path(asset_directory)
         );
     }
 

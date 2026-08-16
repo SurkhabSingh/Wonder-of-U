@@ -207,6 +207,28 @@ export function useSetupActions({
     }
   }, [setBusyAction, showError, setYtdlpUpdateResult]);
 
+  /**
+   * Fetches only the speech detector, for the repair shown when it is missing but the model
+   * is not.
+   *
+   * Its own command rather than reusing the model download: that one writes to
+   * `<asset_dir>/models/` and skips only what is already there, but a managed model is
+   * accepted from six different directories and a manual path from anywhere — so "the model
+   * is installed" does not mean "the model is where that download would put it", and pressing
+   * a repair could have started a multi-gigabyte transfer.
+   */
+  const downloadWhisperVadModel = useCallback(async () => {
+    try {
+      setBusyAction("downloadModel");
+      const nextBootstrap = await invoke<AppBootstrap>("download_whisper_vad_model");
+      applyBootstrap(nextBootstrap);
+    } catch (error) {
+      showError(errorMessage(error, "The speech detector could not be prepared."));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, setBusyAction, showError]);
+
   const downloadRecommendedModel = useCallback(async () => {
     try {
       setBusyAction("downloadModel");
@@ -383,6 +405,7 @@ export function useSetupActions({
     checkYtdlpUpdate,
     downloadRecommendedFfmpeg,
     downloadRecommendedModel,
+    downloadWhisperVadModel,
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,

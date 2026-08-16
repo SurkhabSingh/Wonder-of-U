@@ -1469,7 +1469,11 @@ input::placeholder {
   color: var(--text-strong);
 }
 
-.update-card.available {
+.update-card.available,
+/* Same warning tone, for a component that is MISSING rather than out of date. These class
+   names are read as vocabulary, so borrowing "available" for it would leave the next reader
+   thinking the speech detector had an update waiting. */
+.update-card.missing {
   border-color: color-mix(in srgb, var(--warning) 36%, var(--border));
   background: var(--warning-soft);
 }

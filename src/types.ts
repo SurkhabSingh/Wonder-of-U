@@ -309,6 +309,11 @@ export type WhisperDetection = {
   availableRuntimeVersions: string[];
   cliReady: boolean;
   modelReady: boolean;
+  // Whether whisper.cpp's Silero VAD model is on disk beside the transcription model.
+  // Separate from modelReady on purpose: the two are fetched together, so they normally agree,
+  // but a download cancelled between them leaves the model installed and the VAD missing — and
+  // then modelReady is true while transcription refuses to run.
+  vadReady: boolean;
   cliManaged: boolean;
   modelManaged: boolean;
   message: string;

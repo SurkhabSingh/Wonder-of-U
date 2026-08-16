@@ -394,6 +394,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     availableRuntimeVersions: [],
     cliReady: false,
     modelReady: false,
+    vadReady: false,
     cliManaged: false,
     modelManaged: false,
     message:
