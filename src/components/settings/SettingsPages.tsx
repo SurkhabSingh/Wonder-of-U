@@ -57,6 +57,7 @@ export function SettingsPages({
   onDownloadRecommendedRuntime,
   onCheckModelUpdate,
   onDownloadRecommendedModel,
+  onDownloadWhisperVadModel,
   onDownloadRecommendedFfmpeg,
   onDownloadRecommendedYtdlp,
   onDownloadRecommendedAlass,
@@ -98,6 +99,7 @@ export function SettingsPages({
   onDownloadRecommendedRuntime: () => void | Promise<void>;
   onCheckModelUpdate: () => void | Promise<void>;
   onDownloadRecommendedModel: () => void | Promise<void>;
+  onDownloadWhisperVadModel: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
   onDownloadRecommendedAlass: () => void | Promise<void>;
@@ -183,6 +185,7 @@ export function SettingsPages({
             onCancelDownload={onCancelDownload}
             onCheckModelUpdate={onCheckModelUpdate}
             onDownloadRecommendedModel={onDownloadRecommendedModel}
+            onDownloadWhisperVadModel={onDownloadWhisperVadModel}
             onToggleDownloadPause={onToggleDownloadPause}
             onUpdateSettings={onUpdateSettings}
             resolvedModelPath={resolvedModelPath}

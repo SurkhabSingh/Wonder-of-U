@@ -1,5 +1,28 @@
 pub(crate) const APP_SNAPSHOT_EVENT: &str = "app://snapshot-changed";
 pub(crate) const AUTOSTART_ARGUMENT: &str = "--autostart";
+/// The whisper.cpp runtime a fresh install is given. **A deliberate pin, not the latest
+/// release** — and not stale simply because whisper.cpp has moved on.
+///
+/// Transcription drives `whisper-cli` entirely through its command line, and depends on
+/// eleven flags: `--file`, `--language`, `--model`, `--output-file`, `--output-json`,
+/// `--output-txt`, `--print-progress`, `--suppress-nst`, `--vad`,
+/// `--vad-max-speech-duration-s` and `--vad-model`. A floating "latest" would keep building
+/// and keep passing its tests, and would break the first time somebody actually transcribed
+/// something — `--suppress-nst` and the VAD flags are recent enough to be renamed, and
+/// `--output-json` is what per-sentence playback reads. Same reasoning as the alass and
+/// IPADIC pins below.
+///
+/// **Newer runtimes are not out of reach.** `check_whisper_runtime_update` asks GitHub for
+/// the latest tag and reports it as available, and `download_whisper_runtime_version` installs
+/// any version the user picks, side by side under `<asset_dir>/whisper-runtime/<version>/`.
+/// This constant only decides the default.
+///
+/// **Bumping it is a real change, not a version-string edit.** Move this and
+/// `RECOMMENDED_RUNTIME_VERSION` in `src/constants.ts` together — the test below fails
+/// otherwise, because this one decides what a fresh settings file EXPECTS while that one
+/// decides what gets DOWNLOADED. Then re-check the eleven flags against the new CLI and
+/// transcribe something real: whisper output feeds transcripts, mining and i+1 ranking, so a
+/// change in segmentation or timestamps is felt well beyond this file.
 pub(crate) const RECOMMENDED_WHISPER_RUNTIME_VERSION: &str = "v1.8.4";
 pub(crate) const RECOMMENDED_WHISPER_RUNTIME_FILE: &str = "whisper-bin-x64.zip";
 pub(crate) const RECOMMENDED_FFMPEG_RUNTIME_FILE: &str =

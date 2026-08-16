@@ -14,7 +14,7 @@ use crate::{
     app_state::{derive_transcript_language_from_path, sanitize_recording_name},
     app_types::{
         transcript_language_key, RecentRecording, RecordingActionItem, RecordingBatchResult,
-        RecordingSegment, RecordingTranscript, SharedPersistedState, WHISPER_VAD_MODEL_FILE,
+        whisper_vad_model_path, RecordingSegment, RecordingTranscript, SharedPersistedState,
     },
     runtime_assets::{detect_local_ffmpeg, refresh_whisper_detection_state},
     subtitles::segments_to_srt,
@@ -139,9 +139,7 @@ pub(crate) fn resolve_whisper_engine<R: Runtime>(
             "FFmpeg is required for transcription. Download it from Settings.".to_string()
         })?;
 
-    let vad_model_path = Path::new(&settings.asset_directory)
-        .join("models")
-        .join(WHISPER_VAD_MODEL_FILE);
+    let vad_model_path = whisper_vad_model_path(Path::new(&settings.asset_directory));
     // Only speech mode uses the VAD model; music mode skips VAD entirely, so don't require the
     // VAD model to be present when the user has chosen Music.
     if settings.whisper.audio_type != "music" && !vad_model_path.exists() {

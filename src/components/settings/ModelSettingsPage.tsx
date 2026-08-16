@@ -22,6 +22,7 @@ export function ModelSettingsPage({
   onCancelDownload,
   onCheckModelUpdate,
   onDownloadRecommendedModel,
+  onDownloadWhisperVadModel,
   onToggleDownloadPause,
   onUpdateSettings,
   resolvedModelPath,
@@ -36,6 +37,7 @@ export function ModelSettingsPage({
   onCancelDownload: () => void | Promise<void>;
   onCheckModelUpdate: () => void | Promise<void>;
   onDownloadRecommendedModel: () => void | Promise<void>;
+  onDownloadWhisperVadModel: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
   onUpdateSettings: (update: SettingsUpdate) => void;
   resolvedModelPath: string;
@@ -281,6 +283,33 @@ export function ModelSettingsPage({
               ) : null}
             </div>
             <UpdateResultCard result={modelUpdateResult} />
+            {/* The model is here but the speech detector is not, so transcription will refuse
+                to run — and with the model installed there is otherwise no button on this page
+                to fetch it, which left the app telling the user to do something it gave them
+                no way to do. Reached by cancelling a model download in the gap between the two
+                files, since the model is renamed into place before the detector is fetched.
+
+                This runs the ordinary model download: it skips whichever of the two files is
+                already present, so it fetches only the missing detector and leaves a multi-
+                gigabyte model untouched. */}
+            {!bootstrap.whisperDetection.vadReady ? (
+              <div className="update-card missing">
+                <strong>The speech detector is missing.</strong>
+                <p className="microcopy">
+                  Transcription needs it as well as the model. It is under a megabyte,
+                  and your model will not be downloaded again.
+                </p>
+                <div className="action-row inline-actions">
+                  <button
+                    type="button"
+                    onClick={() => void onDownloadWhisperVadModel()}
+                    disabled={downloadIsActive || isDownloadBusy(busyAction)}
+                  >
+                    Download the speech detector
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="action-row inline-actions">

@@ -560,6 +560,7 @@ function App() {
     checkYtdlpUpdate,
     downloadRecommendedFfmpeg,
     downloadRecommendedModel,
+    downloadWhisperVadModel,
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
@@ -1319,6 +1320,7 @@ function App() {
             onDownloadRecommendedRuntime={downloadRecommendedRuntime}
             onCheckModelUpdate={checkModelUpdate}
             onDownloadRecommendedModel={downloadRecommendedModel}
+            onDownloadWhisperVadModel={downloadWhisperVadModel}
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onDownloadRecommendedAlass={downloadRecommendedAlass}

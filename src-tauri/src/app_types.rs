@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc, Condvar, Mutex},
     thread::JoinHandle,
 };
@@ -62,6 +62,16 @@ pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
 /// whisper.cpp's built-in Silero VAD ggml model, used for drift-free speech segmentation.
 /// Tiny (~0.85 MB); lives alongside the ggml Whisper models under `{asset}/models/`.
 pub(crate) const WHISPER_VAD_MODEL_FILE: &str = "ggml-silero-v6.2.0.bin";
+
+/// Where the VAD model lives, for everyone who needs to know.
+///
+/// Three places had this joined by hand: transcription, which refuses to run without it; the
+/// model download, which fetches it; and now detection, which reports whether it is there. Two
+/// of those decide whether the user is told to fix something and the third is the fix — so if
+/// they ever disagreed about the path, the app would offer a repair that repaired nothing.
+pub(crate) fn whisper_vad_model_path(asset_directory: &Path) -> PathBuf {
+    asset_directory.join("models").join(WHISPER_VAD_MODEL_FILE)
+}
 pub(crate) const WHISPER_VAD_MODEL_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
 
@@ -808,6 +818,15 @@ pub(crate) struct WhisperDetection {
     pub(crate) available_runtime_versions: Vec<String>,
     pub(crate) cli_ready: bool,
     pub(crate) model_ready: bool,
+    /// Whether whisper.cpp's Silero VAD model is on disk beside the transcription model.
+    ///
+    /// Reported **separately** from `model_ready` rather than folded into it. The two are
+    /// fetched together, so they are almost always the same answer — but a download cancelled
+    /// in the gap between them leaves the model installed and the VAD absent, and then
+    /// `model_ready` is true while transcription refuses to run. Keeping this its own field is
+    /// what lets the interface offer a repair without changing what "the model is installed"
+    /// means to the Whisper status card or the Setup checklist.
+    pub(crate) vad_ready: bool,
     pub(crate) cli_managed: bool,
     pub(crate) model_managed: bool,
     pub(crate) message: String,
@@ -825,6 +844,7 @@ impl Default for WhisperDetection {
             available_runtime_versions: Vec::new(),
             cli_ready: false,
             model_ready: false,
+            vad_ready: false,
             cli_managed: false,
             model_managed: false,
             message:

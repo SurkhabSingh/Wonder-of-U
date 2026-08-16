@@ -10,7 +10,9 @@ use zip::ZipArchive;
 
 use crate::{
     app_runtime::emit_app_snapshot,
-    app_types::{ModelDownloadControlState, ModelDownloadSnapshot, ModelDownloadState},
+    app_types::{
+        ModelDownloadControlState, ModelDownloadSnapshot, ModelDownloadState, SharedPersistedState,
+    },
 };
 
 use super::asset::{paused_message, AssetKind};
@@ -199,6 +201,20 @@ impl<R: Runtime> Drop for DownloadSlotGuard<R> {
 
 pub(super) fn ensure_directory_exists(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| error.to_string())
+}
+
+/// Where managed assets live, as currently configured.
+///
+/// Lock, read one field, unlock. It was written out longhand twelve times across the six
+/// downloaders — three of them reading it twice on the calling thread and once more inside the
+/// worker, because the first read had not been moved in.
+pub(super) fn asset_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let persisted_state = app.state::<SharedPersistedState>();
+    let persisted = persisted_state
+        .0
+        .lock()
+        .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+    Ok(PathBuf::from(&persisted.settings.asset_directory))
 }
 
 /// Removes the `.part` file unless the transfer got as far as its final rename.

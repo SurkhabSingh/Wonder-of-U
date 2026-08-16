@@ -9,8 +9,8 @@ use crate::{
     app_runtime::{emit_app_snapshot, log_event},
     app_state::sanitize_runtime_version,
     app_types::{
-        whisper_model_spec, AppSettings, SharedPersistedState, WhisperDetection,
-        WhisperDetectionState, WHISPER_MODEL_SPECS,
+        whisper_model_spec, whisper_vad_model_path, AppSettings, SharedPersistedState,
+        WhisperDetection, WhisperDetectionState, WHISPER_MODEL_SPECS,
     },
     transcription::{verify_whisper_cli, verify_whisper_model},
 };
@@ -314,6 +314,10 @@ fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetecti
 
     let cli_ready = executable_path.is_some() && cli_error.is_none();
     let model_ready = model_path.is_some() && model_error.is_none();
+    // Presence only, and deliberately cheap: this runs on every app-snapshot emit. The file is
+    // under a megabyte and is written by one rename, so "it is there" is the whole question —
+    // unlike an executable, which has to be run to be believed.
+    let vad_ready = whisper_vad_model_path(&asset_directory).exists();
     let cli_managed = matches!(source.as_deref(), Some("managed"));
     let model_managed = matches!(model_source.as_deref(), Some("managed"));
 
@@ -327,6 +331,7 @@ fn detect_local_whisper<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperDetecti
         available_runtime_versions,
         cli_ready,
         model_ready,
+        vad_ready,
         cli_managed,
         model_managed,
         message,
