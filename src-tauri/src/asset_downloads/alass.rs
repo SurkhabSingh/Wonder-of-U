@@ -95,6 +95,8 @@ pub(crate) fn download_recommended_alass_inner<R: Runtime>(
                     log_details: serde_json::json!({
                         "alassPath": paths.target.display().to_string()
                     }),
+                    // Same path the card started on — only the dictionary discovers a new one.
+                    target_path: paths.target,
                 })
             }),
         },

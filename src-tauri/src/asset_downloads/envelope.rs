@@ -76,6 +76,11 @@ impl DownloadFailure {
 /// than having the envelope guess them from the kind — is what lets the wording stay exactly
 /// as it is today while the surrounding hundred lines are deleted.
 pub(super) struct Installed {
+    /// What the finished card points at, which is **not always what it started pointing at**.
+    /// The dictionary begins by naming the archive it is fetching and ends by naming the
+    /// dictionary root it found inside — a path that does not exist until extraction has run.
+    /// yt-dlp and alass finish where they started and simply hand back the same path.
+    pub(super) target_path: PathBuf,
     pub(super) completed_message: String,
     pub(super) shell_success_text: String,
     pub(super) log_details: serde_json::Value,
@@ -192,7 +197,6 @@ pub(super) fn run_asset_download<R: Runtime>(
         ..
     } = plan;
 
-    let target_display = starting_target_path.display().to_string();
     update_model_download_snapshot(app, |snapshot| {
         snapshot.kind = Some(kind);
         snapshot.status = "starting".into();
@@ -200,7 +204,7 @@ pub(super) fn run_asset_download<R: Runtime>(
         snapshot.downloaded_bytes = 0;
         snapshot.total_bytes = None;
         snapshot.progress_percent = None;
-        snapshot.target_path = Some(target_display.clone());
+        snapshot.target_path = Some(starting_target_path.display().to_string());
     })?;
 
     let context = DownloadContext {
@@ -223,7 +227,7 @@ pub(super) fn run_asset_download<R: Runtime>(
                         snapshot.downloaded_bytes =
                             snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
                         snapshot.progress_percent = Some(100.0);
-                        snapshot.target_path = Some(target_display);
+                        snapshot.target_path = Some(installed.target_path.display().to_string());
                     });
                     let _ = reset_model_download_control(&app_handle);
                     let _ = update_shell_snapshot(&app_handle, |shell| {

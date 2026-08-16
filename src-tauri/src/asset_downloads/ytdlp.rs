@@ -76,6 +76,9 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
                     log_details: serde_json::json!({
                         "ytdlpPath": installed_path.display().to_string()
                     }),
+                    // Finishes where it started: the card pointed at this binary all along.
+                    // Written last so the borrows above are done before it takes ownership.
+                    target_path: installed_path,
                 })
             }),
         },
