@@ -64,7 +64,7 @@ export function useSentenceRanking(
 }
 
 /**
- * Whether a line is worth mining: everything known but one word.
+ * Whether a line is one word away: everything known but one.
  *
  * Reads the flag rather than recomputing it. The rule has one home, in Rust, where
  * the summary count is also produced — two copies would drift, and the visible
@@ -72,4 +72,17 @@ export function useSentenceRanking(
  */
 export function isWithinReach(line: LineRanking): boolean {
   return line.withinReach;
+}
+
+/**
+ * A line one word away with nothing else in it — `刑期が`, a word and a particle.
+ *
+ * Listed and filtered like any other line one word away, because they were asked for, but
+ * drawn differently and left out of "Mine all" unless the setting says otherwise. Both halves
+ * come from Rust: `hasContext` is its own answer rather than this file re-deriving
+ * `contentWordCount >= 2`, because that threshold is the definition of a learnable line and
+ * one definition is enough.
+ */
+export function isBareWord(line: LineRanking): boolean {
+  return line.withinReach && !line.hasContext;
 }

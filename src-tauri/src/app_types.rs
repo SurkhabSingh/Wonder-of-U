@@ -266,6 +266,17 @@ pub(crate) struct FeatureSettings {
     /// which is what someone collecting several examples of a word wants.
     #[serde(default)]
     pub(crate) allow_duplicate_mined_words: bool,
+    /// Whether "Mine all" takes lines whose only content word is the new one.
+    ///
+    /// Off by default, which is the behaviour that existed before these lines were listed at
+    /// all. They are shown and filtered like any other line one word away — the badge tells
+    /// them apart — but a batch is where the cost lands: measured on a real 598-line episode,
+    /// two of every five one-word-away lines are bare, so turning this on makes a batch produce
+    /// roughly 40% more cards, and those extra cards are a word with a particle rather than a
+    /// sentence. Worth having for someone who wants every new word regardless; worth being a
+    /// decision rather than a surprise.
+    #[serde(default)]
+    pub(crate) mine_words_without_context: bool,
 }
 
 impl Default for FeatureSettings {
@@ -278,6 +289,7 @@ impl Default for FeatureSettings {
             translate_after_transcription: false,
             add_definitions_to_mined_cards: false,
             allow_duplicate_mined_words: false,
+            mine_words_without_context: false,
         }
     }
 }
@@ -778,6 +790,10 @@ pub(crate) struct AppBootstrap {
     pub(crate) model_download: ModelDownloadSnapshot,
     pub(crate) dictionary_detection: DictionaryDetection,
     pub(crate) known_words: KnownWordsSnapshot,
+    /// What transcription needs, and whether each is present. The Setup checklist reads this
+    /// rather than deciding for itself which steps are required — which is how FFmpeg came to
+    /// be listed as optional while nothing could be transcribed without it.
+    pub(crate) transcription_requirements: Vec<TranscriptionRequirement>,
     pub(crate) log_path: String,
 }
 
@@ -952,6 +968,25 @@ pub(crate) struct WhisperAssetUpdateResult {
     pub(crate) message: String,
     pub(crate) current_version: Option<String>,
     pub(crate) latest_version: Option<String>,
+}
+
+/// One thing transcription cannot run without.
+///
+/// Built by `transcription_requirements`, which is the only place that decides what the list
+/// contains — see it for why this exists at all.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TranscriptionRequirement {
+    /// `"whisper"` | `"ffmpeg"` | `"vad"`. The checklist matches on these to decide which of
+    /// its rows are required, so they are part of the contract with the frontend.
+    pub(crate) id: &'static str,
+    pub(crate) ready: bool,
+    /// What transcription says when this is the one that is missing.
+    ///
+    /// Not sent to the frontend — the checklist writes its own, shorter copy — but kept beside
+    /// the condition so the sentence and the check that produces it cannot drift apart.
+    #[serde(skip)]
+    pub(crate) blocked_message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1288,10 +1323,19 @@ pub(crate) struct LineRanking {
     /// pure grammar has none, and is not the same thing as a line you know every
     /// word of — the badge has to be able to tell those apart.
     pub(crate) content_word_count: usize,
-    /// Whether this is a line worth mining. Decided here rather than by whoever
-    /// draws the badge, so the count in the summary and the rows in the filter
-    /// cannot disagree — see `is_within_reach`.
+    /// Whether this line is one word away — exactly one word here is new.
+    ///
+    /// Decided here rather than by whoever draws the badge, so the count in the summary
+    /// and the rows in the filter cannot disagree — see `is_within_reach`.
     pub(crate) within_reach: bool,
+    /// Whether there is another content word to learn that one from.
+    ///
+    /// A separate answer rather than the frontend re-deriving `content_word_count >= 2`,
+    /// because that threshold is the definition of a learnable line and one definition is
+    /// enough. `within_reach && !has_context` is a bare word — shown and filtered like any
+    /// other line one word away, drawn differently, and left out of "Mine all" unless the
+    /// user has asked for it. See `has_context`.
+    pub(crate) has_context: bool,
 }
 
 /// A ranking of every line handed in, in the same order.

@@ -74,19 +74,31 @@ pub(super) fn is_content_word(token: &JapaneseToken) -> bool {
     token.part_of_speech_subcategory != EXCLUDED_DEPENDENT_SUBCATEGORY
 }
 
-/// Whether a line is worth mining: everything known but one word.
+/// Whether a line is one word away: everything known but one.
 ///
-/// The second half of that sentence is the obvious one and the first half is the
-/// one that matters. **i+1 needs an i.** A line whose only content word is the new
-/// one is not a sentence you can learn from — there is no surrounding meaning to
-/// infer it from, just a word on its own, and a flashcard would do the job better.
+/// Nothing about whether that word can be *learned* from the line — see
+/// [`has_context`] for that. The two were one test until 2026-08-10, and separating
+/// them is what lets a bare line be listed and filtered while still being told apart
+/// from a real sentence.
+fn is_within_reach(unknown_words: usize) -> bool {
+    unknown_words == 1
+}
+
+/// Whether there is anything around the new word to infer it from.
 ///
-/// This is not a tuned threshold, it is the definition, and it was measured before
-/// being believed: on a real 598-line episode, 242 lines had exactly one unknown
-/// content word — and 99 of those had no other content word at all. Without this,
-/// two of every five "one word away" lines were fragments.
-fn is_within_reach(unknown_words: usize, content_word_count: usize) -> bool {
-    unknown_words == 1 && content_word_count >= 2
+/// **i+1 needs an i.** A line whose only content word is the new one gives the reader
+/// nothing to work with — just a word on its own, which a flashcard does better than a
+/// sentence card. That is not a tuned threshold, it is the definition, and it was
+/// measured before being believed: on a real 598-line episode, 242 lines had exactly
+/// one unknown content word and **99 of those had no other content word at all**.
+///
+/// It no longer excludes those lines, because the user asked for them — they are shown
+/// and filtered like any other line one word away. What it still does is let the badge
+/// say which kind a line is, and let "Mine all" leave them out unless told otherwise.
+/// Two of every five one-word-away lines are bare, so that is a 40% difference in how
+/// many cards a batch produces.
+fn has_context(content_word_count: usize) -> bool {
+    content_word_count >= 2
 }
 
 /// The distinct content words in one line, in the form the index stores.
@@ -227,7 +239,8 @@ pub(crate) fn rank_transcript_lines_inner<R: Runtime>(
                 .filter(|word| !index.words.contains(word))
                 .collect();
             LineRanking {
-                within_reach: is_within_reach(unknown_words.len(), content_word_count),
+                within_reach: is_within_reach(unknown_words.len()),
+                has_context: has_context(content_word_count),
                 unknown_words,
                 content_word_count,
             }
@@ -260,20 +273,45 @@ mod tests {
         }
     }
 
-    /// i+1 needs an i. A line whose only content word is the new one has no
-    /// surrounding meaning to infer it from — measured at two of every five
-    /// "one word away" lines on a real episode before this rule existed.
+    /// "One word away" is now only about the count. Whether the word can be LEARNED from the
+    /// line is a separate question — see the next test — and keeping them apart is what lets a
+    /// bare line be listed while still being told apart from a sentence.
     #[test]
-    fn a_line_whose_only_word_is_the_new_one_is_not_within_reach() {
+    fn one_word_away_is_decided_by_the_count_alone() {
         use super::is_within_reach;
-        assert!(!is_within_reach(1, 1));
-        assert!(is_within_reach(1, 2));
-        assert!(is_within_reach(1, 5));
+        assert!(is_within_reach(1));
         // Everything known, or more than one gap: neither is the case this finds.
-        assert!(!is_within_reach(0, 4));
-        assert!(!is_within_reach(2, 5));
-        // A line with no content words at all cannot be within reach of anything.
-        assert!(!is_within_reach(0, 0));
+        assert!(!is_within_reach(0));
+        assert!(!is_within_reach(2));
+    }
+
+    /// i+1 needs an i. A line whose only content word is the new one has no surrounding
+    /// meaning to infer it from — measured at two of every five "one word away" lines on a
+    /// real episode. It no longer hides those lines, but it is still what decides whether the
+    /// badge calls one a sentence and whether "Mine all" takes it by default.
+    #[test]
+    fn a_line_whose_only_word_is_the_new_one_has_no_context() {
+        use super::has_context;
+        assert!(!has_context(1));
+        assert!(has_context(2));
+        assert!(has_context(5));
+        // No content words at all is the emptiest case, not a sentence.
+        assert!(!has_context(0));
+    }
+
+    /// The two together, which is how every caller reads them: a bare word is one word away
+    /// AND without context, and that pairing is what the amber badge and the "Mine all"
+    /// setting both key on. If these ever collapsed back into one test, that pairing would
+    /// stop being pinned.
+    #[test]
+    fn a_bare_word_is_within_reach_but_has_no_context() {
+        use super::{has_context, is_within_reach};
+        // 刑期が — one new word, nothing else in the line.
+        assert!(is_within_reach(1) && !has_context(1));
+        // この刑務所に来た記憶もほとんどない — two new words, plenty of context.
+        assert!(!is_within_reach(2) && has_context(4));
+        // A real i+1 sentence: both true.
+        assert!(is_within_reach(1) && has_context(3));
     }
 
     #[test]
@@ -377,7 +415,10 @@ mod tests {
                 continue;
             }
             let unknown = words.iter().filter(|word| !known.contains(word.as_str())).count();
-            let counted = super::is_within_reach(unknown, words.len());
+            // Both halves, deliberately: this measurement is what showed that two of every
+            // five one-word-away lines are bare, and that number is still the reason the
+            // badge and the "Mine all" setting tell them apart.
+            let counted = super::is_within_reach(unknown) && super::has_context(words.len());
             let bucket = match words.len() {
                 1 => 0,
                 2 => 1,

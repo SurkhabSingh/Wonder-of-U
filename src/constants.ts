@@ -360,6 +360,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
       translateAfterTranscription: false,
       addDefinitionsToMinedCards: false,
       allowDuplicateMinedWords: false,
+      mineWordsWithoutContext: false,
     },
     translation: {
       provider: "google-translate",
@@ -441,6 +442,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     wordCount: 0,
     builtAtMs: null,
   },
+  transcriptionRequirements: [],
   logPath: "",
 };
 

@@ -101,6 +101,14 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         .display()
         .to_string();
 
+    // Asked of the same function transcription asks, with the detections just read — so the
+    // checklist cannot describe a requirement the engine does not have, or miss one it does.
+    let transcription_requirements = crate::recording_library::transcription::transcription_requirements(
+        &persisted.settings,
+        &whisper_detection,
+        &ffmpeg_detection,
+    );
+
     Ok(AppBootstrap {
         shell,
         settings: persisted.settings,
@@ -113,6 +121,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         model_download,
         dictionary_detection,
         known_words,
+        transcription_requirements,
         log_path,
     })
 }

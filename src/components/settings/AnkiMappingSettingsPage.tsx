@@ -585,6 +585,31 @@ export function AnkiMappingSettingsPage({
         <label className="toggle inline-toggle">
           <input
             type="checkbox"
+            checked={settingsDraft.features.mineWordsWithoutContext}
+            onChange={(event) =>
+              onUpdateSettings({
+                features: {
+                  mineWordsWithoutContext: event.currentTarget.checked,
+                },
+              })
+            }
+          />
+          <span>Mine words that appear on their own</span>
+        </label>
+        <p className="microcopy">
+          Affects &ldquo;Mine all&rdquo; only. Some lines are one word away because
+          they contain only that word &mdash; 刑期が, a word and a particle. They are
+          always listed and marked, so you can mine one yourself whenever you want it.
+          Off, a batch leaves them out and takes the lines with a sentence around the
+          word. On, it takes them too: measured on a real episode, two of every five
+          one-word-away lines are like this, so expect roughly 40% more cards.
+        </p>
+      </div>
+
+      <div className="info-note">
+        <label className="toggle inline-toggle">
+          <input
+            type="checkbox"
             checked={settingsDraft.features.autoAddFuriganaAfterAnkiPush}
             onChange={(event) =>
               onUpdateSettings({

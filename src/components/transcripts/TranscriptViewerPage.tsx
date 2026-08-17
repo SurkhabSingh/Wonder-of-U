@@ -303,6 +303,7 @@ export function TranscriptViewerPage({
   transcriptionLanguage,
   clipPaddingMs,
   allowDuplicateMinedWords,
+  mineWordsWithoutContext,
   externallyMinedKeys,
   onLinesMined,
   knownWordsBuiltAtMs,
@@ -360,6 +361,7 @@ export function TranscriptViewerPage({
   // the count on the button as well as what it mines, so it is read here rather
   // than only at mining time.
   allowDuplicateMinedWords: boolean;
+  mineWordsWithoutContext: boolean;
   // Lines mined this session from somewhere other than a row — today that means the
   // dictionary popup, which mines a word with its line. Without it the row goes on
   // offering "Mine" for a line that already has a card, and pressing it can only
@@ -628,8 +630,15 @@ export function TranscriptViewerPage({
       .map((segment, index) => ({ segment, index }))
       .filter(({ segment, index }) => {
         const key = segmentMineKey(segment);
+        const line = ranking.lines[index];
+        // A bare line — one new word and nothing around it — is listed and filtered like any
+        // other line one word away, but a batch only takes it when asked. Two of every five
+        // one-word-away lines are bare, so this is where the 40% lands, and cards are the one
+        // part of this that is awkward to undo.
+        const learnable = (line?.withinReach ?? false) &&
+          (mineWordsWithoutContext || (line?.hasContext ?? false));
         return (
-          (ranking.lines[index]?.withinReach ?? false) &&
+          learnable &&
           !minedInThisSession.has(key) &&
           !minedKeysFromAnki.has(key)
         );
@@ -670,6 +679,7 @@ export function TranscriptViewerPage({
     minedInThisSession,
     minedKeysFromAnki,
     allowDuplicateWords,
+    mineWordsWithoutContext,
   ]);
 
   // How many one-word-away lines the batch will NOT mine because the sentence is
@@ -680,9 +690,14 @@ export function TranscriptViewerPage({
     if (!ranking || ranking.status !== "ready") {
       return 0;
     }
-    const withinReach = ranking.lines.filter((line) => line.withinReach).length;
-    return Math.max(0, withinReach - minableWithinReach.length);
-  }, [ranking, minableWithinReach]);
+    // Counted over the lines a batch WOULD consider, not every line one word away: with the
+    // setting off, bare lines are not skipped-because-already-mined, they are simply not in
+    // scope, and folding them in here would report a skip that never happened.
+    const inScope = ranking.lines.filter(
+      (line) => line.withinReach && (mineWordsWithoutContext || line.hasContext),
+    ).length;
+    return Math.max(0, inScope - minableWithinReach.length);
+  }, [ranking, minableWithinReach, mineWordsWithoutContext]);
 
   const handleMineWithinReach = async () => {
     if (minableWithinReach.length === 0 || isBatchMining) {

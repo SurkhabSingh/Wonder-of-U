@@ -1,4 +1,9 @@
-import type { AppPage, RecordingFilter, SettingsSection } from "../types";
+import type {
+  AppPage,
+  RecordingFilter,
+  SettingsSection,
+  TranscriptionRequirement,
+} from "../types";
 
 export type PageNavigationItem = {
   id: AppPage;
@@ -68,12 +73,32 @@ export function isSetupPage(page: AppPage): boolean {
   return SETUP_PAGE_IDS.includes(page);
 }
 
+/**
+ * Which Setup rows are required, taken from what transcription actually demands.
+ *
+ * The backend answers this — `transcription_requirements` — and the answer arrives on the
+ * bootstrap. It is read rather than restated because restating it is how FFmpeg came to be
+ * described here as "Install FFmpeg for optional MP3 conversion" while transcription would not
+ * run without it: a new user could finish every required step and still do nothing.
+ *
+ * A row whose id is not a requirement is genuinely optional. An unknown id defaults to optional
+ * rather than required, so a requirement the backend adds and this file has no row for shows up
+ * as a missing row rather than a step nobody can complete.
+ */
+function requirementLookup(
+  transcriptionRequirements: TranscriptionRequirement[],
+): (id: string) => boolean {
+  const required = new Set(transcriptionRequirements.map((entry) => entry.id));
+  return (id) => required.has(id);
+}
+
 export function createSetupChecklist({
   cliReady,
   modelReady,
   ffmpegReady,
   ytdlpReady,
   ankiConfigured,
+  transcriptionRequirements,
   runtimeVersion,
   modelLabel,
   ankiSummary,
@@ -84,11 +109,13 @@ export function createSetupChecklist({
   ffmpegReady: boolean;
   ytdlpReady: boolean;
   ankiConfigured: boolean;
+  transcriptionRequirements: TranscriptionRequirement[];
   runtimeVersion?: string | null;
   modelLabel?: string | null;
   ankiSummary?: string | null;
   themeLabel?: string | null;
 }): SetupChecklistStep[] {
+  const isRequired = requirementLookup(transcriptionRequirements);
   return [
     {
       id: "runtime",
@@ -98,7 +125,10 @@ export function createSetupChecklist({
         ? "Runtime installed"
         : "Install the Whisper runtime",
       done: cliReady,
-      required: true,
+      // Both this row and the model below map onto the one "whisper" requirement: detection
+      // reports the CLI and the model as a pair, and the checklist splits them only so the
+      // user can see which half is missing.
+      required: isRequired("whisper"),
       value: cliReady ? runtimeVersion ?? null : null,
     },
     {
@@ -109,7 +139,7 @@ export function createSetupChecklist({
         ? "Model downloaded"
         : "Download a transcription model",
       done: modelReady,
-      required: true,
+      required: isRequired("whisper"),
       value: modelReady ? modelLabel ?? null : null,
     },
     {
@@ -137,12 +167,15 @@ export function createSetupChecklist({
     {
       id: "storage",
       target: "storage",
-      label: "MP3 Compression",
+      // Was "MP3 Compression", described as optional. FFmpeg is what decodes audio for
+      // Whisper, so nothing transcribes without it; MP3 conversion is the smaller of the two
+      // things it does and was the only one this row mentioned.
+      label: "Audio Processing",
       description: ffmpegReady
         ? "FFmpeg ready"
-        : "Install FFmpeg for optional MP3 conversion",
+        : "Install FFmpeg — transcription and MP3 conversion both need it",
       done: ffmpegReady,
-      required: false,
+      required: isRequired("ffmpeg"),
     },
     {
       id: "ytdlp",
