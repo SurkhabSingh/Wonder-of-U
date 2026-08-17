@@ -197,7 +197,7 @@ function App() {
     showSuccess,
     showWarning,
   });
-  const { minedSentences, minedWarning, refreshMinedSentences } =
+  const { minedSentences, minedWarning, minedReadCount, refreshMinedSentences } =
     useMinedSentences();
   const watch = useWatchSession();
   const watchSubtitles = useWatchSubtitles();
@@ -790,6 +790,13 @@ function App() {
   );
   const minedLineKey = (text: string, startMs: number, endMs: number) =>
     `${startMs}:${endMs}:${text}`;
+  // The text back out of a key. Sliced past the second colon rather than split on it: the two
+  // timestamps can never contain one, but a transcript line certainly can.
+  const sentenceOfMinedKey = (key: string) => {
+    const firstColon = key.indexOf(":");
+    const secondColon = key.indexOf(":", firstColon + 1);
+    return secondColon === -1 ? key : key.slice(secondColon + 1);
+  };
   const rememberMinedLine = (text: string, startMs: number, endMs: number) => {
     setMinedLineKeys((previous) => new Set(previous).add(minedLineKey(text, startMs, endMs)));
   };
@@ -813,6 +820,34 @@ function App() {
   useEffect(() => {
     setMinedLineKeys(new Set());
   }, [viewingRecording?.filePath]);
+
+  // Forget a line whose card is no longer in Anki.
+  //
+  // A key here is a memory of having MADE a card, not an observation that one exists. Delete
+  // the card in Anki and the memory outlives it — and because this set survives navigation,
+  // clearing it needed an app restart: a row stayed spent with nothing behind it.
+  //
+  // **No new scanning.** This runs on the read that already happens when the transcript opens,
+  // and changes what that read means rather than how often anything reads. Deleting in Anki is
+  // rare enough that stepping out of the transcript and back is a fair price for it.
+  //
+  // Gated on a read having SUCCEEDED. An empty `minedSentences` means "the deck is empty" and
+  // "we could never look" alike — offline, unmapped and error all return nothing — so expiring
+  // against one would wipe every marker the moment Anki closed, which is a far worse bug than
+  // the one this fixes.
+  useEffect(() => {
+    if (minedReadCount === 0) {
+      return;
+    }
+    setMinedLineKeys((previous) => {
+      const survivors = [...previous].filter((key) =>
+        minedSentences.has(normalizeSegmentText(sentenceOfMinedKey(key))),
+      );
+      // Same set back when nothing expired, so React bails out rather than re-rendering
+      // every consumer on every read.
+      return survivors.length === previous.size ? previous : new Set(survivors);
+    });
+  }, [minedReadCount, minedSentences]);
 
   // Mining a word from the popup is offered only when everything it needs is on
   // hand: a recording open with its audio still present, and a scanned line that
@@ -1173,6 +1208,9 @@ function App() {
                 recording={viewingRecording}
                 transcriptionLanguage={settingsDraft.whisper.language}
                 clipPaddingMs={settingsDraft.anki.clipPaddingMs}
+                mineWordsWithoutContext={
+                  settingsDraft.features.mineWordsWithoutContext
+                }
                 allowDuplicateMinedWords={
                   settingsDraft.features.allowDuplicateMinedWords
                 }

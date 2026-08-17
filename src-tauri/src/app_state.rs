@@ -182,6 +182,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
             translate_after_transcription: settings.features.translate_after_transcription,
             add_definitions_to_mined_cards: settings.features.add_definitions_to_mined_cards,
             allow_duplicate_mined_words: settings.features.allow_duplicate_mined_words,
+            mine_words_without_context: settings.features.mine_words_without_context,
         },
         translation: TranslationSettings {
             provider: normalize_translation_provider(&settings.translation.provider),

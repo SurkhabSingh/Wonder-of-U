@@ -1,7 +1,7 @@
 import { useState, type MouseEvent } from "react";
 import { formatDuration } from "../../lib/format";
 import type { LineRanking } from "../../types";
-import { isWithinReach } from "../../hooks/useSentenceRanking";
+import { isBareWord, isWithinReach } from "../../hooks/useSentenceRanking";
 import { ScannableText } from "../scanner/ScannableText";
 import { highlightMatches } from "./transcriptText";
 
@@ -142,19 +142,30 @@ export function TranscriptSegmentRow({
         ) : null}
         {ranking && ranking.contentWordCount > 0 ? (
           <span
+            // Three states, not two. Grey used to mean both "more than one word away" and
+            // "one word away but nothing to learn it from" — opposite problems sharing a
+            // colour, which is exactly what made a +1 beside a +2 unreadable.
             className={`transcript-segment-newness ${
-              isWithinReach(ranking)
-                ? "is-within-reach"
-                : ranking.unknownWords.length === 0
-                  ? "is-known"
-                  : ""
+              isBareWord(ranking)
+                ? "is-bare-word"
+                : isWithinReach(ranking)
+                  ? "is-within-reach"
+                  : ranking.unknownWords.length === 0
+                    ? "is-known"
+                    : ""
             }`}
             // The words themselves, not just how many. On a line one word away,
             // that word is the entire reason to mine it.
             title={
               ranking.unknownWords.length === 0
                 ? "You know every word in this line."
-                : `New here: ${ranking.unknownWords.join("、")}`
+                : isBareWord(ranking)
+                  ? // The count alone left this looking identical to a +2, and the user asked
+                    // why. Say the actual reason.
+                    `New here: ${ranking.unknownWords.join(
+                      "、",
+                    )} — but this line has nothing else in it to learn the word from.`
+                  : `New here: ${ranking.unknownWords.join("、")}`
             }
           >
             {ranking.unknownWords.length === 0

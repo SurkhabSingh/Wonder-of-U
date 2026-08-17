@@ -112,6 +112,52 @@ pub(crate) struct WhisperEngine {
     pub(crate) ffmpeg_path: PathBuf,
 }
 
+/// Everything transcription cannot run without, and whether each is there.
+///
+/// **One list, two readers.** Transcription refuses on the first unready entry; the Setup
+/// checklist marks exactly these required. They used to be separate opinions, and they
+/// disagreed: the checklist called FFmpeg optional — "Install FFmpeg for optional MP3
+/// conversion" — while this function would not proceed without it. A new user finished every
+/// required step, pressed Transcribe, and was sent to fetch a 193 MB "optional" component.
+///
+/// Ordered as the user should fix them: no model is worth fetching before the runtime that
+/// reads it. The messages live beside the conditions so the sentence a user sees and the check
+/// that produced it cannot drift apart.
+pub(crate) fn transcription_requirements(
+    settings: &crate::app_types::AppSettings,
+    whisper: &crate::app_types::WhisperDetection,
+    ffmpeg: &crate::app_types::FfmpegDetection,
+) -> Vec<crate::app_types::TranscriptionRequirement> {
+    use crate::app_types::TranscriptionRequirement;
+
+    vec![
+        // Whisper's readiness already means "the CLI runs AND a model resolves", so this is one
+        // entry rather than two — splitting it would restate detection's rule, badly.
+        TranscriptionRequirement {
+            id: "whisper",
+            ready: whisper.status == "ready",
+            blocked_message: format!("Whisper is not ready yet: {}", whisper.message),
+        },
+        TranscriptionRequirement {
+            id: "ffmpeg",
+            ready: ffmpeg.executable_path.is_some(),
+            blocked_message: "FFmpeg is required for transcription. Download it from Settings."
+                .to_string(),
+        },
+        // Only speech mode uses the VAD model; music mode skips VAD entirely, so it is not a
+        // requirement at all when the user has chosen Music. Reported as satisfied rather than
+        // omitted, so the list keeps one shape whatever the setting.
+        TranscriptionRequirement {
+            id: "vad",
+            ready: settings.whisper.audio_type == "music"
+                || whisper_vad_model_path(Path::new(&settings.asset_directory)).exists(),
+            blocked_message:
+                "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
+                    .to_string(),
+        },
+    ]
+}
+
 /// Resolve the engine, or say exactly what is missing.
 ///
 /// The engine decodes with ffmpeg, then runs whisper-cli with its built-in Silero VAD, so the
@@ -125,29 +171,24 @@ pub(crate) fn resolve_whisper_engine<R: Runtime>(
     settings: &crate::app_types::AppSettings,
 ) -> Result<WhisperEngine, String> {
     let whisper_detection = refresh_whisper_detection_state(app).map_err(|error| error.to_string())?;
-    if whisper_detection.status != "ready" {
-        return Err(format!(
-            "Whisper is not ready yet: {}",
-            whisper_detection.message
-        ));
+    let ffmpeg_detection = detect_local_ffmpeg(settings);
+
+    // The three checks that used to sit here inline now live in one list, because the Setup
+    // checklist has to describe the same three and was getting one of them wrong.
+    if let Some(missing) = transcription_requirements(settings, &whisper_detection, &ffmpeg_detection)
+        .into_iter()
+        .find(|requirement| !requirement.ready)
+    {
+        return Err(missing.blocked_message);
     }
 
-    let ffmpeg_path = detect_local_ffmpeg(settings)
+    let ffmpeg_path = ffmpeg_detection
         .executable_path
         .map(PathBuf::from)
         .ok_or_else(|| {
             "FFmpeg is required for transcription. Download it from Settings.".to_string()
         })?;
-
     let vad_model_path = whisper_vad_model_path(Path::new(&settings.asset_directory));
-    // Only speech mode uses the VAD model; music mode skips VAD entirely, so don't require the
-    // VAD model to be present when the user has chosen Music.
-    if settings.whisper.audio_type != "music" && !vad_model_path.exists() {
-        return Err(
-            "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
-                .to_string(),
-        );
-    }
 
     // Detection only reports "ready" when both of these are present, so this is the invariant
     // restated rather than a new check — but restated where it is USED. `unwrap_or_default()`
@@ -1093,6 +1134,118 @@ fn unique_recording_output_paths(directory: &Path, file_stem: &str) -> (PathBuf,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Settings whose only interesting field is the audio type and the asset directory.
+    fn settings_for(audio_type: &str, asset_directory: &str) -> crate::app_types::AppSettings {
+        let mut settings = crate::app_types::AppSettings::default();
+        settings.whisper.audio_type = audio_type.into();
+        settings.asset_directory = asset_directory.into();
+        settings
+    }
+
+    fn whisper_detection(status: &str) -> crate::app_types::WhisperDetection {
+        crate::app_types::WhisperDetection {
+            status: status.into(),
+            ..Default::default()
+        }
+    }
+
+    fn ffmpeg_detection(present: bool) -> crate::app_types::FfmpegDetection {
+        crate::app_types::FfmpegDetection {
+            executable_path: present.then(|| "C:/ffmpeg.exe".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// FFmpeg is a requirement, full stop. The Setup checklist called it optional for as long as
+    /// it decided for itself, so this is the assertion that matters most here.
+    #[test]
+    fn ffmpeg_is_a_transcription_requirement() {
+        let requirements = transcription_requirements(
+            &settings_for("speech", "C:/assets"),
+            &whisper_detection("ready"),
+            &ffmpeg_detection(false),
+        );
+
+        let ffmpeg = requirements
+            .iter()
+            .find(|requirement| requirement.id == "ffmpeg")
+            .expect("ffmpeg is listed");
+        assert!(!ffmpeg.ready, "absent ffmpeg must not read as satisfied");
+    }
+
+    /// The list is what the checklist marks required, so its ids are a contract with the
+    /// frontend — `requirementLookup` in navigation.ts matches on exactly these.
+    #[test]
+    fn the_requirement_ids_are_the_three_the_checklist_matches_on() {
+        let requirements = transcription_requirements(
+            &settings_for("speech", "C:/assets"),
+            &whisper_detection("ready"),
+            &ffmpeg_detection(true),
+        );
+        let ids: Vec<&str> = requirements.iter().map(|entry| entry.id).collect();
+
+        assert_eq!(ids, ["whisper", "ffmpeg", "vad"]);
+    }
+
+    /// Music mode runs no VAD, so the detector is not a requirement then — and the list keeps
+    /// the same shape rather than dropping an entry, so a caller never has to ask why.
+    #[test]
+    fn the_speech_detector_is_only_required_outside_music_mode() {
+        let speech = transcription_requirements(
+            &settings_for("speech", "C:/assets-that-do-not-exist"),
+            &whisper_detection("ready"),
+            &ffmpeg_detection(true),
+        );
+        let music = transcription_requirements(
+            &settings_for("music", "C:/assets-that-do-not-exist"),
+            &whisper_detection("ready"),
+            &ffmpeg_detection(true),
+        );
+
+        let vad = |list: &[crate::app_types::TranscriptionRequirement]| {
+            list.iter().find(|entry| entry.id == "vad").unwrap().ready
+        };
+        assert!(!vad(&speech), "speech mode needs the detector");
+        assert!(vad(&music), "music mode skips VAD entirely");
+        assert_eq!(speech.len(), music.len(), "the list keeps one shape");
+    }
+
+    /// Every requirement carries the sentence transcription will show, because the engine
+    /// returns the first unready entry's message verbatim. An empty one would surface as a
+    /// blank error.
+    #[test]
+    fn every_requirement_can_explain_itself() {
+        for requirement in transcription_requirements(
+            &settings_for("speech", "C:/assets"),
+            &whisper_detection("cliMissing"),
+            &ffmpeg_detection(false),
+        ) {
+            assert!(
+                !requirement.blocked_message.trim().is_empty(),
+                "{} has nothing to say when it blocks",
+                requirement.id
+            );
+        }
+    }
+
+    /// Order is what the engine reports on, since it returns the FIRST unready entry. Whisper
+    /// before ffmpeg means a fresh install is told to install the runtime rather than a codec.
+    #[test]
+    fn whisper_is_reported_before_ffmpeg_when_both_are_missing() {
+        let requirements = transcription_requirements(
+            &settings_for("speech", "C:/assets"),
+            &whisper_detection("cliMissing"),
+            &ffmpeg_detection(false),
+        );
+        let first_missing = requirements
+            .iter()
+            .find(|requirement| !requirement.ready)
+            .expect("both are missing");
+
+        assert_eq!(first_missing.id, "whisper");
+    }
+
 
     #[test]
     fn additional_language_transcript_keeps_audio_and_tags_language() {

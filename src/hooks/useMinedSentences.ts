@@ -14,6 +14,13 @@ export function useMinedSentences() {
   // "offline" and "nothing configured yet", which are both quiet on purpose — this one the
   // user can fix, and without it the only symptom is marks that never appear.
   const [minedWarning, setMinedWarning] = useState<string | null>(null);
+  // When the deck was last read SUCCESSFULLY, as a counter rather than a boolean.
+  //
+  // Callers need to tell "we have looked and the deck is empty" from "we have never managed
+  // to look", because an empty `minedSentences` means both. A counter also lets an effect fire
+  // once per read rather than once per change in contents — the point of expiring a stale
+  // marker is that a read HAPPENED, not that the answer differed.
+  const [readCount, setReadCount] = useState(0);
   const inFlightRef = useRef(false);
   // A refresh asked for while another was running. Dropping it outright would lose
   // the update for good — there is no poll to retry it — so the request is remembered
@@ -37,6 +44,7 @@ export function useMinedSentences() {
         if (result.status === "ready") {
           setMinedSentences(new Set(result.sentences));
           setMinedWarning(null);
+          setReadCount((previous) => previous + 1);
         } else if (result.status === "stale") {
           setMinedWarning(result.message);
         } else if (import.meta.env.DEV) {
@@ -59,6 +67,8 @@ export function useMinedSentences() {
   return {
     minedSentences,
     minedWarning,
+    // Only ever incremented on a `ready` read, so `0` means the deck has never been seen.
+    minedReadCount: readCount,
     refreshMinedSentences,
   };
 }

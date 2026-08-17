@@ -186,6 +186,7 @@ export function useAppViewState({
     ffmpegReady: bootstrap.ffmpegDetection.status === "ready",
     ytdlpReady: bootstrap.ytdlpDetection.status === "ready",
     ankiConfigured: Boolean(settingsDraft.anki.fields.transcription),
+    transcriptionRequirements: bootstrap.transcriptionRequirements,
     runtimeVersion: activeRuntimeVersion,
     modelLabel,
     ankiSummary,

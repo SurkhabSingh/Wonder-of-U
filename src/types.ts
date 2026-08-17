@@ -40,6 +40,11 @@ export type FeatureSettings = {
   // default: a transcript often teaches a word twice, and two cards for one word is
   // review load without extra learning.
   allowDuplicateMinedWords: boolean;
+  // Whether "Mine all" takes lines whose only content word is the new one — `刑期が`, a word
+  // and a particle. Off by default, which is what happened before those lines were listed at
+  // all. Measured on a real 598-line episode: two of every five one-word-away lines are bare,
+  // so this is roughly a 40% difference in how many cards a batch makes.
+  mineWordsWithoutContext: boolean;
 };
 
 export type AnkiFieldMapping = {
@@ -407,6 +412,10 @@ export type LineRanking = {
   // summary count and the filtered rows have to be the same set, and two copies of
   // the rule is how they stop being.
   withinReach: boolean;
+  // Whether there is another content word to learn the new one from. Its own answer rather
+  // than this side re-deriving contentWordCount >= 2 — that threshold is the definition of a
+  // learnable line, and one definition is enough.
+  hasContext: boolean;
 };
 
 // Always one entry per line handed in, whatever `status` says: "ready",
@@ -487,6 +496,16 @@ export type ModelDownloadSnapshot = {
   queuedRemaining: number;
 };
 
+// One thing transcription cannot run without. Built by the backend's
+// `transcription_requirements`, which is the only place that decides what the list contains —
+// the Setup checklist reads it instead of deciding for itself, which is how FFmpeg came to be
+// listed as optional while nothing could be transcribed without it.
+export type TranscriptionRequirement = {
+  // "whisper" | "ffmpeg" | "vad"
+  id: string;
+  ready: boolean;
+};
+
 export type AppBootstrap = {
   shell: ShellSnapshot;
   settings: AppSettings;
@@ -499,6 +518,7 @@ export type AppBootstrap = {
   modelDownload: ModelDownloadSnapshot;
   dictionaryDetection: DictionaryDetection;
   knownWords: KnownWordsSnapshot;
+  transcriptionRequirements: TranscriptionRequirement[];
   logPath: string;
 };
 

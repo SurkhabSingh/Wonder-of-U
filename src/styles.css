@@ -2326,6 +2326,20 @@ input::placeholder {
   font-weight: 600;
 }
 
+/* One word away, but the word stands alone — `刑期が`, a word and a particle. Worth finding,
+   worth mining if you want every new word, and worth telling apart from a full sentence.
+
+   Warning-toned rather than a dimmer green: it is not a weaker version of an i+1 line, it is a
+   different thing. It also has to be distinguishable from the plain grey of a +2, which is the
+   confusion that prompted this state existing — those were opposite problems sharing a colour,
+   one line being too much and the other too little. */
+.transcript-segment-newness.is-bare-word {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 36%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  font-weight: 600;
+}
+
 /* Deliberately quiet. A line you already know is not a result, and marking it as
    loudly as an i+1 line would bury the ones that matter. */
 .transcript-segment-newness.is-known {
