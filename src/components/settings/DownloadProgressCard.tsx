@@ -40,6 +40,11 @@ export function DownloadProgressCard({
         {snapshot.progressPercent !== null
           ? ` (${snapshot.progressPercent.toFixed(1)}%)`
           : ""}
+        {/* Only one download runs at a time, so anything else asked for is waiting behind this
+            one. Saying so is what stops a queued request looking like a press that did nothing. */}
+        {snapshot.queuedRemaining > 0
+          ? ` · ${snapshot.queuedRemaining} more queued`
+          : ""}
       </p>
       {snapshot.targetPath ? (
         <p className="path-copy" title={snapshot.targetPath}>

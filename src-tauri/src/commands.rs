@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 use crate::{
+    app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION,
     recording_library::import::probe_duration_ms,
     watch::library::{
         capture_thumbnail, normalize_origin, now_ms, remove_watched_video, resume_point_ms,
@@ -44,13 +45,8 @@ use crate::{
         TranscriptRanking, VocabularySuggestions, WhisperAssetUpdateResult,
     },
     asset_downloads::{
-        cancel_whisper_model_download_inner, download_recommended_ffmpeg_inner,
-        download_recommended_whisper_model_inner, download_recommended_whisper_runtime_inner,
-        download_whisper_vad_model_inner,
-        download_recommended_alass_inner, download_recommended_dictionary_inner,
-        download_recommended_ytdlp_inner,
-        download_whisper_runtime_version_inner,
-        toggle_whisper_model_download_pause_inner,
+        cancel_whisper_model_download_inner, enqueue_download,
+        toggle_whisper_model_download_pause_inner, QueuedDownload,
     },
     desktop_shell::{
         hide_main_window as hide_main_window_inner, show_main_window as show_main_window_inner,
@@ -75,7 +71,7 @@ pub(crate) fn get_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> 
 
 #[tauri::command]
 pub(crate) fn download_recommended_whisper_model(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_recommended_whisper_model_inner(&app)?;
+    enqueue_download(&app, QueuedDownload::WhisperModel)?;
     build_app_bootstrap(&app)
 }
 
@@ -84,14 +80,13 @@ pub(crate) fn download_recommended_whisper_model(app: AppHandle) -> Result<AppBo
 /// transfer — see `download_whisper_vad_model_inner` for why that was possible.
 #[tauri::command]
 pub(crate) fn download_whisper_vad_model(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_whisper_vad_model_inner(&app)?;
+    enqueue_download(&app, QueuedDownload::WhisperVadModel)?;
     build_app_bootstrap(&app)
 }
 
 #[tauri::command]
 pub(crate) fn download_recommended_whisper_runtime(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_recommended_whisper_runtime_inner(&app)?;
-    build_app_bootstrap(&app)
+    download_whisper_runtime_version(app, RECOMMENDED_WHISPER_RUNTIME_VERSION.to_string())
 }
 
 #[tauri::command]
@@ -99,19 +94,24 @@ pub(crate) fn download_whisper_runtime_version(
     app: AppHandle,
     runtime_version: String,
 ) -> Result<AppBootstrap, String> {
-    download_whisper_runtime_version_inner(&app, &runtime_version)?;
+    enqueue_download(
+        &app,
+        QueuedDownload::WhisperRuntime {
+            version: runtime_version,
+        },
+    )?;
     build_app_bootstrap(&app)
 }
 
 #[tauri::command]
 pub(crate) fn download_recommended_ffmpeg(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_recommended_ffmpeg_inner(&app)?;
+    enqueue_download(&app, QueuedDownload::Ffmpeg)?;
     build_app_bootstrap(&app)
 }
 
 #[tauri::command]
 pub(crate) fn download_recommended_ytdlp(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_recommended_ytdlp_inner(&app)?;
+    enqueue_download(&app, QueuedDownload::Ytdlp)?;
     build_app_bootstrap(&app)
 }
 
@@ -765,14 +765,14 @@ pub(crate) async fn sync_watch_subtitles(
 /// Downloads alass into the managed asset directory.
 #[tauri::command]
 pub(crate) fn download_recommended_alass(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_recommended_alass_inner(&app)?;
+    enqueue_download(&app, QueuedDownload::Alass)?;
     build_app_bootstrap(&app)
 }
 
 /// Downloads the Japanese dictionary into the managed asset directory.
 #[tauri::command]
 pub(crate) fn download_recommended_dictionary(app: AppHandle) -> Result<AppBootstrap, String> {
-    download_recommended_dictionary_inner(&app)?;
+    enqueue_download(&app, QueuedDownload::Dictionary)?;
     build_app_bootstrap(&app)
 }
 

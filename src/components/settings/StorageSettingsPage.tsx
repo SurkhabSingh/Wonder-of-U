@@ -84,7 +84,7 @@ export function StorageSettingsPage({
           <button
             type="button"
             onClick={() => void onDownloadRecommendedFfmpeg()}
-            disabled={downloadIsActive || isDownloadBusy(busyAction)}
+            disabled={isDownloadBusy(busyAction)}
           >
             Download FFmpeg
           </button>
@@ -145,7 +145,7 @@ export function StorageSettingsPage({
           <button
             type="button"
             onClick={() => void onDownloadRecommendedYtdlp()}
-            disabled={downloadIsActive || isDownloadBusy(busyAction)}
+            disabled={isDownloadBusy(busyAction)}
           >
             Download yt-dlp
           </button>
@@ -188,7 +188,7 @@ export function StorageSettingsPage({
           type="button"
           className={alassReady ? "secondary" : undefined}
           onClick={() => void onDownloadRecommendedAlass()}
-          disabled={downloadIsActive || isDownloadBusy(busyAction)}
+          disabled={isDownloadBusy(busyAction)}
         >
           {alassReady ? "Re-download alass" : "Download alass"}
         </button>
@@ -207,7 +207,7 @@ export function StorageSettingsPage({
           <button
             type="button"
             onClick={() => void onDownloadRecommendedYtdlp()}
-            disabled={downloadIsActive || isDownloadBusy(busyAction)}
+            disabled={isDownloadBusy(busyAction)}
           >
             Download {ytdlpUpdateVersion}
           </button>

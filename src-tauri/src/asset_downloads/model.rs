@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::asset::AssetKind;
-use super::envelope::{run_asset_download, AssetDownloadPlan, Installed};
+use super::envelope::{AssetDownloadPlan, Installed};
 use super::transfer::{asset_directory, ensure_directory_exists};
 
 fn clear_managed_model_override<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -60,9 +60,9 @@ fn model_paths(asset_directory: &Path, model_file_name: &str) -> ModelPaths {
     }
 }
 
-pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
+pub(super) fn whisper_model_plan<R: Runtime>(
     app: &AppHandle<R>,
-) -> Result<(), String> {
+) -> Result<AssetDownloadPlan<R>, String> {
     let asset_directory = asset_directory(app)?;
     let model_spec = chosen_model(app)?;
     let paths = model_paths(&asset_directory, model_spec.file_name);
@@ -80,82 +80,76 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
     );
     let starting_target_path = paths.model.clone();
 
-    run_asset_download(
-        app,
-        AssetDownloadPlan {
-            kind: AssetKind::Model,
-            thread_name: "whisper-model-download",
-            shell_busy_message: "Finish the current task before downloading the Whisper model."
-                .into(),
-            // Deliberately not the "Another download..." the other five use. Preserved rather
-            // than unified, because unifying it would reword a message nobody asked to change.
-            slot_busy_message: "A model download is already in progress.".into(),
-            shell_start_text,
-            starting_message: format!("Preparing the {} model download...", model_spec.label),
-            starting_target_path,
-            cancelled_message: "Model download cancelled.".into(),
-            cancelled_shell_text: "Whisper model download cancelled.".into(),
-            failed_message_prefix: "Model download failed".into(),
-            failed_shell_prefix: "Whisper model download failed".into(),
-            success_log_event: "whisper.model_downloaded",
-            failure_log_event: "whisper.model_download_failed",
-            install: Box::new(move |context| {
-                // TWO transfers under one slot, which is the reason phase G is a closure and
-                // not a `download_url` field: the shape of the work differs here, not just its
-                // parameters. Both report as `AssetKind::Model`, so the card shows one download
-                // that happens to fetch two files.
-                //
-                // Skip-if-EXISTS, not skip-if-runnable as ffmpeg and the runtime use. A model
-                // is data, not an executable — there is nothing to run to prove it — so its
-                // only cheap test is presence.
-                if !paths.model.exists() {
-                    context.fetch(
-                        model_spec.download_url,
-                        &paths.model,
-                        &format!("the {} Whisper model", model_spec.label),
-                    )?;
-                }
-                // The engine also needs whisper.cpp's built-in Silero VAD model (tiny). Fetch
-                // it into the same models directory so one download provisions both.
-                if !paths.vad.exists() {
-                    context.fetch(
-                        WHISPER_VAD_MODEL_URL,
-                        &paths.vad,
-                        "the speech-detector (VAD) model",
-                    )?;
-                }
+    Ok(AssetDownloadPlan {
+        kind: AssetKind::Model,
+        // Deliberately not the "Another download..." the other five use. Preserved rather
+        // than unified, because unifying it would reword a message nobody asked to change.
+        slot_busy_message: "A model download is already in progress.".into(),
+        shell_start_text,
+        starting_message: format!("Preparing the {} model download...", model_spec.label),
+        starting_target_path,
+        cancelled_message: "Model download cancelled.".into(),
+        cancelled_shell_text: "Whisper model download cancelled.".into(),
+        failed_message_prefix: "Model download failed".into(),
+        failed_shell_prefix: "Whisper model download failed".into(),
+        success_log_event: "whisper.model_downloaded",
+        failure_log_event: "whisper.model_download_failed",
+        install: Box::new(move |context| {
+            // TWO transfers under one slot, which is the reason phase G is a closure and
+            // not a `download_url` field: the shape of the work differs here, not just its
+            // parameters. Both report as `AssetKind::Model`, so the card shows one download
+            // that happens to fetch two files.
+            //
+            // Skip-if-EXISTS, not skip-if-runnable as ffmpeg and the runtime use. A model
+            // is data, not an executable — there is nothing to run to prove it — so its
+            // only cheap test is presence.
+            if !paths.model.exists() {
+                context.fetch(
+                    model_spec.download_url,
+                    &paths.model,
+                    &format!("the {} Whisper model", model_spec.label),
+                )?;
+            }
+            // The engine also needs whisper.cpp's built-in Silero VAD model (tiny). Fetch
+            // it into the same models directory so one download provisions both.
+            if !paths.vad.exists() {
+                context.fetch(
+                    WHISPER_VAD_MODEL_URL,
+                    &paths.vad,
+                    "the speech-detector (VAD) model",
+                )?;
+            }
 
-                // Bare, and NOT wrapped in `verify_managed_binary_or_remove` the way every
-                // other asset's verification is — so a model that fails this check is left on
-                // disk, and detection, which tests existence, keeps reporting it ready.
-                // Preserved exactly as it was: changing it would delete a user's model file,
-                // which is a decision to take on its own rather than inside a refactor.
-                verify_whisper_model(&paths.model)?;
-                clear_managed_model_override(context.app())?;
-                let detection = refresh_whisper_detection_state(context.app())?;
+            // Bare, and NOT wrapped in `verify_managed_binary_or_remove` the way every
+            // other asset's verification is — so a model that fails this check is left on
+            // disk, and detection, which tests existence, keeps reporting it ready.
+            // Preserved exactly as it was: changing it would delete a user's model file,
+            // which is a decision to take on its own rather than inside a refactor.
+            verify_whisper_model(&paths.model)?;
+            clear_managed_model_override(context.app())?;
+            let detection = refresh_whisper_detection_state(context.app())?;
 
-                Ok(Installed {
-                    completed_message: format!(
-                        "{} model downloaded successfully.",
-                        model_spec.label
-                    ),
-                    shell_success_text: if detection.status == "ready" {
-                        format!("{} model is ready at {}", model_spec.label, paths.model.display())
-                    } else {
-                        format!(
-                            "Model downloaded, but Whisper still needs setup: {}",
-                            detection.message
-                        )
-                    },
-                    log_details: serde_json::json!({
-                        "targetPath": paths.model.display().to_string(),
-                        "modelChoice": model_spec.id
-                    }),
-                    target_path: paths.model,
-                })
-            }),
-        },
-    )
+            Ok(Installed {
+                completed_message: format!(
+                    "{} model downloaded successfully.",
+                    model_spec.label
+                ),
+                shell_success_text: if detection.status == "ready" {
+                    format!("{} model is ready at {}", model_spec.label, paths.model.display())
+                } else {
+                    format!(
+                        "Model downloaded, but Whisper still needs setup: {}",
+                        detection.message
+                    )
+                },
+                log_details: serde_json::json!({
+                    "targetPath": paths.model.display().to_string(),
+                    "modelChoice": model_spec.id
+                }),
+                target_path: paths.model,
+            })
+        }),
+    })
 }
 
 /// Fetches **only** the speech-detector model, never the transcription model.
@@ -171,9 +165,9 @@ pub(crate) fn download_recommended_whisper_model_inner<R: Runtime>(
 /// Reusing `AssetKind::Model` is deliberate rather than a shortcut: this *is* part of
 /// provisioning the model, and it belongs in the same progress card. Every sentence the user
 /// reads comes from the plan below, so nothing claims to be downloading the model itself.
-pub(crate) fn download_whisper_vad_model_inner<R: Runtime>(
+pub(super) fn whisper_vad_model_plan<R: Runtime>(
     app: &AppHandle<R>,
-) -> Result<(), String> {
+) -> Result<AssetDownloadPlan<R>, String> {
     let asset_directory = asset_directory(app)?;
     let vad_path = whisper_vad_model_path(&asset_directory);
     ensure_directory_exists(
@@ -188,56 +182,50 @@ pub(crate) fn download_whisper_vad_model_inner<R: Runtime>(
     );
     let starting_target_path = vad_path.clone();
 
-    run_asset_download(
-        app,
-        AssetDownloadPlan {
-            kind: AssetKind::Model,
-            thread_name: "whisper-vad-download",
-            shell_busy_message: "Finish the current task before downloading the speech detector."
-                .into(),
-            slot_busy_message: "A model download is already in progress.".into(),
-            shell_start_text,
-            starting_message: "Preparing the speech-detector download...".into(),
-            starting_target_path,
-            cancelled_message: "Speech-detector download cancelled.".into(),
-            cancelled_shell_text: "Speech-detector download cancelled.".into(),
-            failed_message_prefix: "Speech-detector download failed".into(),
-            failed_shell_prefix: "Speech-detector download failed".into(),
-            success_log_event: "whisper.vad_model_downloaded",
-            failure_log_event: "whisper.vad_model_download_failed",
-            install: Box::new(move |context| {
-                // One file, and the only one. There is no branch here that could reach the
-                // transcription model, which is the whole point of this being separate.
-                if !vad_path.exists() {
-                    context.fetch(
-                        WHISPER_VAD_MODEL_URL,
-                        &vad_path,
-                        "the speech-detector (VAD) model",
-                    )?;
-                }
-                // Detection stores its result rather than re-deriving it per snapshot, so
-                // without this the interface would keep offering a repair already done.
-                let detection = refresh_whisper_detection_state(context.app())?;
+    Ok(AssetDownloadPlan {
+        kind: AssetKind::Model,
+        slot_busy_message: "A model download is already in progress.".into(),
+        shell_start_text,
+        starting_message: "Preparing the speech-detector download...".into(),
+        starting_target_path,
+        cancelled_message: "Speech-detector download cancelled.".into(),
+        cancelled_shell_text: "Speech-detector download cancelled.".into(),
+        failed_message_prefix: "Speech-detector download failed".into(),
+        failed_shell_prefix: "Speech-detector download failed".into(),
+        success_log_event: "whisper.vad_model_downloaded",
+        failure_log_event: "whisper.vad_model_download_failed",
+        install: Box::new(move |context| {
+            // One file, and the only one. There is no branch here that could reach the
+            // transcription model, which is the whole point of this being separate.
+            if !vad_path.exists() {
+                context.fetch(
+                    WHISPER_VAD_MODEL_URL,
+                    &vad_path,
+                    "the speech-detector (VAD) model",
+                )?;
+            }
+            // Detection stores its result rather than re-deriving it per snapshot, so
+            // without this the interface would keep offering a repair already done.
+            let detection = refresh_whisper_detection_state(context.app())?;
 
-                Ok(Installed {
-                    completed_message: "The speech detector is ready. Transcription can run again."
-                        .into(),
-                    shell_success_text: if detection.status == "ready" {
-                        "The speech detector is ready. Transcription can run again.".to_string()
-                    } else {
-                        format!(
-                            "Speech detector downloaded, but Whisper still needs setup: {}",
-                            detection.message
-                        )
-                    },
-                    log_details: serde_json::json!({
-                        "vadModelPath": vad_path.display().to_string()
-                    }),
-                    target_path: vad_path,
-                })
-            }),
-        },
-    )
+            Ok(Installed {
+                completed_message: "The speech detector is ready. Transcription can run again."
+                    .into(),
+                shell_success_text: if detection.status == "ready" {
+                    "The speech detector is ready. Transcription can run again.".to_string()
+                } else {
+                    format!(
+                        "Speech detector downloaded, but Whisper still needs setup: {}",
+                        detection.message
+                    )
+                },
+                log_details: serde_json::json!({
+                    "vadModelPath": vad_path.display().to_string()
+                }),
+                target_path: vad_path,
+            })
+        }),
+    })
 }
 
 #[cfg(test)]

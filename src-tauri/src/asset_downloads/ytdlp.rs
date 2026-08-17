@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::asset::AssetKind;
-use super::envelope::{run_asset_download, AssetDownloadPlan, Installed};
+use super::envelope::{AssetDownloadPlan, Installed};
 use super::transfer::{
     asset_directory, ensure_directory_exists, verify_managed_binary_or_remove,
 };
@@ -30,9 +30,9 @@ fn ytdlp_target_path(asset_directory: &Path) -> PathBuf {
 /// always overwritten so a re-download refreshes it. The transfer runs on a named OS thread
 /// and shares the `ModelDownloadControlState` slot with the other asset downloads, so only one
 /// runs at a time and Cancel works.
-pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
+pub(super) fn ytdlp_plan<R: Runtime>(
     app: &AppHandle<R>,
-) -> Result<(), String> {
+) -> Result<AssetDownloadPlan<R>, String> {
     let asset_directory = asset_directory(app)?;
     let install_directory = managed_ytdlp_install_directory(&asset_directory);
     ensure_directory_exists(&install_directory)?;
@@ -43,46 +43,41 @@ pub(crate) fn download_recommended_ytdlp_inner<R: Runtime>(
     // nothing to borrow across the thread boundary.
     let installed_path = target_path.clone();
 
-    run_asset_download(
-        app,
-        AssetDownloadPlan {
-            kind: AssetKind::Ytdlp,
-            thread_name: "ytdlp-download",
-            shell_busy_message: "Finish the current task before downloading yt-dlp.".into(),
-            slot_busy_message: "Another download is already in progress.".into(),
-            shell_start_text: format!("Downloading yt-dlp to {}...", target_path.display()),
-            starting_message: "Preparing the yt-dlp download...".into(),
-            starting_target_path: target_path,
-            cancelled_message: "yt-dlp download cancelled.".into(),
-            cancelled_shell_text: "yt-dlp download cancelled.".into(),
-            failed_message_prefix: "yt-dlp download failed".into(),
-            failed_shell_prefix: "yt-dlp download failed".into(),
-            success_log_event: "ytdlp.downloaded",
-            failure_log_event: "ytdlp.download_failed",
-            // Phase G, and the whole of what makes this yt-dlp rather than any other asset:
-            // fetch one file, prove it runs.
-            install: Box::new(move |context| {
-                // Always overwrite: a re-download is how the user refreshes yt-dlp.
-                context.fetch(YTDLP_RELEASE_DOWNLOAD_URL, &installed_path, "yt-dlp")?;
-                verify_managed_binary_or_remove(&installed_path, verify_ytdlp_binary)?;
+    Ok(AssetDownloadPlan {
+        kind: AssetKind::Ytdlp,
+        slot_busy_message: "Another download is already in progress.".into(),
+        shell_start_text: format!("Downloading yt-dlp to {}...", target_path.display()),
+        starting_message: "Preparing the yt-dlp download...".into(),
+        starting_target_path: target_path,
+        cancelled_message: "yt-dlp download cancelled.".into(),
+        cancelled_shell_text: "yt-dlp download cancelled.".into(),
+        failed_message_prefix: "yt-dlp download failed".into(),
+        failed_shell_prefix: "yt-dlp download failed".into(),
+        success_log_event: "ytdlp.downloaded",
+        failure_log_event: "ytdlp.download_failed",
+        // Phase G, and the whole of what makes this yt-dlp rather than any other asset:
+        // fetch one file, prove it runs.
+        install: Box::new(move |context| {
+            // Always overwrite: a re-download is how the user refreshes yt-dlp.
+            context.fetch(YTDLP_RELEASE_DOWNLOAD_URL, &installed_path, "yt-dlp")?;
+            verify_managed_binary_or_remove(&installed_path, verify_ytdlp_binary)?;
 
-                Ok(Installed {
-                    completed_message: "yt-dlp downloaded. YouTube import is now enabled."
-                        .into(),
-                    shell_success_text: format!(
-                        "yt-dlp is ready at {}. You can import audio from YouTube.",
-                        installed_path.display()
-                    ),
-                    log_details: serde_json::json!({
-                        "ytdlpPath": installed_path.display().to_string()
-                    }),
-                    // Finishes where it started: the card pointed at this binary all along.
-                    // Written last so the borrows above are done before it takes ownership.
-                    target_path: installed_path,
-                })
-            }),
-        },
-    )
+            Ok(Installed {
+                completed_message: "yt-dlp downloaded. YouTube import is now enabled."
+                    .into(),
+                shell_success_text: format!(
+                    "yt-dlp is ready at {}. You can import audio from YouTube.",
+                    installed_path.display()
+                ),
+                log_details: serde_json::json!({
+                    "ytdlpPath": installed_path.display().to_string()
+                }),
+                // Finishes where it started: the card pointed at this binary all along.
+                // Written last so the borrows above are done before it takes ownership.
+                target_path: installed_path,
+            })
+        }),
+    })
 }
 
 #[cfg(test)]

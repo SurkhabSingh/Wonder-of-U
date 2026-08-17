@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::asset::AssetKind;
-use super::envelope::{run_asset_download, AssetDownloadPlan, Installed};
+use super::envelope::{AssetDownloadPlan, Installed};
 use super::transfer::{
     asset_directory, ensure_directory_exists, extract_zip_archive_to_directory,
     first_runnable_binary, verify_managed_binary_or_remove,
@@ -56,9 +56,9 @@ fn find_runnable_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> 
     )
 }
 
-pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
+pub(super) fn ffmpeg_plan<R: Runtime>(
     app: &AppHandle<R>,
-) -> Result<(), String> {
+) -> Result<AssetDownloadPlan<R>, String> {
     let asset_directory = asset_directory(app)?;
     let paths = ffmpeg_paths(&asset_directory);
     ensure_directory_exists(
@@ -73,70 +73,65 @@ pub(crate) fn download_recommended_ffmpeg_inner<R: Runtime>(
     // Names the archive while fetching; the finished card names the binary that was found.
     let starting_target_path = paths.archive.clone();
 
-    run_asset_download(
-        app,
-        AssetDownloadPlan {
-            kind: AssetKind::Ffmpeg,
-            thread_name: "ffmpeg-download",
-            shell_busy_message: "Finish the current task before downloading FFmpeg.".into(),
-            slot_busy_message: "Another download is already in progress.".into(),
-            shell_start_text,
-            starting_message: "Preparing the FFmpeg download...".into(),
-            starting_target_path,
-            cancelled_message: "FFmpeg download cancelled.".into(),
-            cancelled_shell_text: "FFmpeg download cancelled.".into(),
-            failed_message_prefix: "FFmpeg download failed".into(),
-            failed_shell_prefix: "FFmpeg download failed".into(),
-            success_log_event: "ffmpeg.downloaded",
-            failure_log_event: "ffmpeg.download_failed",
-            install: Box::new(move |context| {
-                // Skip-if-runnable, and note the test is *runnable*, not *present*. This is
-                // deliberate and must survive: the Settings button is hidden entirely while
-                // detection reports ready, so the only way to reach this with a working ffmpeg
-                // installed is a re-download of something detection cannot see.
-                let ffmpeg_path = match find_runnable_managed_ffmpeg_path(&asset_directory) {
-                    // Already run by the search, so nothing to check again here.
-                    Some(existing_path) => existing_path,
-                    None => {
-                        context.fetch(
-                            RECOMMENDED_FFMPEG_RUNTIME_URL,
-                            &paths.archive,
-                            "FFmpeg",
-                        )?;
+    Ok(AssetDownloadPlan {
+        kind: AssetKind::Ffmpeg,
+        slot_busy_message: "Another download is already in progress.".into(),
+        shell_start_text,
+        starting_message: "Preparing the FFmpeg download...".into(),
+        starting_target_path,
+        cancelled_message: "FFmpeg download cancelled.".into(),
+        cancelled_shell_text: "FFmpeg download cancelled.".into(),
+        failed_message_prefix: "FFmpeg download failed".into(),
+        failed_shell_prefix: "FFmpeg download failed".into(),
+        success_log_event: "ffmpeg.downloaded",
+        failure_log_event: "ffmpeg.download_failed",
+        install: Box::new(move |context| {
+            // Skip-if-runnable, and note the test is *runnable*, not *present*. This is
+            // deliberate and must survive: the Settings button is hidden entirely while
+            // detection reports ready, so the only way to reach this with a working ffmpeg
+            // installed is a re-download of something detection cannot see.
+            let ffmpeg_path = match find_runnable_managed_ffmpeg_path(&asset_directory) {
+                // Already run by the search, so nothing to check again here.
+                Some(existing_path) => existing_path,
+                None => {
+                    context.fetch(
+                        RECOMMENDED_FFMPEG_RUNTIME_URL,
+                        &paths.archive,
+                        "FFmpeg",
+                    )?;
 
-                        extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
-                        let downloaded_path = find_existing_managed_ffmpeg_path(&asset_directory)
-                            .ok_or_else(|| {
-                                "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string()
-                            })?;
-                        // Detection trusts ffmpeg.exe by existence, so one that no longer runs
-                        // has to go rather than keep reporting ready.
-                        verify_managed_binary_or_remove(&downloaded_path, verify_ffmpeg_binary)?;
-                        downloaded_path
-                    }
-                };
+                    extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
+                    let downloaded_path = find_existing_managed_ffmpeg_path(&asset_directory)
+                        .ok_or_else(|| {
+                            "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string()
+                        })?;
+                    // Detection trusts ffmpeg.exe by existence, so one that no longer runs
+                    // has to go rather than keep reporting ready.
+                    verify_managed_binary_or_remove(&downloaded_path, verify_ffmpeg_binary)?;
+                    downloaded_path
+                }
+            };
 
-                let log_details = serde_json::json!({
-                    "archivePath": paths.archive.display().to_string(),
-                    "ffmpegPath": ffmpeg_path.display().to_string()
-                });
-                // Success only, like the dictionary. A no-op on the skip path, where no
-                // archive was ever fetched.
-                let _ = fs::remove_file(&paths.archive);
+            let log_details = serde_json::json!({
+                "archivePath": paths.archive.display().to_string(),
+                "ffmpegPath": ffmpeg_path.display().to_string()
+            });
+            // Success only, like the dictionary. A no-op on the skip path, where no
+            // archive was ever fetched.
+            let _ = fs::remove_file(&paths.archive);
 
-                Ok(Installed {
-                    completed_message: "FFmpeg downloaded. MP3 compression is now enabled."
-                        .into(),
-                    shell_success_text: format!(
-                        "FFmpeg is ready at {}. Future transcribed recordings will be compressed to MP3.",
-                        ffmpeg_path.display()
-                    ),
-                    target_path: ffmpeg_path,
-                    log_details,
-                })
-            }),
-        },
-    )
+            Ok(Installed {
+                completed_message: "FFmpeg downloaded. MP3 compression is now enabled."
+                    .into(),
+                shell_success_text: format!(
+                    "FFmpeg is ready at {}. Future transcribed recordings will be compressed to MP3.",
+                    ffmpeg_path.display()
+                ),
+                target_path: ffmpeg_path,
+                log_details,
+            })
+        }),
+    })
 }
 
 #[cfg(test)]

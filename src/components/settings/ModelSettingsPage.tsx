@@ -303,7 +303,7 @@ export function ModelSettingsPage({
                   <button
                     type="button"
                     onClick={() => void onDownloadWhisperVadModel()}
-                    disabled={downloadIsActive || isDownloadBusy(busyAction)}
+                    disabled={isDownloadBusy(busyAction)}
                   >
                     Download the speech detector
                   </button>
@@ -316,7 +316,7 @@ export function ModelSettingsPage({
             <button
               type="button"
               onClick={() => void onDownloadRecommendedModel()}
-              disabled={downloadIsActive || isDownloadBusy(busyAction)}
+              disabled={isDownloadBusy(busyAction)}
             >
               Download {selectedModel.label} Model
             </button>

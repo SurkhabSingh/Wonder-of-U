@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::asset::AssetKind;
-use super::envelope::{run_asset_download, AssetDownloadPlan, Installed};
+use super::envelope::{AssetDownloadPlan, Installed};
 use super::transfer::{
     asset_directory, ensure_directory_exists, extract_zip_archive_to_directory,
     verify_managed_directory_or_remove, PartialInstallGuard,
@@ -61,9 +61,9 @@ fn verify_extracted_dictionary(
 /// Shaped like the FFmpeg download — a zip fetched to the downloads folder and
 /// unpacked — and it shares the `ModelDownloadControlState` slot with the other
 /// asset downloads, so only one runs at a time and Cancel works.
-pub(crate) fn download_recommended_dictionary_inner<R: Runtime>(
+pub(super) fn dictionary_plan<R: Runtime>(
     app: &AppHandle<R>,
-) -> Result<(), String> {
+) -> Result<AssetDownloadPlan<R>, String> {
     let asset_directory = asset_directory(app)?;
     let paths = dictionary_paths(&asset_directory);
     // Both directories exist before the worker starts, exactly as before: the archive cannot
@@ -85,64 +85,58 @@ pub(crate) fn download_recommended_dictionary_inner<R: Runtime>(
     // one asset where those differ, which is why `Installed` carries a path at all.
     let starting_target_path = paths.archive.clone();
 
-    run_asset_download(
-        app,
-        AssetDownloadPlan {
-            kind: AssetKind::Dictionary,
-            thread_name: "dictionary-download",
-            shell_busy_message:
-                "Finish the current task before downloading the Japanese dictionary.".into(),
-            slot_busy_message: "Another download is already in progress.".into(),
-            shell_start_text,
-            starting_message: "Preparing the Japanese dictionary download...".into(),
-            starting_target_path,
-            cancelled_message: "Japanese dictionary download cancelled.".into(),
-            cancelled_shell_text: "Japanese dictionary download cancelled.".into(),
-            failed_message_prefix: "Japanese dictionary download failed".into(),
-            failed_shell_prefix: "Japanese dictionary download failed".into(),
-            success_log_event: "dictionary.downloaded",
-            failure_log_event: "dictionary.download_failed",
-            install: Box::new(move |context| {
-                context.fetch(
-                    IPADIC_DICTIONARY_URL,
-                    &paths.archive,
-                    "the Japanese dictionary",
-                )?;
+    Ok(AssetDownloadPlan {
+        kind: AssetKind::Dictionary,
+        slot_busy_message: "Another download is already in progress.".into(),
+        shell_start_text,
+        starting_message: "Preparing the Japanese dictionary download...".into(),
+        starting_target_path,
+        cancelled_message: "Japanese dictionary download cancelled.".into(),
+        cancelled_shell_text: "Japanese dictionary download cancelled.".into(),
+        failed_message_prefix: "Japanese dictionary download failed".into(),
+        failed_shell_prefix: "Japanese dictionary download failed".into(),
+        success_log_event: "dictionary.downloaded",
+        failure_log_event: "dictionary.download_failed",
+        install: Box::new(move |context| {
+            context.fetch(
+                IPADIC_DICTIONARY_URL,
+                &paths.archive,
+                "the Japanese dictionary",
+            )?;
 
-                // Armed across extraction only: an interrupted unpack writes
-                // metadata.json long before the word list, and detection keys on
-                // metadata.json. Once the archive is whole, the validation below
-                // owns the cleanup instead.
-                let mut install_guard = PartialInstallGuard::new(paths.install.clone());
-                extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
-                install_guard.disarm();
+            // Armed across extraction only: an interrupted unpack writes
+            // metadata.json long before the word list, and detection keys on
+            // metadata.json. Once the archive is whole, the validation below
+            // owns the cleanup instead.
+            let mut install_guard = PartialInstallGuard::new(paths.install.clone());
+            extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
+            install_guard.disarm();
 
-                let dictionary_path = verify_managed_directory_or_remove(&paths.install, |_| {
-                    verify_extracted_dictionary(&paths.install, &asset_directory)
-                })?;
+            let dictionary_path = verify_managed_directory_or_remove(&paths.install, |_| {
+                verify_extracted_dictionary(&paths.install, &asset_directory)
+            })?;
 
-                let log_details = serde_json::json!({
-                    "archivePath": paths.archive.display().to_string(),
-                    "dictionaryPath": dictionary_path.display().to_string()
-                });
-                // Success only. A failed run leaves the archive in `downloads/` on purpose —
-                // unlike alass, whose 26 MB is mostly ffmpeg and worth nothing to anyone.
-                let _ = fs::remove_file(&paths.archive);
+            let log_details = serde_json::json!({
+                "archivePath": paths.archive.display().to_string(),
+                "dictionaryPath": dictionary_path.display().to_string()
+            });
+            // Success only. A failed run leaves the archive in `downloads/` on purpose —
+            // unlike alass, whose 26 MB is mostly ffmpeg and worth nothing to anyone.
+            let _ = fs::remove_file(&paths.archive);
 
-                Ok(Installed {
-                    completed_message:
-                        "The Japanese dictionary is ready. Sentences can be analysed word by word."
-                            .into(),
-                    shell_success_text: format!(
-                        "The Japanese dictionary is ready at {}.",
-                        dictionary_path.display()
-                    ),
-                    target_path: dictionary_path,
-                    log_details,
-                })
-            }),
-        },
-    )
+            Ok(Installed {
+                completed_message:
+                    "The Japanese dictionary is ready. Sentences can be analysed word by word."
+                        .into(),
+                shell_success_text: format!(
+                    "The Japanese dictionary is ready at {}.",
+                    dictionary_path.display()
+                ),
+                target_path: dictionary_path,
+                log_details,
+            })
+        }),
+    })
 }
 
 #[cfg(test)]

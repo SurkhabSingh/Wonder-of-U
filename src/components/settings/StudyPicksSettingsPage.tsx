@@ -221,7 +221,7 @@ export function StudyPicksSettingsPage({
           type="button"
           className={dictionaryReady ? "secondary" : undefined}
           onClick={() => void onDownloadRecommendedDictionary()}
-          disabled={downloadIsActive || isDownloadBusy(busyAction)}
+          disabled={isDownloadBusy(busyAction)}
         >
           {dictionaryReady
             ? "Re-download the dictionary"
