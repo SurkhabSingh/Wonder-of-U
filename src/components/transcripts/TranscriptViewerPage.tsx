@@ -690,14 +690,17 @@ export function TranscriptViewerPage({
     if (!ranking || ranking.status !== "ready") {
       return 0;
     }
-    // Counted over the lines a batch WOULD consider, not every line one word away: with the
-    // setting off, bare lines are not skipped-because-already-mined, they are simply not in
-    // scope, and folding them in here would report a skip that never happened.
-    const inScope = ranking.lines.filter(
-      (line) => line.withinReach && (mineWordsWithoutContext || line.hasContext),
-    ).length;
-    return Math.max(0, inScope - minableWithinReach.length);
-  }, [ranking, minableWithinReach, mineWordsWithoutContext]);
+    // Counted over every line the filter SHOWS, which is every line one word away.
+    //
+    // It briefly counted only the lines a batch would consider, on the reasoning that a bare
+    // line is not "skipped" but simply out of scope. That is true internally and false to the
+    // reader: the filter showed ten rows, the button offered six, and four went unmined with
+    // nothing on screen joining the two numbers. A line you can see and did not get a card is
+    // skipped, whatever the code calls it — so all three reasons are counted here and named in
+    // the tooltip.
+    const shown = ranking.lines.filter((line) => line.withinReach).length;
+    return Math.max(0, shown - minableWithinReach.length);
+  }, [ranking, minableWithinReach]);
 
   const handleMineWithinReach = async () => {
     if (minableWithinReach.length === 0 || isBatchMining) {
@@ -1108,7 +1111,11 @@ export function TranscriptViewerPage({
                 (minableWithinReach.length === 0
                   ? "Every line here is already a card"
                   : skippedWithinReach > 0
-                    ? `Make a card of every line shown. ${skippedWithinReach} skipped: already in your deck (marked "In deck"), or teaching a word another line here already covers.`
+                    ? `Make a card of every line shown. ${skippedWithinReach} skipped: already in your deck (marked "In deck"), teaching a word another line here already covers${
+                        mineWordsWithoutContext
+                          ? ""
+                          : ', or standing alone — turn on "Mine words that appear on their own" in Anki Mapping to include those'
+                      }.`
                     : "Make a card of every line shown, one word at a time")
               }
             >
