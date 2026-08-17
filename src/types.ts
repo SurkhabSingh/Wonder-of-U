@@ -482,6 +482,9 @@ export type ModelDownloadSnapshot = {
   totalBytes: number | null;
   progressPercent: number | null;
   targetPath: string | null;
+  // How many further downloads are waiting behind this one. 0 for a download started on its
+  // own, which is every download unless you queued more while one was running.
+  queuedRemaining: number;
 };
 
 export type AppBootstrap = {

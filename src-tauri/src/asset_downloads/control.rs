@@ -90,6 +90,13 @@ pub(crate) fn toggle_whisper_model_download_pause_inner<R: Runtime>(
     Ok(())
 }
 
+/// Cancels the running download, which also ends the queue.
+///
+/// Ending the queue is not done here, and that is deliberate rather than an omission: setting
+/// `cancel_requested` makes the active transfer fail with `Cancelled`, and the queue worker
+/// abandons everything waiting the moment a download fails. One button, one meaning — stop
+/// downloading — with the queue's own failure path doing the work, so there is no second place
+/// that has to remember to clear it.
 pub(crate) fn cancel_whisper_model_download_inner<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(), String> {

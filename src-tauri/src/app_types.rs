@@ -7,7 +7,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION, asset_downloads::AssetKind,
+    app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION,
+    asset_downloads::{AssetKind, DownloadQueue},
     recording::RecordingCaptureResult,
 };
 
@@ -970,6 +971,9 @@ pub(crate) struct ModelDownloadSnapshot {
     pub(crate) total_bytes: Option<u64>,
     pub(crate) progress_percent: Option<f64>,
     pub(crate) target_path: Option<String>,
+    /// How many further downloads are waiting behind this one. 0 whenever nothing is queued,
+    /// which is every download started on its own.
+    pub(crate) queued_remaining: usize,
 }
 
 impl Default for ModelDownloadSnapshot {
@@ -982,6 +986,7 @@ impl Default for ModelDownloadSnapshot {
             total_bytes: None,
             progress_percent: None,
             target_path: None,
+            queued_remaining: 0,
         }
     }
 }
@@ -1089,6 +1094,9 @@ pub(crate) struct SharedShellState(pub(crate) Mutex<ShellSnapshot>);
 pub(crate) struct SharedPersistedState(pub(crate) Mutex<PersistedData>);
 pub(crate) struct WhisperDetectionState(pub(crate) Mutex<WhisperDetection>);
 pub(crate) struct ModelDownloadState(pub(crate) Mutex<ModelDownloadSnapshot>);
+/// The downloads waiting their turn. One at a time is still the rule; this is only what is
+/// next. See `asset_downloads/queue.rs`.
+pub(crate) struct ModelDownloadQueueState(pub(crate) Mutex<DownloadQueue>);
 pub(crate) struct ModelDownloadControlState {
     pub(crate) control: Mutex<ModelDownloadControl>,
     pub(crate) condvar: Condvar,

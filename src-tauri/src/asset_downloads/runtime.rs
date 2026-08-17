@@ -6,7 +6,7 @@ use std::{
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
-    app_config::{RECOMMENDED_WHISPER_RUNTIME_FILE, RECOMMENDED_WHISPER_RUNTIME_VERSION},
+    app_config::RECOMMENDED_WHISPER_RUNTIME_FILE,
     app_state::{sanitize_runtime_version, write_persisted_data},
     app_types::SharedPersistedState,
     runtime_assets::{
@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::asset::AssetKind;
-use super::envelope::{run_asset_download, AssetDownloadPlan, Installed};
+use super::envelope::{AssetDownloadPlan, Installed};
 use super::transfer::{
     asset_directory, ensure_directory_exists, extract_zip_archive_to_directory,
     first_runnable_binary, verify_managed_binary_or_remove,
@@ -103,16 +103,10 @@ fn runtime_paths(asset_directory: &Path, runtime_version: &str) -> RuntimePaths 
     }
 }
 
-pub(crate) fn download_recommended_whisper_runtime_inner<R: Runtime>(
-    app: &AppHandle<R>,
-) -> Result<(), String> {
-    download_whisper_runtime_version_inner(app, RECOMMENDED_WHISPER_RUNTIME_VERSION)
-}
-
-pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
+pub(super) fn whisper_runtime_plan<R: Runtime>(
     app: &AppHandle<R>,
     runtime_version: &str,
-) -> Result<(), String> {
+) -> Result<AssetDownloadPlan<R>, String> {
     let runtime_version = sanitize_runtime_version(runtime_version);
     let asset_directory = asset_directory(app)?;
     let paths = runtime_paths(&asset_directory, &runtime_version);
@@ -132,88 +126,82 @@ pub(crate) fn download_whisper_runtime_version_inner<R: Runtime>(
     );
     let starting_target_path = paths.archive.clone();
 
-    run_asset_download(
-        app,
-        AssetDownloadPlan {
-            kind: AssetKind::Runtime,
-            thread_name: "whisper-runtime-download",
-            shell_busy_message: "Finish the current task before downloading the Whisper runtime."
-                .into(),
-            slot_busy_message: "Another download is already in progress.".into(),
-            shell_start_text,
-            starting_message: "Preparing the Whisper runtime download...".into(),
-            starting_target_path,
-            // The snapshot and the shell genuinely disagree here — "Runtime" against "Whisper
-            // runtime" — which is why the plan carries four strings rather than two.
-            cancelled_message: "Runtime download cancelled.".into(),
-            cancelled_shell_text: "Whisper runtime download cancelled.".into(),
-            failed_message_prefix: "Runtime download failed".into(),
-            failed_shell_prefix: "Whisper runtime download failed".into(),
-            success_log_event: "whisper.runtime_downloaded",
-            failure_log_event: "whisper.runtime_download_failed",
-            install: Box::new(move |context| {
-                let cli_path = match find_runnable_managed_cli_path(&asset_directory, &runtime_version) {
-                    // Already run by the search, so nothing to check again here.
-                    Some(existing_cli_path) => existing_cli_path,
-                    None => {
-                        context.fetch(
-                            &download_url,
-                            &paths.archive,
-                            &format!("Whisper runtime {runtime_version}"),
-                        )?;
+    Ok(AssetDownloadPlan {
+        kind: AssetKind::Runtime,
+        slot_busy_message: "Another download is already in progress.".into(),
+        shell_start_text,
+        starting_message: "Preparing the Whisper runtime download...".into(),
+        starting_target_path,
+        // The snapshot and the shell genuinely disagree here — "Runtime" against "Whisper
+        // runtime" — which is why the plan carries four strings rather than two.
+        cancelled_message: "Runtime download cancelled.".into(),
+        cancelled_shell_text: "Whisper runtime download cancelled.".into(),
+        failed_message_prefix: "Runtime download failed".into(),
+        failed_shell_prefix: "Whisper runtime download failed".into(),
+        success_log_event: "whisper.runtime_downloaded",
+        failure_log_event: "whisper.runtime_download_failed",
+        install: Box::new(move |context| {
+            let cli_path = match find_runnable_managed_cli_path(&asset_directory, &runtime_version) {
+                // Already run by the search, so nothing to check again here.
+                Some(existing_cli_path) => existing_cli_path,
+                None => {
+                    context.fetch(
+                        &download_url,
+                        &paths.archive,
+                        &format!("Whisper runtime {runtime_version}"),
+                    )?;
 
-                        extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
-                        let downloaded_cli_path =
-                            find_existing_managed_cli_path(&asset_directory, &runtime_version)
-                                .ok_or_else(|| {
-                                    "The runtime downloaded, but whisper-cli.exe was not found."
-                                        .to_string()
-                                })?;
-                        // A fresh download that cannot run is reported, not kept: leaving it
-                        // would have detection call the runtime ready on the next launch.
-                        verify_managed_binary_or_remove(&downloaded_cli_path, verify_whisper_cli)?;
-                        downloaded_cli_path
-                    }
-                };
+                    extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
+                    let downloaded_cli_path =
+                        find_existing_managed_cli_path(&asset_directory, &runtime_version)
+                            .ok_or_else(|| {
+                                "The runtime downloaded, but whisper-cli.exe was not found."
+                                    .to_string()
+                            })?;
+                    // A fresh download that cannot run is reported, not kept: leaving it
+                    // would have detection call the runtime ready on the next launch.
+                    verify_managed_binary_or_remove(&downloaded_cli_path, verify_whisper_cli)?;
+                    downloaded_cli_path
+                }
+            };
 
-                // The two steps that make this more than a file fetch: point the settings at
-                // the version just installed, then re-read readiness so the sentence below can
-                // tell the truth about it.
-                activate_managed_runtime_version(context.app(), &runtime_version)?;
-                let detection = refresh_whisper_detection_state(context.app())?;
+            // The two steps that make this more than a file fetch: point the settings at
+            // the version just installed, then re-read readiness so the sentence below can
+            // tell the truth about it.
+            activate_managed_runtime_version(context.app(), &runtime_version)?;
+            let detection = refresh_whisper_detection_state(context.app())?;
 
-                let log_details = serde_json::json!({
-                    "runtimeArchivePath": paths.archive.display().to_string(),
-                    "cliPath": cli_path.display().to_string(),
-                    "runtimeVersion": runtime_version
-                });
-                let _ = fs::remove_file(&paths.archive);
+            let log_details = serde_json::json!({
+                "runtimeArchivePath": paths.archive.display().to_string(),
+                "cliPath": cli_path.display().to_string(),
+                "runtimeVersion": runtime_version
+            });
+            let _ = fs::remove_file(&paths.archive);
 
-                Ok(Installed {
-                    completed_message: format!(
-                        "Whisper runtime {} downloaded and activated.",
-                        runtime_version
-                    ),
-                    // This is what `Installed` returning sentences buys: a fetch can succeed
-                    // and Whisper still not be usable, and only the install knows that.
-                    shell_success_text: if detection.status == "ready" {
-                        format!(
-                            "Whisper runtime {} is ready at {}",
-                            runtime_version,
-                            cli_path.display()
-                        )
-                    } else {
-                        format!(
-                            "Runtime downloaded, but Whisper still needs setup: {}",
-                            detection.message
-                        )
-                    },
-                    target_path: cli_path,
-                    log_details,
-                })
-            }),
-        },
-    )
+            Ok(Installed {
+                completed_message: format!(
+                    "Whisper runtime {} downloaded and activated.",
+                    runtime_version
+                ),
+                // This is what `Installed` returning sentences buys: a fetch can succeed
+                // and Whisper still not be usable, and only the install knows that.
+                shell_success_text: if detection.status == "ready" {
+                    format!(
+                        "Whisper runtime {} is ready at {}",
+                        runtime_version,
+                        cli_path.display()
+                    )
+                } else {
+                    format!(
+                        "Runtime downloaded, but Whisper still needs setup: {}",
+                        detection.message
+                    )
+                },
+                target_path: cli_path,
+                log_details,
+            })
+        }),
+    })
 }
 
 #[cfg(test)]

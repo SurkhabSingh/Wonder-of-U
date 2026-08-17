@@ -163,7 +163,7 @@ export function RuntimeSettingsPage({
                 <button
                   type="button"
                   onClick={() => void onDownloadRuntimeVersion(runtimeUpdateVersion)}
-                  disabled={downloadIsActive || isDownloadBusy(busyAction)}
+                  disabled={isDownloadBusy(busyAction)}
                 >
                   Download {runtimeUpdateVersion}
                 </button>
@@ -175,7 +175,7 @@ export function RuntimeSettingsPage({
             <button
               type="button"
               onClick={() => void onDownloadRecommendedRuntime()}
-              disabled={downloadIsActive || isDownloadBusy(busyAction)}
+              disabled={isDownloadBusy(busyAction)}
             >
               Download Recommended Runtime
             </button>

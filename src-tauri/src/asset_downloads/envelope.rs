@@ -22,12 +22,9 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
-use crate::{
-    app_runtime::{log_event, update_shell_snapshot},
-    app_types::SharedShellState,
-};
+use crate::app_runtime::{log_event, update_shell_snapshot};
 
 use super::asset::AssetKind;
 use super::transfer::{
@@ -135,10 +132,6 @@ type InstallStep<R> =
 /// the interface.
 pub(super) struct AssetDownloadPlan<R: Runtime> {
     pub(super) kind: AssetKind,
-    /// Names the OS thread, so a stack trace says which download it belongs to.
-    pub(super) thread_name: &'static str,
-    /// Refused when the app is mid-task: "Finish the current task before downloading X."
-    pub(super) shell_busy_message: String,
     /// Refused when another download holds the single slot.
     pub(super) slot_busy_message: String,
     /// The shell's status line while this runs.
@@ -159,39 +152,29 @@ pub(super) struct AssetDownloadPlan<R: Runtime> {
     pub(super) install: InstallStep<R>,
 }
 
-/// Runs a download to completion on its own thread, reporting every step.
+/// Runs one download to completion, on the calling thread.
 ///
-/// Returns as soon as the worker is spawned — the caller's command returns immediately and the
-/// interface follows the emitted snapshots from there. That is why the two control commands
-/// return nothing: a bootstrap built here would be a second, unordered writer of the same
-/// state.
+/// **Blocking, and it does not spawn.** The queue worker is already a thread of its own and runs
+/// these one after another, so a thread per download would only mean the queue could not tell
+/// when an item had finished. Returning `Result` is what lets it decide whether to carry on.
+///
+/// Nor does it touch `shell.phase`. That belongs to the queue for the whole run: set once when
+/// the first item starts, cleared once when the last finishes. Setting it per download would
+/// flick to `"idle"` between items, and a recording started in that gap would make the next item
+/// refuse to run. What each download still owns is the shell's status *text* — only the asset
+/// knows what to say.
 pub(super) fn run_asset_download<R: Runtime>(
     app: &AppHandle<R>,
     plan: AssetDownloadPlan<R>,
-) -> Result<(), String> {
-    {
-        let shell_state = app.state::<SharedShellState>();
-        let shell = shell_state
-            .0
-            .lock()
-            .map_err(|_| "Could not inspect the shell state.".to_string())?;
-        if shell.phase != "idle" && shell.phase != "error" {
-            return Err(plan.shell_busy_message);
-        }
-    }
-
+) -> Result<(), DownloadFailure> {
     let download_slot = DownloadSlotGuard::acquire(app, &plan.slot_busy_message)?;
 
     update_shell_snapshot(app, |shell| {
-        shell.phase = "downloading-model".into();
         shell.status_text = plan.shell_start_text;
-        shell.started_at_ms = None;
-        shell.current_recording_name = None;
     })?;
 
     let AssetDownloadPlan {
         kind,
-        thread_name,
         starting_message,
         starting_target_path,
         cancelled_message,
@@ -219,68 +202,63 @@ pub(super) fn run_asset_download<R: Runtime>(
         kind,
     };
 
-    std::thread::Builder::new()
-        .name(thread_name.into())
-        .spawn(move || {
-            let app_handle = context.app.clone();
-            match install(&context) {
-                Ok(installed) => {
-                    // Best-effort from here: the install itself succeeded, and failing to
-                    // describe it must not be reported as a failed download.
-                    let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                        snapshot.kind = Some(kind);
-                        snapshot.status = "completed".into();
-                        snapshot.message = installed.completed_message;
-                        snapshot.downloaded_bytes =
-                            snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
-                        snapshot.progress_percent = Some(100.0);
-                        snapshot.target_path = Some(installed.target_path.display().to_string());
-                    });
-                    let _ = reset_model_download_control(&app_handle);
-                    let _ = update_shell_snapshot(&app_handle, |shell| {
-                        shell.phase = "idle".into();
-                        shell.status_text = installed.shell_success_text;
-                        shell.started_at_ms = None;
-                    });
-                    log_event(&app_handle, "INFO", success_log_event, installed.log_details);
-                }
-                Err(failure) => {
-                    let cancelled = matches!(failure, DownloadFailure::Cancelled);
-                    let error = match failure {
-                        DownloadFailure::Cancelled => cancelled_message.clone(),
-                        DownloadFailure::Failed(message) => message,
-                    };
-                    let _ = update_model_download_snapshot(&app_handle, |snapshot| {
-                        snapshot.kind = Some(kind);
-                        if cancelled {
-                            snapshot.status = "cancelled".into();
-                            snapshot.message = cancelled_message;
-                        } else {
-                            snapshot.status = "failed".into();
-                            snapshot.message = format!("{failed_message_prefix}: {error}");
-                        }
-                    });
-                    let _ = reset_model_download_control(&app_handle);
-                    let _ = update_shell_snapshot(&app_handle, |shell| {
-                        shell.phase = "idle".into();
-                        shell.status_text = if cancelled {
-                            cancelled_shell_text
-                        } else {
-                            format!("{failed_shell_prefix}: {error}")
-                        };
-                        shell.started_at_ms = None;
-                    });
-                    log_event(
-                        &app_handle,
-                        "ERROR",
-                        failure_log_event,
-                        serde_json::json!({ "message": error }),
-                    );
-                }
-            }
-        })
-        .map_err(|error| error.to_string())?;
-
+    let outcome = install(&context);
+    // The slot is released by hand rather than by the guard, because the reporting below has to
+    // happen while the download still counts as the active one — Pause and Cancel read the
+    // snapshot to name it.
     download_slot.disarm();
-    Ok(())
+
+    match outcome {
+        Ok(installed) => {
+            // Best-effort from here: the install itself succeeded, and failing to
+            // describe it must not be reported as a failed download.
+            let _ = update_model_download_snapshot(app, |snapshot| {
+                snapshot.kind = Some(kind);
+                snapshot.status = "completed".into();
+                snapshot.message = installed.completed_message;
+                snapshot.downloaded_bytes =
+                    snapshot.total_bytes.unwrap_or(snapshot.downloaded_bytes);
+                snapshot.progress_percent = Some(100.0);
+                snapshot.target_path = Some(installed.target_path.display().to_string());
+            });
+            let _ = reset_model_download_control(app);
+            let _ = update_shell_snapshot(app, |shell| {
+                shell.status_text = installed.shell_success_text;
+            });
+            log_event(app, "INFO", success_log_event, installed.log_details);
+            Ok(())
+        }
+        Err(failure) => {
+            let cancelled = matches!(failure, DownloadFailure::Cancelled);
+            let error = match &failure {
+                DownloadFailure::Cancelled => cancelled_message.clone(),
+                DownloadFailure::Failed(message) => message.clone(),
+            };
+            let _ = update_model_download_snapshot(app, |snapshot| {
+                snapshot.kind = Some(kind);
+                if cancelled {
+                    snapshot.status = "cancelled".into();
+                    snapshot.message = cancelled_message;
+                } else {
+                    snapshot.status = "failed".into();
+                    snapshot.message = format!("{failed_message_prefix}: {error}");
+                }
+            });
+            let _ = reset_model_download_control(app);
+            let _ = update_shell_snapshot(app, |shell| {
+                shell.status_text = if cancelled {
+                    cancelled_shell_text
+                } else {
+                    format!("{failed_shell_prefix}: {error}")
+                };
+            });
+            log_event(
+                app,
+                "ERROR",
+                failure_log_event,
+                serde_json::json!({ "message": error }),
+            );
+            Err(failure)
+        }
+    }
 }

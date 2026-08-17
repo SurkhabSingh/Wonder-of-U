@@ -426,6 +426,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     totalBytes: null,
     progressPercent: null,
     targetPath: null,
+    queuedRemaining: 0,
   },
   dictionaryDetection: {
     status: "notFound",

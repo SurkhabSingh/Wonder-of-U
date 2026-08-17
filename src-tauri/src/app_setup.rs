@@ -3,11 +3,12 @@ use std::sync::{Condvar, Mutex};
 use tauri::{App, Manager};
 
 use crate::{
+    asset_downloads::DownloadQueue,
     app_runtime::{append_structured_log, setup_error},
     app_state::{build_app_paths, load_persisted_data, write_persisted_data},
     anki::restore_known_words_index,
     app_types::{
-        KnownWordsState, ModelDownloadControl, ModelDownloadControlState, ModelDownloadSnapshot,
+        KnownWordsState, ModelDownloadControl, ModelDownloadControlState, ModelDownloadQueueState, ModelDownloadSnapshot,
         ModelDownloadState, RecorderState, SharedPersistedState, SharedShellState, ShellSnapshot,
         WhisperDetection, WhisperDetectionState,
     },
@@ -29,6 +30,9 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
     app.manage(ModelDownloadState(Mutex::new(
         ModelDownloadSnapshot::default(),
     )));
+    // The queue of waiting downloads. Empty at startup on purpose: a queue is something
+    // you are watching, not a background job that survives a restart.
+    app.manage(ModelDownloadQueueState(Mutex::new(DownloadQueue::default())));
     app.manage(ModelDownloadControlState {
         control: Mutex::new(ModelDownloadControl::default()),
         condvar: Condvar::new(),
