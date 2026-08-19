@@ -4,6 +4,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
 import { HomePage } from "./components/home/HomePage";
+import { HomeSetupCard } from "./components/home/HomeSetupCard";
 import { PageSidebar } from "./components/layout/PageSidebar";
 import { SavedRecordingsPage } from "./components/recordings/SavedRecordingsPage";
 import { SettingsPages } from "./components/settings/SettingsPages";
@@ -30,6 +31,7 @@ import { useSetupActions } from "./hooks/useSetupActions";
 import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import { useYoutubeQueue } from "./hooks/useYoutubeQueue";
 import { fileNameFromPath } from "./lib/format";
+import { isDownloadBusy } from "./types";
 import type {
   AppBootstrap,
   AppPage,
@@ -532,15 +534,19 @@ function App() {
     elapsedRecordingMs,
     hotkeyTooltip,
     installedRuntimeVersions,
+    isDownloadingAssets,
     isRecording,
     manualRuntimeOverride,
+    modelDiskSize,
     modelInstalled,
+    modelLabel,
     recorderBusy,
     resolvedCliPath,
     resolvedModelPath,
     runtimeInstalled,
     setupChecklist,
     setupEntry,
+    setupIncomplete,
     setupSummary,
     showBusyOverlay,
     workflowPages,
@@ -559,12 +565,14 @@ function App() {
     checkRuntimeUpdate,
     checkYtdlpUpdate,
     downloadRecommendedFfmpeg,
+    reinstallFfmpeg,
     downloadRecommendedModel,
     downloadWhisperVadModel,
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
     downloadRecommendedDictionary,
+    downloadMissingEssentials,
     refreshKnownWords,
     scanVocabularySources,
     downloadRuntimeVersion,
@@ -932,6 +940,24 @@ function App() {
           <section className="content-column">
           {activePage === "home" ? (
             <HomePage
+              setupCard={
+                <HomeSetupCard
+                  setupIncomplete={setupIncomplete}
+                  requirements={bootstrap.transcriptionRequirements}
+                  modelReady={modelInstalled}
+                  modelLabel={modelLabel}
+                  modelDiskSize={modelDiskSize}
+                  isDownloadingAssets={isDownloadingAssets}
+                  downloadIsActive={downloadIsActive}
+                  downloadSnapshot={bootstrap.modelDownload}
+                  // The shared group, so pressing this disables the six Settings download
+                  // buttons and vice versa — which is what that group exists to do.
+                  downloadBusy={isDownloadBusy(busyAction)}
+                  onDownloadMissing={() => void downloadMissingEssentials()}
+                  onTogglePause={() => void toggleDownloadPause()}
+                  onCancelDownload={() => void cancelDownload()}
+                />
+              }
               elapsedMs={elapsedRecordingMs}
               phase={bootstrap.shell.phase}
               statusText={bootstrap.shell.statusText}
@@ -1360,6 +1386,7 @@ function App() {
             onDownloadRecommendedModel={downloadRecommendedModel}
             onDownloadWhisperVadModel={downloadWhisperVadModel}
             onDownloadRecommendedFfmpeg={downloadRecommendedFfmpeg}
+            onReinstallFfmpeg={reinstallFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onDownloadRecommendedAlass={downloadRecommendedAlass}
             onDownloadRecommendedDictionary={downloadRecommendedDictionary}

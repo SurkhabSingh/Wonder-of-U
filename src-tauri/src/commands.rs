@@ -53,8 +53,9 @@ use crate::{
     },
     recording_library::{
         convert_recordings_to_mp3_inner, delete_recording_inner, delete_recordings_inner,
-        import_media_inner, import_youtube_inner, play_recording_inner, read_recording_texts_inner,
-        transcribe_recordings_inner, translate_recordings_inner,
+        download_missing_essentials_inner, import_media_inner, import_youtube_inner,
+        play_recording_inner, read_recording_texts_inner, transcribe_recordings_inner,
+        translate_recordings_inner,
     },
     recording_session::{start_recording_inner, stop_recording_inner},
     runtime_assets::{
@@ -105,13 +106,36 @@ pub(crate) fn download_whisper_runtime_version(
 
 #[tauri::command]
 pub(crate) fn download_recommended_ffmpeg(app: AppHandle) -> Result<AppBootstrap, String> {
-    enqueue_download(&app, QueuedDownload::Ffmpeg)?;
+    enqueue_download(&app, QueuedDownload::Ffmpeg { reinstall: false })?;
+    build_app_bootstrap(&app)
+}
+
+/// Fetches a fresh FFmpeg over a working one.
+///
+/// Separate from the download above because the download deliberately skips when a runnable
+/// copy is already there. That skip left no way at all to replace an installed FFmpeg — the
+/// Settings button was hidden exactly when this is the thing you need. The old copy is not
+/// removed up front: extraction replaces it, so a reinstall that fails leaves the working one.
+#[tauri::command]
+pub(crate) fn reinstall_ffmpeg(app: AppHandle) -> Result<AppBootstrap, String> {
+    enqueue_download(&app, QueuedDownload::Ffmpeg { reinstall: true })?;
     build_app_bootstrap(&app)
 }
 
 #[tauri::command]
 pub(crate) fn download_recommended_ytdlp(app: AppHandle) -> Result<AppBootstrap, String> {
     enqueue_download(&app, QueuedDownload::Ytdlp)?;
+    build_app_bootstrap(&app)
+}
+
+/// Fetches everything a fresh install is still missing, from one press.
+///
+/// Which downloads those are is not decided here: `missing_essential_downloads` reads the same
+/// list transcription refuses on, so this cannot offer to fix something transcription does not
+/// need, or miss something it does.
+#[tauri::command]
+pub(crate) fn download_missing_essentials(app: AppHandle) -> Result<AppBootstrap, String> {
+    download_missing_essentials_inner(&app)?;
     build_app_bootstrap(&app)
 }
 

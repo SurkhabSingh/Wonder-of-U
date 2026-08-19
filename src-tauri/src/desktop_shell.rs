@@ -32,7 +32,7 @@ use crate::{
     recording_indicator::{
         configure_recording_indicator, signal_recording_indicator, IndicatorSignal,
     },
-    recording_session::{start_recording_inner, stop_recording_inner},
+    recording_session::{recorder_phase_is_free, start_recording_inner, stop_recording_inner},
 };
 
 const APP_TITLE: &str = "Wonder of U";
@@ -138,10 +138,19 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
             HotkeyAction::Start | HotkeyAction::Stop => {
                 signal_recording_indicator(app, IndicatorSignal::Failed);
                 let _ = update_shell_snapshot(app, |shell| {
-                    shell.phase = "error".into();
+                    // Always safe: it reports what happened and owns nothing.
                     shell.status_text = error.clone();
-                    shell.started_at_ms = None;
-                    shell.current_recording_name = None;
+                    // Only when nothing owns the phase. Stamping "error" over a phase
+                    // somebody else set steals it — the download queue holds
+                    // "downloading-model" for its whole run — and clears `started_at_ms` and
+                    // `current_recording_name`, which during "recording" or "saving" belong to
+                    // audio still being captured. The `Mine` branch below learned this against
+                    // a different owner; this is the branch that still had the bug.
+                    if recorder_phase_is_free(&shell.phase) {
+                        shell.phase = "error".into();
+                        shell.started_at_ms = None;
+                        shell.current_recording_name = None;
+                    }
                 });
             }
             // Says what happened, and touches nothing else. Mining ran the recording
@@ -310,8 +319,25 @@ pub(crate) fn configure_desktop_shell<R: Runtime>(
         let app_handle = app.handle().clone();
         window.on_window_event(move |event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                // The close is refused first and unconditionally, so the window can never be
+                // destroyed by this button — everything below is about where it goes instead.
                 api.prevent_close();
-                let _ = hide_main_window(&app_handle);
+                if let Err(error) = hide_main_window(&app_handle) {
+                    // Discarding this was why the button could look simply dead: the close was
+                    // already prevented, so a failed hide left the window exactly where it was
+                    // with nothing logged and nothing shown. Minimising is not the same thing,
+                    // but a button that always does something beats one that intermittently
+                    // does nothing, and now the next occurrence leaves evidence.
+                    log_event(
+                        &app_handle,
+                        "WARN",
+                        "window.hide_failed",
+                        serde_json::json!({ "message": error.to_string() }),
+                    );
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.minimize();
+                    }
+                }
             }
         });
     }
@@ -455,3 +481,50 @@ pub(crate) fn acquire_single_instance_or_exit() -> Option<SingleInstanceGuard> {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn acquire_single_instance_or_exit() {}
+
+#[cfg(test)]
+mod hotkey_refusal_tests {
+    // The rule lives with the phase it describes; these tests stay here because the failure
+    // they pin — a refused hotkey stamping over a phase it does not own — is this file's.
+    use crate::recording_session::recorder_phase_is_free;
+
+    /// The bug this exists to stop: a record hotkey pressed during an asset download stamped
+    /// "error" over the phase the download queue was holding. Start Recording came back to life,
+    /// the first-run card flipped to its offer state mid-transfer, and the running download's
+    /// progress was left on a settings page with nothing on Home explaining it.
+    #[test]
+    fn a_refusal_may_not_steal_a_phase_another_subsystem_is_holding() {
+        assert!(!recorder_phase_is_free("downloading-model"));
+        assert!(!recorder_phase_is_free("transcribing"));
+    }
+
+    /// The same write clears `started_at_ms` and `current_recording_name`. During a recording or
+    /// a save those describe audio still being captured or written, so a refused SECOND start
+    /// would forget the name and start time of the recording still running.
+    #[test]
+    fn a_refusal_may_not_forget_a_recording_that_is_still_running() {
+        assert!(!recorder_phase_is_free("recording"));
+        assert!(!recorder_phase_is_free("saving"));
+    }
+
+    /// When nothing is running there is nothing to damage, and reporting the failure as an
+    /// error phase is what raises the toast the user actually sees.
+    #[test]
+    fn a_refusal_reports_normally_when_nothing_is_running() {
+        assert!(recorder_phase_is_free("idle"));
+        assert!(recorder_phase_is_free("error"));
+    }
+
+    /// An allowlist, so a phase nobody has thought of yet is protected without being named.
+    /// A denylist would have to be edited every time a subsystem learns to hold the phase, and
+    /// the cost of forgetting is silent damage rather than a compile error.
+    #[test]
+    fn an_unknown_phase_is_protected_by_default() {
+        for phase in ["playing-video", "syncing", "", "DOWNLOADING-MODEL"] {
+            assert!(
+                !recorder_phase_is_free(phase),
+                "{phase} should be protected until someone deliberately allows it"
+            );
+        }
+    }
+}

@@ -11,12 +11,17 @@ export function DownloadProgressCard({
   snapshot: ModelDownloadSnapshot;
   // The shared AssetKind, not a union rewritten here. The local copy this replaces had
   // drifted from Rust's list, and the asset it was missing simply never showed progress.
-  kind: AssetKind;
+  //
+  // Optional, meaning "whatever is downloading". Settings shows six of these side by side and
+  // each must show only its own asset; Home shows one and does not know — or need to know —
+  // which asset the queue is on. An absent prop is the only honest way to say that: passing
+  // the snapshot's own kind back in would compare a value with itself and read as a bug.
+  kind?: AssetKind;
   downloadIsActive: boolean;
   onTogglePause: () => void;
   onCancel: () => void;
 }) {
-  if (snapshot.kind !== kind) {
+  if (kind !== undefined && snapshot.kind !== kind) {
     return null;
   }
 

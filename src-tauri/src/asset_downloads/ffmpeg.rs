@@ -56,8 +56,14 @@ fn find_runnable_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> 
     )
 }
 
+/// `reinstall` fetches a fresh copy even when a working one is installed.
+///
+/// Ordinary downloads skip in that case; a reinstall is the request that means "replace what is
+/// there", which is the only way to move off a build the app no longer wants to use. The old
+/// copy survives until extraction, so a failed reinstall leaves the working one in place.
 pub(super) fn ffmpeg_plan<R: Runtime>(
     app: &AppHandle<R>,
+    reinstall: bool,
 ) -> Result<AssetDownloadPlan<R>, String> {
     let asset_directory = asset_directory(app)?;
     let paths = ffmpeg_paths(&asset_directory);
@@ -86,11 +92,18 @@ pub(super) fn ffmpeg_plan<R: Runtime>(
         success_log_event: "ffmpeg.downloaded",
         failure_log_event: "ffmpeg.download_failed",
         install: Box::new(move |context| {
-            // Skip-if-runnable, and note the test is *runnable*, not *present*. This is
-            // deliberate and must survive: the Settings button is hidden entirely while
-            // detection reports ready, so the only way to reach this with a working ffmpeg
-            // installed is a re-download of something detection cannot see.
-            let ffmpeg_path = match find_runnable_managed_ffmpeg_path(&asset_directory) {
+            // Skip-if-runnable, and note the test is *runnable*, not *present*.
+            //
+            // The skip answers "I have no ffmpeg" and must not answer "replace the one I have":
+            // a reinstall that skipped would report success having downloaded nothing, which is
+            // exactly the dead end the hidden Settings button used to create. So the request
+            // says which it means, and only a non-reinstall may skip.
+            let installed = if reinstall {
+                None
+            } else {
+                find_runnable_managed_ffmpeg_path(&asset_directory)
+            };
+            let ffmpeg_path = match installed {
                 // Already run by the search, so nothing to check again here.
                 Some(existing_path) => existing_path,
                 None => {

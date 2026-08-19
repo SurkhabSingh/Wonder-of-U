@@ -2851,6 +2851,29 @@ input::placeholder {
 }
 
 /* Compact capture card — same control contract as the recorder page. */
+/* The first-run card. The panel supplies the box; the grid gap supplies the rhythm, so the
+   shared download card drops its own vertical margin here rather than fighting the gap. */
+.home-setup-card {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.home-setup-card .download-card {
+  margin-block: 0;
+}
+
+.home-setup-missing {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.home-setup-failure {
+  color: var(--error);
+}
+
 .home-record-card {
   display: flex;
   flex-wrap: wrap;

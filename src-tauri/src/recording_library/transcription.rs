@@ -118,44 +118,135 @@ pub(crate) struct WhisperEngine {
 /// checklist marks exactly these required. They used to be separate opinions, and they
 /// disagreed: the checklist called FFmpeg optional — "Install FFmpeg for optional MP3
 /// conversion" — while this function would not proceed without it. A new user finished every
-/// required step, pressed Transcribe, and was sent to fetch a 193 MB "optional" component.
+/// required step, pressed Transcribe, and was sent to fetch a large "optional" component.
 ///
 /// Ordered as the user should fix them: no model is worth fetching before the runtime that
 /// reads it. The messages live beside the conditions so the sentence a user sees and the check
 /// that produced it cannot drift apart.
+///
+/// Each entry also names the downloads that would satisfy it, so "what is missing" and "what
+/// fetches it" are one answer rather than two that can disagree. See `fixed_by`.
 pub(crate) fn transcription_requirements(
     settings: &crate::app_types::AppSettings,
     whisper: &crate::app_types::WhisperDetection,
     ffmpeg: &crate::app_types::FfmpegDetection,
 ) -> Vec<crate::app_types::TranscriptionRequirement> {
     use crate::app_types::TranscriptionRequirement;
+    use crate::asset_downloads::QueuedDownload;
+
+    // Readiness folds the CLI and the model into one entry, but detection reports them
+    // separately — so ask only for the half that is actually absent. Requesting both would
+    // re-fetch whichever is already installed, and the model is the larger of the two.
+    let mut whisper_downloads = Vec::new();
+    if !whisper.cli_ready {
+        // The version the user is pinned to, NOT the recommended constant. Detection resolves
+        // the CLI under this same sanitized value, and installing a runtime writes its version
+        // back over the setting and clears any manual path — so asking for the recommended one
+        // here would silently move a user off the runtime they chose.
+        whisper_downloads.push(QueuedDownload::WhisperRuntime {
+            version: crate::app_state::sanitize_runtime_version(&settings.whisper.runtime_version),
+        });
+    }
+    if !whisper.model_ready {
+        whisper_downloads.push(QueuedDownload::WhisperModel);
+    }
 
     vec![
         // Whisper's readiness already means "the CLI runs AND a model resolves", so this is one
         // entry rather than two — splitting it would restate detection's rule, badly.
-        TranscriptionRequirement {
-            id: "whisper",
-            ready: whisper.status == "ready",
-            blocked_message: format!("Whisper is not ready yet: {}", whisper.message),
-        },
-        TranscriptionRequirement {
-            id: "ffmpeg",
-            ready: ffmpeg.executable_path.is_some(),
-            blocked_message: "FFmpeg is required for transcription. Download it from Settings."
-                .to_string(),
-        },
+        TranscriptionRequirement::new(
+            "whisper",
+            whisper.status == "ready",
+            format!("Whisper is not ready yet: {}", whisper.message),
+            whisper_downloads,
+        ),
+        TranscriptionRequirement::new(
+            "ffmpeg",
+            ffmpeg.executable_path.is_some(),
+            "FFmpeg is required for transcription. Download it from Settings.".to_string(),
+            vec![QueuedDownload::Ffmpeg { reinstall: false }],
+        ),
         // Only speech mode uses the VAD model; music mode skips VAD entirely, so it is not a
         // requirement at all when the user has chosen Music. Reported as satisfied rather than
         // omitted, so the list keeps one shape whatever the setting.
-        TranscriptionRequirement {
-            id: "vad",
-            ready: settings.whisper.audio_type == "music"
+        TranscriptionRequirement::new(
+            "vad",
+            settings.whisper.audio_type == "music"
                 || whisper_vad_model_path(Path::new(&settings.asset_directory)).exists(),
-            blocked_message:
-                "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
-                    .to_string(),
-        },
+            "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
+                .to_string(),
+            // One model download provisions both files, so when the model is coming anyway this
+            // needs nothing of its own. Naming it again would queue a second request that finds
+            // the file already there.
+            if whisper.model_ready {
+                vec![QueuedDownload::WhisperVadModel]
+            } else {
+                Vec::new()
+            },
+        ),
     ]
+}
+
+/// Every download this install still needs before it can transcribe, in the order they run.
+///
+/// Derived from the requirement list rather than from the asset set: `AssetKind` knows six
+/// assets and three of them — yt-dlp, alass, the dictionary — satisfy nothing transcription
+/// asks for. The only place that decides what "essential" means is the list above.
+///
+/// No de-duplication step, because no two entries can name the same request: a satisfied
+/// requirement carries none, and the one real overlap — the model download provisioning the
+/// speech detector — is resolved where the overlap lives, in the `"vad"` entry.
+pub(crate) fn missing_essential_downloads(
+    settings: &crate::app_types::AppSettings,
+    whisper: &crate::app_types::WhisperDetection,
+    ffmpeg: &crate::app_types::FfmpegDetection,
+) -> Vec<crate::asset_downloads::QueuedDownload> {
+    transcription_requirements(settings, whisper, ffmpeg)
+        .into_iter()
+        .flat_map(|requirement| requirement.fixed_by)
+        .collect()
+}
+
+/// Starts the downloads a fresh install still needs, from one press.
+///
+/// Reports a failure only when NOTHING started. The queue drains on its own schedule, so a
+/// worker can retire between two of these calls and the next one becomes the queue starter —
+/// which re-runs the busy check and can refuse. Failing the whole command then would tell the
+/// user nothing was started while the first asset was already streaming bytes.
+pub(crate) fn download_missing_essentials_inner<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<(), String> {
+    let settings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not inspect the current app settings.".to_string())?;
+        persisted.settings.clone()
+    };
+    let whisper = refresh_whisper_detection_state(app).map_err(|error| error.to_string())?;
+    let ffmpeg = detect_local_ffmpeg(&settings);
+
+    let requests = missing_essential_downloads(&settings, &whisper, &ffmpeg);
+    if requests.is_empty() {
+        return Ok(());
+    }
+
+    let mut first_failure = None;
+    let mut started = 0;
+    for request in requests {
+        match crate::asset_downloads::enqueue_download(app, request) {
+            Ok(()) => started += 1,
+            Err(error) => {
+                first_failure.get_or_insert(error);
+            }
+        }
+    }
+
+    match first_failure {
+        Some(error) if started == 0 => Err(error),
+        _ => Ok(()),
+    }
 }
 
 /// Resolve the engine, or say exactly what is missing.
@@ -1246,6 +1337,212 @@ mod tests {
         assert_eq!(first_missing.id, "whisper");
     }
 
+    /// Detection with the two halves of "whisper is ready" set independently, which is what
+    /// decides *which* downloads the whisper entry asks for.
+    fn whisper_parts(
+        status: &str,
+        cli_ready: bool,
+        model_ready: bool,
+    ) -> crate::app_types::WhisperDetection {
+        crate::app_types::WhisperDetection {
+            status: status.into(),
+            cli_ready,
+            model_ready,
+            ..Default::default()
+        }
+    }
+
+    fn settings_pinned_to(runtime_version: &str) -> crate::app_types::AppSettings {
+        let mut settings = settings_for("speech", "C:/assets-that-do-not-exist");
+        settings.whisper.runtime_version = runtime_version.into();
+        settings
+    }
+
+    /// The constructor's one rule. A requirement that is satisfied carries no fix, whatever the
+    /// caller passed — so a consumer cannot start a download of something already installed by
+    /// believing `fixed_by` over `ready`.
+    #[test]
+    fn a_satisfied_requirement_carries_no_download() {
+        let ready = crate::app_types::TranscriptionRequirement::new(
+            "ffmpeg",
+            true,
+            "unused".into(),
+            vec![crate::asset_downloads::QueuedDownload::Ffmpeg { reinstall: false }],
+        );
+        let missing = crate::app_types::TranscriptionRequirement::new(
+            "ffmpeg",
+            false,
+            "unused".into(),
+            vec![crate::asset_downloads::QueuedDownload::Ffmpeg { reinstall: false }],
+        );
+
+        assert!(ready.fixed_by.is_empty(), "a satisfied entry offers no fix");
+        assert_eq!(missing.fixed_by.len(), 1);
+    }
+
+    /// A fresh install asks for exactly three things, runtime first.
+    ///
+    /// The speech detector is NOT among them even though its requirement is unmet: the model
+    /// download provisions both files, so naming it here would queue a second request that
+    /// finds the file already there.
+    #[test]
+    fn a_fresh_install_asks_for_the_runtime_then_the_model_then_ffmpeg() {
+        use crate::asset_downloads::QueuedDownload;
+
+        let requests = missing_essential_downloads(
+            &settings_pinned_to("v1.8.4"),
+            &whisper_parts("cliMissing", false, false),
+            &ffmpeg_detection(false),
+        );
+
+        assert_eq!(
+            requests,
+            vec![
+                QueuedDownload::WhisperRuntime {
+                    version: "v1.8.4".into()
+                },
+                QueuedDownload::WhisperModel,
+                QueuedDownload::Ffmpeg { reinstall: false },
+            ]
+        );
+    }
+
+    /// The first-run press must never ask for a reinstall.
+    ///
+    /// A reinstall re-fetches over a working copy. "What is still missing" is by definition
+    /// about what is absent, so a reinstall here would re-download an FFmpeg the user already
+    /// has — the same class of mistake as the repair button that could have fetched 3 GB.
+    #[test]
+    fn the_essential_set_never_asks_for_a_reinstall() {
+        use crate::asset_downloads::QueuedDownload;
+
+        let requests = missing_essential_downloads(
+            &settings_pinned_to("v1.8.4"),
+            &whisper_parts("cliMissing", false, false),
+            &ffmpeg_detection(false),
+        );
+
+        assert!(
+            requests.contains(&QueuedDownload::Ffmpeg { reinstall: false }),
+            "got {requests:?}"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|request| matches!(request, QueuedDownload::Ffmpeg { reinstall: true })),
+            "the missing-asset list must only ever ask for a plain download"
+        );
+    }
+
+    /// The version a user is pinned to, never the recommended constant.
+    ///
+    /// Detection resolves the CLI under the sanitized setting, and installing a runtime writes
+    /// its version back over that setting and clears any manual path. Asking for the
+    /// recommended version here would silently move a user off the runtime they chose — from a
+    /// button whose copy says nothing about versions.
+    #[test]
+    fn the_runtime_requested_is_the_one_the_settings_are_pinned_to() {
+        use crate::asset_downloads::QueuedDownload;
+
+        let requests = missing_essential_downloads(
+            &settings_pinned_to("v1.7.1"),
+            &whisper_parts("cliMissing", false, true),
+            &ffmpeg_detection(true),
+        );
+
+        assert!(
+            requests.contains(&QueuedDownload::WhisperRuntime {
+                version: "v1.7.1".into()
+            }),
+            "a pinned runtime must not be replaced by the recommended one, got {requests:?}"
+        );
+        assert!(
+            !requests.contains(&QueuedDownload::WhisperRuntime {
+                version: crate::app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION.into()
+            }),
+            "the recommended version must not be requested over the pinned one"
+        );
+        assert_ne!(
+            crate::app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION, "v1.7.1",
+            "this test only proves anything while the pin differs from the recommendation"
+        );
+    }
+
+    /// Only the missing half of whisper is fetched. The model is the larger of the two, and
+    /// re-fetching it because the CLI went missing is the expensive way to be wrong.
+    #[test]
+    fn only_the_missing_half_of_whisper_is_requested() {
+        use crate::asset_downloads::QueuedDownload;
+
+        let model_only = missing_essential_downloads(
+            &settings_pinned_to("v1.8.4"),
+            &whisper_parts("modelMissing", true, false),
+            &ffmpeg_detection(true),
+        );
+
+        assert_eq!(model_only, vec![QueuedDownload::WhisperModel]);
+    }
+
+    /// The detector on its own — the repair case, reachable by cancelling a model download
+    /// between its two files. Requested only once the model is already there, which is exactly
+    /// when the model download would no longer fetch it.
+    #[test]
+    fn the_speech_detector_is_requested_alone_once_the_model_is_installed() {
+        use crate::asset_downloads::QueuedDownload;
+
+        let requests = missing_essential_downloads(
+            &settings_pinned_to("v1.8.4"),
+            // "ready" would be wrong here: whisper resolves, but the detector file does not
+            // exist under an asset directory that does not exist.
+            &whisper_parts("ready", true, true),
+            &ffmpeg_detection(true),
+        );
+
+        assert_eq!(requests, vec![QueuedDownload::WhisperVadModel]);
+    }
+
+    /// Music mode needs no detector, so one press must not fetch one. This is the case a
+    /// frontend-side copy of this mapping got wrong: detection's `vad_ready` has no music-mode
+    /// clause, only the requirement list does.
+    #[test]
+    fn music_mode_asks_for_no_speech_detector() {
+        let mut settings = settings_pinned_to("v1.8.4");
+        settings.whisper.audio_type = "music".into();
+
+        let requests = missing_essential_downloads(
+            &settings,
+            &whisper_parts("ready", true, true),
+            &ffmpeg_detection(true),
+        );
+
+        assert!(
+            requests.is_empty(),
+            "music mode needs nothing downloaded here, got {requests:?}"
+        );
+    }
+
+    /// Nothing missing means nothing requested, so the card cannot offer a download that would
+    /// do nothing.
+    #[test]
+    fn an_install_that_needs_nothing_requests_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("models")).unwrap();
+        fs::write(
+            crate::app_types::whisper_vad_model_path(directory.path()),
+            b"detector",
+        )
+        .unwrap();
+        let mut settings = settings_for("speech", directory.path().to_str().unwrap());
+        settings.whisper.runtime_version = "v1.8.4".into();
+
+        let requests = missing_essential_downloads(
+            &settings,
+            &whisper_parts("ready", true, true),
+            &ffmpeg_detection(true),
+        );
+
+        assert!(requests.is_empty(), "got {requests:?}");
+    }
 
     #[test]
     fn additional_language_transcript_keeps_audio_and_tags_language() {

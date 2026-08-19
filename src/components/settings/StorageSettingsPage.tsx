@@ -15,6 +15,7 @@ export function StorageSettingsPage({
   ytdlpUpdateResult,
   onCancelDownload,
   onDownloadRecommendedFfmpeg,
+  onReinstallFfmpeg,
   onDownloadRecommendedYtdlp,
   onDownloadRecommendedAlass,
   onCheckYtdlpUpdate,
@@ -26,6 +27,7 @@ export function StorageSettingsPage({
   ytdlpUpdateResult: WhisperAssetUpdateResult | null;
   onCancelDownload: () => void | Promise<void>;
   onDownloadRecommendedFfmpeg: () => void | Promise<void>;
+  onReinstallFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
   onDownloadRecommendedAlass: () => void | Promise<void>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
@@ -79,8 +81,25 @@ export function StorageSettingsPage({
         ) : null}
       </div>
 
-      {bootstrap.ffmpegDetection.status !== "ready" ? (
-        <div className="action-row inline-actions">
+      {/* Reachable in BOTH states, deliberately. Offering this only while FFmpeg was missing
+          meant the app's own copy could never be replaced — no repair when it broke, and no way
+          to move to a different build. The install path is the same either way; only the
+          question differs, so the label is what changes.
+
+          Gated on `managed`, not on `status`: detection reports "ready" for an FFmpeg found on
+          PATH too, and there is nothing of ours to reinstall in that case. */}
+      <div className="action-row inline-actions">
+        {bootstrap.ffmpegDetection.managed ? (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onReinstallFfmpeg()}
+            disabled={isDownloadBusy(busyAction)}
+            title="Downloads a fresh copy and replaces the app's copy of FFmpeg"
+          >
+            Reinstall FFmpeg
+          </button>
+        ) : (
           <button
             type="button"
             onClick={() => void onDownloadRecommendedFfmpeg()}
@@ -88,8 +107,8 @@ export function StorageSettingsPage({
           >
             Download FFmpeg
           </button>
-        </div>
-      ) : null}
+        )}
+      </div>
       <DownloadProgressCard
         snapshot={bootstrap.modelDownload}
         kind="ffmpeg"

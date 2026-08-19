@@ -15,7 +15,7 @@ pub(crate) use actions::{
 pub(crate) use conversion::convert_recordings_to_mp3_inner;
 pub(crate) use import::{import_media_inner, import_youtube_inner};
 pub(crate) use texts::{parse_translation_language, read_recording_texts_inner};
-pub(crate) use transcription::transcribe_recordings_inner;
+pub(crate) use transcription::{download_missing_essentials_inner, transcribe_recordings_inner};
 // Production code renames via `transcribe_recordings_inner`; only the lib tests
 // reach the rename helper through the module facade, so gate the re-export to the
 // test build to keep the non-test build free of an unused-import warning.
