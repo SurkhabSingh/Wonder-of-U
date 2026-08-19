@@ -3,6 +3,10 @@ export type RecorderPhase =
   | "recording"
   | "saving"
   | "transcribing"
+  // Held by the download queue for as long as it runs — across every item, including the gaps
+  // between them. Listed for the reader only: the union ends in `string`, so TypeScript cannot
+  // flag a consumer that has no arm for it.
+  | "downloading-model"
   | "error"
   | string;
 
@@ -506,6 +510,27 @@ export type TranscriptionRequirement = {
   ready: boolean;
 };
 
+/**
+ * Whether anything transcription needs is still missing.
+ *
+ * `false` while the answer is not yet known: the placeholder bootstrap carries an empty list
+ * until the first snapshot arrives, and "nothing is listed" is not "nothing is missing". This
+ * and `transcriptionReady` are deliberately NOT complements — on an empty list both are false,
+ * because the honest answer then is neither. `summarizeSetupChecklist` guards its own total the
+ * same way, for the same reason.
+ */
+export function transcriptionSetupIncomplete(
+  requirements: TranscriptionRequirement[],
+): boolean {
+  return requirements.some((entry) => !entry.ready);
+}
+
+export function transcriptionReady(
+  requirements: TranscriptionRequirement[],
+): boolean {
+  return requirements.length > 0 && requirements.every((entry) => entry.ready);
+}
+
 export type AppBootstrap = {
   shell: ShellSnapshot;
   settings: AppSettings;
@@ -665,6 +690,8 @@ export const DOWNLOAD_BUSY_ACTIONS = [
   "downloadAlass",
   "downloadYtdlp",
   "downloadDictionary",
+  "downloadEssentials",
+  "reinstallFfmpeg",
 ] as const;
 
 export function isDownloadBusy(busyAction: BusyAction): boolean {
@@ -676,12 +703,10 @@ export type BusyAction =
   | "stop"
   | "hide"
   | "browse"
-  | "downloadModel"
-  | "downloadRuntime"
-  | "downloadFfmpeg"
-  | "downloadAlass"
-  | "downloadYtdlp"
-  | "downloadDictionary"
+  // Derived, not restated. The array above promises that a new download joins the guard by
+  // being added there — which was not true while these eight names were also spelled here, ten
+  // lines away, and this diff had to edit both.
+  | (typeof DOWNLOAD_BUSY_ACTIONS)[number]
   | "refreshKnownWords"
   | "scanVocabulary"
   | "importYoutube"

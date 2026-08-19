@@ -90,10 +90,55 @@ export function useSetupActions({
     await downloadRuntimeVersion(RECOMMENDED_RUNTIME_VERSION);
   }, [downloadRuntimeVersion]);
 
+  /**
+   * Fetches whatever transcription still needs, in one press.
+   *
+   * Which downloads those are is decided in Rust, beside the readiness check that says whether
+   * anything is missing at all — so this cannot ask for the wrong thing without the two
+   * disagreeing at the one site that answers both. Unlike the six per-asset actions this does
+   * not navigate: the point is progress without leaving Home.
+   */
+  const downloadMissingEssentials = useCallback(async () => {
+    try {
+      setBusyAction("downloadEssentials");
+      // The model and runtime downloads read the SAVED settings, so an unsaved draft would
+      // fetch for the previous choice.
+      await persistSettingsIfNeeded();
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_missing_essentials",
+      );
+      applyBootstrap(nextBootstrap);
+    } catch (error) {
+      showError(errorMessage(error, "The downloads could not be started."));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, persistSettingsIfNeeded, setBusyAction, showError]);
+
   const downloadRecommendedFfmpeg = useCallback(async () => {
     try {
       setBusyAction("downloadFfmpeg");
       const nextBootstrap = await invoke<AppBootstrap>("download_recommended_ffmpeg");
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("storage");
+    } catch (error) {
+      showError(errorMessage(error, "FFmpeg could not be prepared."));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
+
+  /**
+   * Fetches a fresh FFmpeg over a working one.
+   *
+   * Its own action rather than a flag on the download above, because the two differ in what the
+   * backend is allowed to skip: the plain download stops early when a runnable copy is present,
+   * which is right for "I have none" and silently does nothing for "replace what I have".
+   */
+  const reinstallFfmpeg = useCallback(async () => {
+    try {
+      setBusyAction("reinstallFfmpeg");
+      const nextBootstrap = await invoke<AppBootstrap>("reinstall_ffmpeg");
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
@@ -404,12 +449,14 @@ export function useSetupActions({
     checkRuntimeUpdate,
     checkYtdlpUpdate,
     downloadRecommendedFfmpeg,
+    reinstallFfmpeg,
     downloadRecommendedModel,
     downloadWhisperVadModel,
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
     downloadRecommendedDictionary,
+    downloadMissingEssentials,
     downloadRuntimeVersion,
     refreshKnownWords,
     scanVocabularySources,

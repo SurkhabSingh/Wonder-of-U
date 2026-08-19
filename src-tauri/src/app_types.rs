@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     app_config::RECOMMENDED_WHISPER_RUNTIME_VERSION,
-    asset_downloads::{AssetKind, DownloadQueue},
+    asset_downloads::{AssetKind, DownloadQueue, QueuedDownload},
     recording::RecordingCaptureResult,
 };
 
@@ -987,6 +987,40 @@ pub(crate) struct TranscriptionRequirement {
     /// the condition so the sentence and the check that produces it cannot drift apart.
     #[serde(skip)]
     pub(crate) blocked_message: String,
+    /// The downloads that would make this ready, in the order they must run.
+    ///
+    /// Beside `ready` rather than in a list of its own, because "what is missing" and "what
+    /// fetches it" are one question asked twice — and asking it twice in two places is exactly
+    /// how FFmpeg came to be required by transcription and optional in the checklist at the
+    /// same time. A requirement added to the list cannot compile without answering this.
+    ///
+    /// Never sent to the frontend, and cannot be: `QueuedDownload` is not `Serialize`, so
+    /// deleting the skip is a build failure rather than a quiet handover of the mapping to a
+    /// second language to restate.
+    #[serde(skip)]
+    pub(crate) fixed_by: Vec<QueuedDownload>,
+}
+
+impl TranscriptionRequirement {
+    /// A satisfied requirement carries no fix, whatever the caller passes.
+    ///
+    /// Built through here rather than as a struct literal so the readiness condition is written
+    /// once. A call site that spelled it twice could say "this is fine" and "here is what fixes
+    /// it" in the same breath, and the first consumer to believe the second half would start a
+    /// download of something already installed.
+    pub(crate) fn new(
+        id: &'static str,
+        ready: bool,
+        blocked_message: String,
+        fixed_by: Vec<QueuedDownload>,
+    ) -> Self {
+        Self {
+            id,
+            ready,
+            blocked_message,
+            fixed_by: if ready { Vec::new() } else { fixed_by },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

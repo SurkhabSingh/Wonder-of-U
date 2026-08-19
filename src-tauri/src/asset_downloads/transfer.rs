@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use zip::ZipArchive;
 
 use crate::{
-    app_runtime::emit_app_snapshot,
+    app_runtime::{emit_app_snapshot, log_event},
     app_types::{
         ModelDownloadControlState, ModelDownloadSnapshot, ModelDownloadState, SharedPersistedState,
     },
@@ -315,11 +315,22 @@ pub(super) fn extract_zip_archive_to_directory(
     archive_path: &Path,
     target_directory: &Path,
 ) -> Result<(), String> {
-    ensure_directory_exists(target_directory)?;
-    remove_directory_contents(target_directory)?;
-
+    // Open and validate the archive BEFORE touching what is already installed.
+    //
+    // The wipe used to come first, so a truncated or corrupt download destroyed a working
+    // install and replaced it with nothing. That is survivable when the directory is empty —
+    // which it always was, because the only caller reaching extraction had found nothing
+    // installed — but the FFmpeg reinstall deliberately runs over a copy that works, and the
+    // `latest` archive it fetches is republished daily and can be read mid-republish.
+    //
+    // Validating first does not make extraction atomic: a failure partway through still leaves
+    // a half-unpacked directory. It removes the cause that can be removed by ordering alone,
+    // and it costs two moved lines.
     let archive_file = fs::File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(archive_file).map_err(|error| error.to_string())?;
+
+    ensure_directory_exists(target_directory)?;
+    remove_directory_contents(target_directory)?;
 
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
@@ -396,7 +407,24 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     label: &str,
 ) -> Result<(), String> {
     let client = http_client()?;
-    let mut response = client.get(url).send().map_err(|error| error.to_string())?;
+    // The raw error here is a reqwest one, and it renders as "error sending request for url
+    // (https://huggingface.co/.../ggml-large-v3.bin)". That was fine while it only ever reached
+    // a settings card; the first-run card put it on the landing page, URL and all, where it
+    // told a user with no connection nothing they could act on.
+    //
+    // Replaced at the point it is produced rather than filtered at the point it is shown, so
+    // every other failure in this module — "ffmpeg.exe was not found", a bad zip — keeps its
+    // own already-readable sentence. The original is still logged by the caller.
+    let mut response = client.get(url).send().map_err(|error| {
+        log_event(
+            app,
+            "WARN",
+            "download.request_failed",
+            serde_json::json!({ "url": url, "message": error.to_string() }),
+        );
+        "Could not reach the download server. Check your internet connection and try again."
+            .to_string()
+    })?;
     if !response.status().is_success() {
         return Err(format!("Download failed with status {}", response.status()));
     }
@@ -741,5 +769,62 @@ where
             let _ = fs::remove_dir_all(directory_path);
             Err(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod extraction_ordering_tests {
+    use super::extract_zip_archive_to_directory;
+    use std::fs;
+
+    /// A bad archive must not cost the user what they already had.
+    ///
+    /// The wipe used to run before the archive was opened, so a truncated or corrupt download
+    /// emptied the install directory and then failed — leaving nothing installed. Harmless while
+    /// the only caller reaching extraction had found nothing installed, and not harmless at all
+    /// once the FFmpeg reinstall began running deliberately over a copy that works.
+    #[test]
+    fn a_corrupt_archive_leaves_the_installed_files_alone() {
+        let staging = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+
+        let archive_path = staging.path().join("broken.zip");
+        fs::write(&archive_path, b"this is not a zip file").unwrap();
+
+        let survivor = install.path().join("ffmpeg.exe");
+        fs::write(&survivor, b"the working copy").unwrap();
+
+        let result = extract_zip_archive_to_directory(&archive_path, install.path());
+
+        assert!(result.is_err(), "a non-zip must not report success");
+        assert!(
+            survivor.exists(),
+            "the installed copy was destroyed by an extraction that never ran"
+        );
+        assert_eq!(fs::read(&survivor).unwrap(), b"the working copy");
+    }
+
+    /// The other half of the same rule: a *good* archive still replaces what was there, so this
+    /// cannot be "fixed" by never clearing the directory.
+    #[test]
+    fn a_good_archive_still_replaces_the_previous_install() {
+        let staging = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+
+        let archive_path = staging.path().join("good.zip");
+        let file = fs::File::create(&archive_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.start_file("fresh.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut zip, b"new").unwrap();
+        zip.finish().unwrap();
+
+        let stale = install.path().join("stale.txt");
+        fs::write(&stale, b"old").unwrap();
+
+        extract_zip_archive_to_directory(&archive_path, install.path()).unwrap();
+
+        assert!(!stale.exists(), "the previous install was not cleared");
+        assert!(install.path().join("fresh.txt").exists());
     }
 }

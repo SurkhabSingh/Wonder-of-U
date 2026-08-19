@@ -43,7 +43,17 @@ pub(crate) enum QueuedDownload {
     WhisperModel,
     WhisperVadModel,
     WhisperRuntime { version: String },
-    Ffmpeg,
+    /// `reinstall` fetches a fresh copy over one that is already installed and working.
+    ///
+    /// It exists because the ordinary download deliberately SKIPS when a runnable ffmpeg is
+    /// already present, which is right when the request means "I have none" and wrong when it
+    /// means "replace the one I have". Carrying the intent on the request keeps the skip honest
+    /// rather than adding a second way in — and the two are different requests to the queue, so
+    /// a reinstall is never mistaken for a duplicate of a pending first install.
+    ///
+    /// Safe ordering is a property of the plan, not of this flag: extraction clears the install
+    /// directory, so the working copy is only replaced once the new archive is on disk.
+    Ffmpeg { reinstall: bool },
     Ytdlp,
     Alass,
     Dictionary,
@@ -56,7 +66,7 @@ impl QueuedDownload {
             // The detector is part of provisioning the model, and belongs in its card.
             QueuedDownload::WhisperModel | QueuedDownload::WhisperVadModel => AssetKind::Model,
             QueuedDownload::WhisperRuntime { .. } => AssetKind::Runtime,
-            QueuedDownload::Ffmpeg => AssetKind::Ffmpeg,
+            QueuedDownload::Ffmpeg { .. } => AssetKind::Ffmpeg,
             QueuedDownload::Ytdlp => AssetKind::Ytdlp,
             QueuedDownload::Alass => AssetKind::Alass,
             QueuedDownload::Dictionary => AssetKind::Dictionary,
@@ -80,7 +90,7 @@ impl QueuedDownload {
             QueuedDownload::WhisperRuntime { .. } => {
                 "Finish the current task before downloading the Whisper runtime."
             }
-            QueuedDownload::Ffmpeg => "Finish the current task before downloading FFmpeg.",
+            QueuedDownload::Ffmpeg { .. } => "Finish the current task before downloading FFmpeg.",
             QueuedDownload::Ytdlp => "Finish the current task before downloading yt-dlp.",
             QueuedDownload::Alass => "Finish the current task before downloading alass.",
             QueuedDownload::Dictionary => {
@@ -259,10 +269,43 @@ fn publish_queue_depth<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
+/// Puts the item about to run into the snapshot, before anything that can fail.
+///
+/// Two things went wrong without this. The card is shown for as long as the shell phase is held,
+/// but everything inside it reads the snapshot STATUS — so between one item completing and the
+/// next reporting, the card announced "Download in progress" over a finished bar with no Cancel
+/// button. And `report_queue_error` writes "failed" directly when `plan_for` fails, with no
+/// non-terminal status in between, so a second press on the same broken condition was a
+/// "failed" to "failed" transition that the edge-triggered toast could not see: the button did
+/// nothing, twice, silently.
+///
+/// Claiming the snapshot here gives every item a real transition of its own, which fixes both
+/// without either surface needing a guard of its own.
+fn claim_snapshot_for<R: Runtime>(app: &AppHandle<R>, request: &QueuedDownload) {
+    let depth = {
+        let state = app.state::<ModelDownloadQueueState>();
+        let Ok(queue) = state.0.lock() else {
+            return;
+        };
+        queue.pending.len()
+    };
+    let kind = request.kind();
+    let _ = update_model_download_snapshot(app, |snapshot| {
+        snapshot.kind = Some(kind);
+        snapshot.status = "starting".into();
+        snapshot.message = format!("Preparing the {} download...", kind.label());
+        snapshot.downloaded_bytes = 0;
+        snapshot.total_bytes = None;
+        snapshot.progress_percent = None;
+        snapshot.target_path = None;
+        snapshot.queued_remaining = depth;
+    });
+}
+
 /// Works through the queue, one download at a time, until it is empty or something stops it.
 fn drive_queue<R: Runtime>(app: &AppHandle<R>) {
     while let NextRequest::Run(request) = take_next(app) {
-        publish_queue_depth(app);
+        claim_snapshot_for(app, &request);
 
         let plan = match plan_for(app, &request) {
             Ok(plan) => plan,
@@ -317,7 +360,7 @@ fn plan_for<R: Runtime>(
         QueuedDownload::WhisperRuntime { version } => {
             super::runtime::whisper_runtime_plan(app, version)
         }
-        QueuedDownload::Ffmpeg => super::ffmpeg::ffmpeg_plan(app),
+        QueuedDownload::Ffmpeg { reinstall } => super::ffmpeg::ffmpeg_plan(app, *reinstall),
         QueuedDownload::Ytdlp => super::ytdlp::ytdlp_plan(app),
         QueuedDownload::Alass => super::alass::alass_plan(app),
         QueuedDownload::Dictionary => super::dictionary::dictionary_plan(app),
@@ -344,9 +387,9 @@ mod tests {
     /// Pressing Download twice must not queue the same thing twice.
     #[test]
     fn a_request_already_waiting_is_not_wanted_again() {
-        let queue = queue_with(&[QueuedDownload::Ffmpeg, QueuedDownload::Ytdlp]);
+        let queue = queue_with(&[QueuedDownload::Ffmpeg { reinstall: false }, QueuedDownload::Ytdlp]);
 
-        assert!(queue.already_wanted(&QueuedDownload::Ffmpeg));
+        assert!(queue.already_wanted(&QueuedDownload::Ffmpeg { reinstall: false }));
         assert!(queue.already_wanted(&QueuedDownload::Ytdlp));
         assert!(!queue.already_wanted(&QueuedDownload::Alass));
     }
@@ -361,7 +404,7 @@ mod tests {
         };
 
         assert!(queue.already_wanted(&QueuedDownload::Dictionary));
-        assert!(!queue.already_wanted(&QueuedDownload::Ffmpeg));
+        assert!(!queue.already_wanted(&QueuedDownload::Ffmpeg { reinstall: false }));
     }
 
     /// Two runtime versions are two different requests — they install side by side — while two
@@ -408,7 +451,7 @@ mod tests {
             QueuedDownload::WhisperRuntime {
                 version: "v1.8.4".into(),
             },
-            QueuedDownload::Ffmpeg,
+            QueuedDownload::Ffmpeg { reinstall: false },
             QueuedDownload::Ytdlp,
             QueuedDownload::Alass,
             QueuedDownload::Dictionary,
@@ -418,6 +461,22 @@ mod tests {
         kinds.dedup();
 
         assert_eq!(kinds.len(), 6, "got {kinds:?}");
+    }
+
+    /// A reinstall is a different request from a download, so asking for one while the other is
+    /// queued does not collapse into a single press. They differ in what the plan is allowed to
+    /// skip, so treating them as the same request would silently turn a reinstall into a no-op.
+    #[test]
+    fn a_reinstall_is_not_a_duplicate_of_a_plain_download() {
+        let queue = queue_with(&[QueuedDownload::Ffmpeg { reinstall: false }]);
+
+        assert!(queue.already_wanted(&QueuedDownload::Ffmpeg { reinstall: false }));
+        assert!(!queue.already_wanted(&QueuedDownload::Ffmpeg { reinstall: true }));
+        assert_eq!(
+            QueuedDownload::Ffmpeg { reinstall: true }.kind(),
+            QueuedDownload::Ffmpeg { reinstall: false }.kind(),
+            "both belong to the FFmpeg progress card"
+        );
     }
 
     /// A busy message must name its own asset. They were briefly all "Another download is
@@ -431,7 +490,7 @@ mod tests {
             QueuedDownload::WhisperRuntime {
                 version: "v1.8.4".into(),
             },
-            QueuedDownload::Ffmpeg,
+            QueuedDownload::Ffmpeg { reinstall: false },
             QueuedDownload::Ytdlp,
             QueuedDownload::Alass,
             QueuedDownload::Dictionary,

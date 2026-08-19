@@ -62,6 +62,21 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
             continue;
         }
 
+        // History can outlive the file it names — an audio file moved or deleted outside the
+        // app leaves the row behind. Without this the conversion ran anyway, ffmpeg failed on a
+        // file that was not there, and the user was told "the WAV file was kept" about a WAV
+        // that no longer existed.
+        if !audio_path.exists() {
+            items.push(RecordingActionItem {
+                file_path: recording.file_path,
+                status: "skipped".into(),
+                message: "The audio file for this recording is missing, so there is nothing to convert."
+                    .into(),
+                note_id: recording.anki_note_id,
+            });
+            continue;
+        }
+
         if !is_wav {
             items.push(RecordingActionItem {
                 file_path: recording.file_path,
@@ -72,22 +87,21 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
             continue;
         }
 
-        let converted_path = compress_transcribed_audio_if_possible(app, &audio_path);
-        let converted_to_mp3 = converted_path
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|extension| extension.eq_ignore_ascii_case("mp3"))
-            .unwrap_or(false);
-
-        if !converted_to_mp3 {
-            items.push(RecordingActionItem {
-                file_path: recording.file_path,
-                status: "failed".into(),
-                message: "MP3 conversion did not complete. The WAV file was kept.".into(),
-                note_id: recording.anki_note_id,
-            });
-            continue;
-        }
+        let converted_path = match compress_transcribed_audio(app, &audio_path) {
+            Ok(path) => path,
+            // ffmpeg already said what went wrong and it was written to the log; repeating the
+            // generic sentence here is what made this undiagnosable from the app. Whatever the
+            // reason was, the user reads it.
+            Err(reason) => {
+                items.push(RecordingActionItem {
+                    file_path: recording.file_path,
+                    status: "failed".into(),
+                    message: format!("MP3 conversion failed, so the WAV was kept. {reason}"),
+                    note_id: recording.anki_note_id,
+                });
+                continue;
+            }
+        };
 
         let mut updated_recording = recording.clone();
         updated_recording.file_name = converted_path
@@ -169,19 +183,16 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
     })
 }
 
-fn compress_transcribed_audio_if_possible<R: Runtime>(
+/// Converts a WAV to MP3, or says why it could not.
+///
+/// Returned as a `Result` rather than "the original path back", which is what the caller used
+/// to receive. That shape could only be reported as "MP3 conversion did not complete", so every
+/// distinct cause — no ffmpeg, an unreadable file, a codec error — reached the user as the same
+/// sentence, and the actual message only ever existed in the log.
+fn compress_transcribed_audio<R: Runtime>(
     app: &AppHandle<R>,
     audio_path: &Path,
-) -> PathBuf {
-    if audio_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|extension| !extension.eq_ignore_ascii_case("wav"))
-        .unwrap_or(true)
-    {
-        return audio_path.to_path_buf();
-    }
-
+) -> Result<PathBuf, String> {
     let parent = audio_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = audio_path
         .file_stem()
@@ -193,7 +204,7 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
         let persisted_state = app.state::<SharedPersistedState>();
         let persisted = match persisted_state.0.lock() {
             Ok(persisted) => persisted,
-            Err(_) => return audio_path.to_path_buf(),
+            Err(_) => return Err("Could not read the app settings.".into()),
         };
         persisted.settings.clone()
     };
@@ -238,7 +249,7 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
                     "message": "FFmpeg was not found. Keeping the WAV recording."
                 }),
             );
-            return audio_path.to_path_buf();
+            return Err("FFmpeg is not installed.".into());
         }
         Err(error) => {
             log_event(
@@ -251,7 +262,7 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
                     "message": error.to_string()
                 }),
             );
-            return audio_path.to_path_buf();
+            return Err(format!("FFmpeg could not be started: {error}"));
         }
     };
 
@@ -268,6 +279,11 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
+        let reason = if details.is_empty() {
+            "FFmpeg did not produce a valid MP3 file.".to_string()
+        } else {
+            details
+        };
         let _ = fs::remove_file(&mp3_path);
         log_event(
             app,
@@ -278,14 +294,12 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
                 "targetPath": mp3_path,
                 "executablePath": executable_path,
                 "statusCode": output.status.code(),
-                "message": if details.is_empty() {
-                    "ffmpeg did not produce a valid MP3 file.".to_string()
-                } else {
-                    details
-                }
+                // One message, logged and returned, so the log and the user never describe the
+                // same failure differently.
+                "message": reason.clone()
             }),
         );
-        return audio_path.to_path_buf();
+        return Err(reason);
     }
 
     log_event(
@@ -297,7 +311,7 @@ fn compress_transcribed_audio_if_possible<R: Runtime>(
             "targetPath": mp3_path
         }),
     );
-    mp3_path
+    Ok(mp3_path)
 }
 
 /// Unlinks the WAV an MP3 replaced. Deliberately NOT part of the compression step:

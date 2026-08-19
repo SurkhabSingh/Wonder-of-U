@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { APP_SNAPSHOT_EVENT, DEFAULT_BOOTSTRAP } from "../constants";
 import { mergeSettings } from "./mergeSettings";
+import { transcriptionReady } from "../types";
 import type {
   SettingsUpdate,
   AppBootstrap,
@@ -29,6 +30,16 @@ export function useAppBootstrap() {
   const recordingToastStateRef = useRef({
     phase: DEFAULT_BOOTSTRAP.shell.phase,
     transitionCount: DEFAULT_BOOTSTRAP.shell.transitionCount,
+  });
+  // `transcriptionReady` starts null rather than false: the placeholder bootstrap carries an
+  // empty requirement list, and "not yet known" must not read as a false→true edge the moment
+  // the real answer arrives.
+  const downloadToastStateRef = useRef<{
+    status: string;
+    transcriptionReady: boolean | null;
+  }>({
+    status: DEFAULT_BOOTSTRAP.modelDownload.status,
+    transcriptionReady: null,
   });
 
   const settingsDraftKey = useMemo(
@@ -147,6 +158,62 @@ export function useAppBootstrap() {
     [],
   );
 
+  /**
+   * Reports how a download ended.
+   *
+   * A download runs on its own thread and reports only into the shared snapshot, so a failure
+   * reached no toast and no banner — the only trace was a progress card on a settings page
+   * nobody was necessarily looking at. Now that the landing page can start one, that silence
+   * is not survivable.
+   *
+   * Cancelling is the user's own doing and needs no report.
+   */
+  const syncDownloadToastState = useCallback(
+    (nextBootstrap: AppBootstrap, options?: { notify?: boolean }) => {
+      const previous = downloadToastStateRef.current;
+      const next = {
+        status: nextBootstrap.modelDownload.status,
+        transcriptionReady: transcriptionReady(
+          nextBootstrap.transcriptionRequirements,
+        ),
+      };
+      downloadToastStateRef.current = next;
+
+      if (!options?.notify) {
+        return;
+      }
+
+      if (next.status === "failed" && previous.status !== "failed") {
+        toast.error("Download failed", {
+          description: nextBootstrap.modelDownload.message,
+          duration: 5000,
+        });
+        return;
+      }
+
+      // `=== false` rather than `!previous`: null is "not yet known", and treating it as
+      // not-ready would fire this on the first real snapshot for an install that was already
+      // set up before launch.
+      //
+      // KNOWN, AND DELIBERATELY LEFT (audit 2026-08-19): this can fire with no download
+      // involved. The speech-detector requirement is satisfied either by the file existing OR
+      // by the audio type being "music", which skips VAD entirely — so with Whisper and FFmpeg
+      // ready and the detector file absent, switching that dropdown to Music flips every
+      // requirement ready at once and toasts here. The sentence is TRUE, which is why it stays:
+      // gating on `modelDownload.status === "completed"` would only half-fix it (a download
+      // earlier in the same session still leaves that status set) and would also silence the
+      // toast for someone who pointed at an existing model by hand. Reads odd, says nothing
+      // false.
+      if (next.transcriptionReady && previous.transcriptionReady === false) {
+        toast.success("Ready to transcribe", {
+          description: "Your recordings can be transcribed now.",
+          duration: 3500,
+        });
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     let mounted = true;
 
@@ -159,6 +226,7 @@ export function useAppBootstrap() {
 
         applyBootstrap(nextBootstrap);
         syncRecordingToastState(nextBootstrap);
+        syncDownloadToastState(nextBootstrap);
         setAutosaveState("idle");
         setAutosaveMessage("Changes save automatically.");
       } catch (error) {
@@ -182,6 +250,7 @@ export function useAppBootstrap() {
       });
       if (accepted) {
         syncRecordingToastState(event.payload, { notify: true });
+        syncDownloadToastState(event.payload, { notify: true });
       }
     });
 
@@ -189,7 +258,7 @@ export function useAppBootstrap() {
       mounted = false;
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [applyBootstrap, syncRecordingToastState]);
+  }, [applyBootstrap, syncDownloadToastState, syncRecordingToastState]);
 
   useEffect(() => {
     if (!settingsDirty) {

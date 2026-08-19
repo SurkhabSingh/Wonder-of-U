@@ -8,6 +8,7 @@ import {
   createWorkflowPages,
   summarizeSetupChecklist,
 } from "../lib/navigation";
+import { transcriptionSetupIncomplete } from "../types";
 import type {
   AppBootstrap,
   AppPage,
@@ -102,11 +103,19 @@ export function useAppViewState({
 
   const isRecording = bootstrap.shell.phase === "recording";
   const isSaving = bootstrap.shell.phase === "saving";
+  // The queue holds this phase for its whole run, and the backend refuses a recording start
+  // for as long as it does. Read the same field the refusal reads rather than deriving it from
+  // the download status: the two disagree in the gap between queue items, where the status is
+  // already terminal but the phase is still held.
+  const isDownloadingAssets = bootstrap.shell.phase === "downloading-model";
   // Transcription now always runs through the non-blocking transcription queue
   // (including auto-transcribe-after-recording), so it never raises this overlay.
   const recorderBusy =
     isRecording ||
     isSaving ||
+    // Start was only ever going to fail here — into the top banner, which the next progress
+    // emit wiped a fraction of a second later. The card that holds the phase says why.
+    isDownloadingAssets ||
     busyAction === "start" ||
     busyAction === "stop";
   const showBusyOverlay =
@@ -163,12 +172,14 @@ export function useAppViewState({
     bootstrap.recentRecordings.length,
     bootstrap.watchedVideos.length,
   );
+  const modelOption = MODEL_OPTIONS.find(
+    (option) => option.id === settingsDraft.whisper.modelChoice,
+  );
   const modelLabel =
-    MODEL_OPTIONS.find(
-      (option) => option.id === settingsDraft.whisper.modelChoice,
-    )?.label ??
-    settingsDraft.whisper.modelChoice ??
-    null;
+    modelOption?.label ?? settingsDraft.whisper.modelChoice ?? null;
+  // Only ever shown alongside the label, so an unrecognised model choice (which has a label but
+  // no option) says nothing about size rather than guessing one.
+  const modelDiskSize = modelOption?.diskSize ?? null;
   const ankiSummary = settingsDraft.anki.deckName
     ? `${settingsDraft.anki.deckName}${
         settingsDraft.anki.noteType ? ` · ${settingsDraft.anki.noteType}` : ""
@@ -193,6 +204,11 @@ export function useAppViewState({
     themeLabel,
   });
   const setupSummary = summarizeSetupChecklist(setupChecklist);
+  // The backend's own list, not a second opinion on it — the same list transcription refuses
+  // on, and the same one that decides which downloads the button asks for.
+  const setupIncomplete = transcriptionSetupIncomplete(
+    bootstrap.transcriptionRequirements,
+  );
   const setupEntry = createSetupEntry(setupSummary);
   const detailPages = createDetailPages();
   const currentPageLabel = activePageLabel(activePage, [
@@ -210,7 +226,10 @@ export function useAppViewState({
     elapsedRecordingMs,
     hotkeyTooltip,
     installedRuntimeVersions,
+    isDownloadingAssets,
     isRecording,
+    modelDiskSize,
+    modelLabel,
     manualRuntimeOverride,
     modelInstalled,
     resolvedCliPath,
@@ -219,6 +238,7 @@ export function useAppViewState({
     runtimeInstalled,
     setupChecklist,
     setupEntry,
+    setupIncomplete,
     setupSummary,
     showBusyOverlay,
     workflowPages,

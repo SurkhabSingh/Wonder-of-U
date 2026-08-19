@@ -25,10 +25,31 @@ pub(crate) const AUTOSTART_ARGUMENT: &str = "--autostart";
 /// change in segmentation or timestamps is felt well beyond this file.
 pub(crate) const RECOMMENDED_WHISPER_RUNTIME_VERSION: &str = "v1.8.4";
 pub(crate) const RECOMMENDED_WHISPER_RUNTIME_FILE: &str = "whisper-bin-x64.zip";
+/// The **LGPL** build, deliberately, not the GPL one.
+///
+/// BtbN publishes both. The GPL variant exists to carry libx264 and libx265, which this app
+/// has never used: it encodes with libmp3lame, libvpx-vp9 and libopus, and only ever *decodes*
+/// H.264 and AAC — and those decoders are native to ffmpeg, present in every build. So the GPL
+/// variant bought nothing and cost the strongest copyleft terms available.
+///
+/// Verified against the real binary rather than the build scripts: `-buildconf` carries
+/// `--enable-version3` with no `--enable-gpl`, and explicit `--disable-libx264
+/// --disable-libx265`; all five codecs the app names are present; a WAV to MP3 and a
+/// VP9+Opus WebM both encode.
+///
+/// Why it matters even though the app only *fetches* this and never ships it: fetching
+/// conveys nothing and carries no obligation either way, but a GPL binary invites the argument
+/// that app and binary are one combined work — an argument that, if it ever landed, would
+/// reach this app's own licence. Under LGPL the same argument's worst case is a notice
+/// requirement. It removes the argument, not an obligation we actually had.
+///
+/// Note the URL floats: `latest` rebuilds daily from FFmpeg master. That is fine while we
+/// fetch. It would have to be pinned to a dated build before anyone bundles this, because
+/// the source has to correspond exactly to the binary.
 pub(crate) const RECOMMENDED_FFMPEG_RUNTIME_FILE: &str =
-    "ffmpeg-master-latest-win64-gpl-shared.zip";
+    "ffmpeg-master-latest-win64-lgpl-shared.zip";
 pub(crate) const RECOMMENDED_FFMPEG_RUNTIME_URL: &str =
-    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip";
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip";
 /// alass v2.0.0 — automatic subtitle synchronisation. Pinned to a tag rather than "latest"
 /// so a release that changes the archive layout cannot silently break the extraction.
 ///
@@ -51,7 +72,74 @@ pub(crate) const IPADIC_DICTIONARY_URL: &str =
 
 #[cfg(test)]
 mod tests {
-    use super::RECOMMENDED_WHISPER_RUNTIME_VERSION;
+    use super::{
+        RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL,
+        RECOMMENDED_WHISPER_RUNTIME_VERSION,
+    };
+
+    /// The FFmpeg build is a licensing decision, not a URL.
+    ///
+    /// BtbN's `gpl` and `lgpl` variants differ by one word in the filename and are otherwise
+    /// interchangeable to anyone reading quickly — which is exactly how the stronger copyleft
+    /// terms could come back by accident, in a commit that looks like a typo fix. The app uses
+    /// no libx264 or libx265, so the GPL variant has nothing to offer it.
+    #[test]
+    fn the_ffmpeg_build_is_the_lgpl_variant() {
+        for value in [RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL] {
+            assert!(
+                value.contains("lgpl"),
+                "the LGPL build is a deliberate licensing choice: {value}"
+            );
+            // `contains("gpl")` would match "lgpl" too, so test the boundary the name turns on.
+            assert!(
+                !value.contains("-gpl"),
+                "this is the GPL variant, which the app has no use for: {value}"
+            );
+        }
+    }
+
+    /// The installer's compressor is a licensing decision, and `tauri.conf.json` cannot hold a
+    /// comment saying so.
+    ///
+    /// `makensis` is not only a build tool: it writes its own ~38 KB exehead into the front of
+    /// every installer it produces, so that code is redistributed rather than merely run.
+    /// Measured on the real artifact — 90% of the first 38 KB matches the stub byte for byte,
+    /// in one contiguous run, and NSIS's own UI strings are in there.
+    ///
+    /// Almost all of that stub is zlib/libpng, which imposes nothing on a binary. The exception
+    /// is the LZMA decoder, which is Common Public License 1.0 — and LZMA is Tauri's default.
+    /// A linking exception in NSIS's COPYING keeps CPL off *our* code, but is silent on CPL's
+    /// own source-availability duty for the decoder it embeds, and no primary source resolves
+    /// that. bzip2 and zlib stubs contain no CPL code at all, so the question simply does not
+    /// arise. It cost 1.6 MB, against the 543 MiB a new install downloads anyway.
+    ///
+    /// Read from the config rather than restated, because restating it is how the file and the
+    /// reason for it drift apart.
+    #[test]
+    fn the_installer_uses_a_compressor_with_no_copyleft_stub() {
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+        let source = std::fs::read_to_string(&config_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", config_path.display()));
+        let config: serde_json::Value =
+            serde_json::from_str(&source).expect("tauri.conf.json is valid JSON");
+
+        let compression = config["bundle"]["windows"]["nsis"]["compression"].as_str();
+
+        assert!(
+            matches!(compression, Some("bzip2") | Some("zlib")),
+            "lzma pulls a CPL-1.0 decoder into the shipped installer; got {compression:?}"
+        );
+    }
+
+    /// The URL has to name the same archive the downloader stages and unpacks, or ffmpeg is
+    /// fetched under one name and looked for under another.
+    #[test]
+    fn the_ffmpeg_url_ends_with_the_file_it_stages() {
+        assert!(
+            RECOMMENDED_FFMPEG_RUNTIME_URL.ends_with(RECOMMENDED_FFMPEG_RUNTIME_FILE),
+            "{RECOMMENDED_FFMPEG_RUNTIME_URL} does not end with {RECOMMENDED_FFMPEG_RUNTIME_FILE}"
+        );
+    }
 
     /// The recommended runtime version is written down twice — here, and as
     /// `RECOMMENDED_RUNTIME_VERSION` in `src/constants.ts`. That is not cosmetic

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { IMPORT_MEDIA_EXTENSIONS } from "../../constants";
 import { formatDuration, formatTimestamp } from "../../lib/format";
@@ -47,6 +47,7 @@ const YOUTUBE_STATUS_CHIP: Record<YoutubeQueueItem["status"], string> = {
 };
 
 export function HomePage({
+  setupCard,
   elapsedMs,
   phase,
   statusText,
@@ -79,6 +80,9 @@ export function HomePage({
   onView,
   onOpenLibrary,
 }: {
+  // A slot rather than the card's own props: this page renders the setup card, it does not
+  // need to learn anything about downloads to do it.
+  setupCard: ReactNode;
   elapsedMs: number;
   phase: RecorderPhase;
   statusText: string;
@@ -189,6 +193,7 @@ export function HomePage({
 
   return (
     <div className="home-view">
+      {setupCard}
       <article className="panel home-record-card">
         <div className="home-record-info">
           <p className="panel-kicker">Capture</p>

@@ -32,6 +32,36 @@ static RECORDER_START_CLAIM: Mutex<bool> = Mutex::new(false);
 /// Held across the probe for a free WAV name and the create that reserves it.
 static WAV_PATH_RESERVATION_LOCK: Mutex<()> = Mutex::new(());
 
+/// Whether nothing owns the recorder phase.
+///
+/// The same test was written out in three places — here, in the download queue's busy check,
+/// and inverted inside the hotkey failure path — which is three chances to disagree about what
+/// "the app is free" means. One of them WAS inverted, which is exactly how that goes wrong.
+pub(crate) fn recorder_phase_is_free(phase: &str) -> bool {
+    phase == "idle" || phase == "error"
+}
+
+/// What to say when a recording cannot start, based on what is actually running.
+///
+/// One sentence used to cover every case — "The app is still busy with the previous recording
+/// task." — which was true only for the recorder's own phases. Pressed during an asset download
+/// it reported a recording nobody had started, so the message named the wrong subsystem while
+/// the real one carried on in the background.
+///
+/// The default is deliberately vague rather than a guess: a phase this does not know about is
+/// better described as "something else" than as a recording.
+pub(crate) fn recording_refusal_for(phase: &str) -> &'static str {
+    match phase {
+        "downloading-model" => {
+            "A download is in progress. Wait for it to finish before recording."
+        }
+        "transcribing" => "A transcription is running. Wait for it to finish before recording.",
+        "recording" => "A recording is already running.",
+        "saving" => "The last recording is still being saved.",
+        _ => "The app is busy with another task.",
+    }
+}
+
 /// Owns the recorder slot for the whole of `start_recording_inner`.
 ///
 /// The slot itself is `Mutex<Option<ActiveRecording>>`, and an `ActiveRecording`
@@ -159,8 +189,8 @@ pub(crate) fn start_recording_inner<R: Runtime>(
             .0
             .lock()
             .map_err(|_| "Could not inspect the shell state.".to_string())?;
-        if shell.phase != "idle" && shell.phase != "error" {
-            return Err("The app is still busy with the previous recording task.".into());
+        if !recorder_phase_is_free(&shell.phase) {
+            return Err(recording_refusal_for(&shell.phase).to_string());
         }
     }
 
@@ -333,7 +363,22 @@ pub(crate) fn stop_recording_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(),
                 });
             }
         })
-        .map_err(|error| error.to_string())?;
+        // The phase was set to "saving" above, for a thread that does not exist. Nothing else
+        // would ever move it: both start and stop refuse while it reads "saving", and the
+        // finalizer that clears it is the thread that failed to launch — so the app stayed
+        // wedged until it was restarted. `start_recording_inner` already releases the phase the
+        // same way when ITS spawn fails; this is the one spawn site that did not.
+        .map_err(|error| {
+            let message = error.to_string();
+            let _ = update_shell_snapshot(app, |shell| {
+                shell.phase = "error".into();
+                shell.status_text = message.clone();
+                shell.started_at_ms = None;
+                shell.current_recording_name = None;
+                shell.transition_count += 1;
+            });
+            message
+        })?;
 
     // Capture has stopped, so drop the tray dot and flash the corner pill now
     // rather than waiting on the background finalizer that saves the WAV.
@@ -377,5 +422,42 @@ mod tests {
     #[test]
     fn an_already_running_recording_blocks_a_new_start() {
         assert!(RecorderStartClaim::acquire_with(|| Ok(true)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod refusal_message_tests {
+    use super::recording_refusal_for;
+
+    /// One sentence used to answer every phase, and it named the recorder. Pressed during a
+    /// download the app reported "the previous recording task" for a recording nobody had
+    /// started — the same class of mistake as a download refusal that talked about recordings.
+    #[test]
+    fn the_refusal_names_the_thing_that_is_actually_running() {
+        assert!(recording_refusal_for("downloading-model").contains("download"));
+        assert!(recording_refusal_for("transcribing").contains("transcription"));
+        assert!(recording_refusal_for("recording").contains("recording"));
+        assert!(recording_refusal_for("saving").contains("saved"));
+    }
+
+    /// A download is not a recording, and saying so was the whole defect.
+    #[test]
+    fn a_download_is_never_described_as_a_recording_task() {
+        let message = recording_refusal_for("downloading-model");
+        assert!(
+            !message.contains("previous recording task"),
+            "still describing the wrong subsystem: {message}"
+        );
+    }
+
+    /// Every phase gets a sentence, and none of them is empty — the caller returns this
+    /// verbatim as the error a user reads.
+    #[test]
+    fn every_refusal_says_something() {
+        for phase in ["downloading-model", "transcribing", "recording", "saving", "whatever"] {
+            let message = recording_refusal_for(phase);
+            assert!(!message.trim().is_empty(), "{phase} has nothing to say");
+            assert!(message.ends_with('.'), "{phase}: {message}");
+        }
     }
 }

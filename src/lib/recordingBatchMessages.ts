@@ -19,6 +19,11 @@ export function formatBatchToastMessage(
   const failedItems = result.items.filter((item) => item.status === "failed");
   const failedCount = failedItems.length;
   const firstFailure = failedItems[0]?.message;
+  // Skips have reasons too. Conversion alone has four of them — no transcript, audio already
+  // deleted after an Anki push, not a WAV, and the source file gone — and a single fixed
+  // sentence for all four told a user with a missing audio file that only transcribed WAVs can
+  // be converted, about a recording that was transcribed.
+  const firstSkip = result.items.find((item) => item.status === "skipped")?.message;
   const furiganaSkippedCount = result.items.filter((item) =>
     item.message.toLowerCase().includes("furigana was skipped"),
   ).length;
@@ -67,8 +72,12 @@ export function formatBatchToastMessage(
       return `${successCount} recording${successCount === 1 ? "" : "s"} converted to MP3. ${failedCount} failed.`;
     }
 
+    if (successCount === 0 && skippedCount === 1) {
+      return firstSkip ?? "Only transcribed WAV recordings can be converted.";
+    }
+
     if (successCount === 0 && skippedCount > 0) {
-      return `${skippedCount} recording${skippedCount === 1 ? " was" : "s were"} skipped. Only transcribed WAV recordings can be converted.`;
+      return `${skippedCount} recordings were skipped. Only transcribed WAV recordings can be converted.`;
     }
 
     return `${successCount} recording${successCount === 1 ? "" : "s"} converted to MP3.`;
