@@ -70,6 +70,39 @@ pub(crate) const IPADIC_DICTIONARY_FILE: &str = "lindera-ipadic-4.0.0.zip";
 pub(crate) const IPADIC_DICTIONARY_URL: &str =
     "https://github.com/lindera/lindera/releases/download/v4.0.0/lindera-ipadic-4.0.0.zip";
 
+/// mpv, the player Watch & Mine drives over its IPC channel.
+///
+/// The project's OWN Windows build, pinned to a release tag. The commonly linked third-party
+/// nightly builds were measured and rejected: their filenames carry a date and a build hash so
+/// no permanent link exists, and both builders delete releases after about a month, which turns
+/// a saved URL into a download that silently starts failing. This tag's assets do not expire.
+///
+/// The msvc archive rather than the mingw one, though it downloads larger: mingw unpacks to
+/// 101 MiB across 27 loose libraries and is a zip nested inside a zip, while this is 55.7 MiB
+/// and five files once the debug symbols are skipped. It also ships `vulkan-1.dll`, which
+/// `mpv.exe` imports at load time — the third-party builds omit it and rely on a graphics
+/// driver having placed one in the system folder, so they fail outright on a machine that has
+/// none.
+///
+/// Fetched, never bundled. mpv is GPL and has no LGPL build for the player — verified on the
+/// binary, which exposes `direct3d`, a GPL-gated output. Fetching at the user's request carries
+/// no obligation; shipping it would mean supplying the corresponding source for mpv and every
+/// GPL library inside it, and the archive carries no licence file at all.
+pub(crate) const MPV_RELEASE_FILE: &str = "mpv-v0.41.0-x86_64-pc-windows-msvc.zip";
+pub(crate) const MPV_RELEASE_URL: &str = "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-x86_64-pc-windows-msvc.zip";
+
+/// The published digest of the archive above, checked after it is fetched.
+///
+/// The URL is pinned to an immutable tag, so this constant can be too. It is the only integrity
+/// check any asset has: every other download is trusted on the strength of having produced a
+/// file at all, which cannot tell a truncated transfer from a complete one.
+pub(crate) const MPV_RELEASE_SHA256: &str =
+    "4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff";
+
+/// Debug symbols. Four fifths of the unpacked archive and of no use to anyone running the
+/// player, so they are skipped rather than written and deleted.
+pub(crate) const MPV_SKIPPED_ENTRY: &str = "mpv.pdb";
+
 #[cfg(test)]
 mod tests {
     use super::{

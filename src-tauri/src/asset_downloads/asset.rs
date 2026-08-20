@@ -31,6 +31,7 @@ pub(crate) enum AssetKind {
     Ytdlp,
     Alass,
     Dictionary,
+    Mpv,
 }
 
 impl AssetKind {
@@ -40,13 +41,14 @@ impl AssetKind {
     /// set yet, and a blanket allow here would also hide the *next* thing that goes unused.
     /// The first-run sequence will want this, and the compiler will say so when it does.
     #[cfg(test)]
-    pub(crate) const ALL: [AssetKind; 6] = [
+    pub(crate) const ALL: [AssetKind; 7] = [
         AssetKind::Model,
         AssetKind::Runtime,
         AssetKind::Ffmpeg,
         AssetKind::Ytdlp,
         AssetKind::Alass,
         AssetKind::Dictionary,
+        AssetKind::Mpv,
     ];
 
     /// The asset's name as it reads **mid-sentence**: "Cancelling the FFmpeg download…".
@@ -64,6 +66,7 @@ impl AssetKind {
             AssetKind::Ytdlp => "yt-dlp",
             AssetKind::Alass => "alass",
             AssetKind::Dictionary => "Japanese dictionary",
+            AssetKind::Mpv => "mpv",
         }
     }
 }
@@ -102,7 +105,7 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            ["model", "runtime", "ffmpeg", "ytdlp", "alass", "dictionary"]
+            ["model", "runtime", "ffmpeg", "ytdlp", "alass", "dictionary", "mpv"]
         );
     }
 

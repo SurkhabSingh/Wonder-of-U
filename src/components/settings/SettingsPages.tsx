@@ -64,6 +64,8 @@ export function SettingsPages({
   onReinstallFfmpeg,
   onDownloadRecommendedYtdlp,
   onDownloadRecommendedAlass,
+  onDownloadRecommendedMpv,
+  onReinstallMpv,
   onDownloadRecommendedDictionary,
   onRefreshKnownWords,
   onScanVocabularySources,
@@ -108,6 +110,8 @@ export function SettingsPages({
   onReinstallFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
   onDownloadRecommendedAlass: () => void | Promise<void>;
+  onDownloadRecommendedMpv: () => void | Promise<void>;
+  onReinstallMpv: () => void | Promise<void>;
   onDownloadRecommendedDictionary: () => void | Promise<void>;
   onRefreshKnownWords: () => void | Promise<void>;
   onScanVocabularySources: () => Promise<VocabularySuggestions | null>;
@@ -220,6 +224,8 @@ export function SettingsPages({
             onReinstallFfmpeg={onReinstallFfmpeg}
             onDownloadRecommendedYtdlp={onDownloadRecommendedYtdlp}
             onDownloadRecommendedAlass={onDownloadRecommendedAlass}
+            onDownloadRecommendedMpv={onDownloadRecommendedMpv}
+            onReinstallMpv={onReinstallMpv}
             onCheckYtdlpUpdate={onCheckYtdlpUpdate}
             onToggleDownloadPause={onToggleDownloadPause}
           />

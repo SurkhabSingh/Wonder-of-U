@@ -6,6 +6,7 @@ mod control;
 mod alass;
 mod ffmpeg;
 mod model;
+mod mpv;
 mod runtime;
 mod transfer;
 mod ytdlp;

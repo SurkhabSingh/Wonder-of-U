@@ -57,6 +57,10 @@ pub(crate) enum QueuedDownload {
     Ytdlp,
     Alass,
     Dictionary,
+    /// `reinstall` carries the same meaning as it does for ffmpeg: fetch a fresh copy over one
+    /// that already works. Without it the Settings button that offers exactly that skips the
+    /// fetch and reports a download that never happened.
+    Mpv { reinstall: bool },
 }
 
 impl QueuedDownload {
@@ -70,6 +74,7 @@ impl QueuedDownload {
             QueuedDownload::Ytdlp => AssetKind::Ytdlp,
             QueuedDownload::Alass => AssetKind::Alass,
             QueuedDownload::Dictionary => AssetKind::Dictionary,
+            QueuedDownload::Mpv { .. } => AssetKind::Mpv,
         }
     }
 
@@ -96,6 +101,7 @@ impl QueuedDownload {
             QueuedDownload::Dictionary => {
                 "Finish the current task before downloading the Japanese dictionary."
             }
+            QueuedDownload::Mpv { .. } => "Finish the current task before downloading mpv.",
         }
     }
 }
@@ -364,6 +370,7 @@ fn plan_for<R: Runtime>(
         QueuedDownload::Ytdlp => super::ytdlp::ytdlp_plan(app),
         QueuedDownload::Alass => super::alass::alass_plan(app),
         QueuedDownload::Dictionary => super::dictionary::dictionary_plan(app),
+        QueuedDownload::Mpv { reinstall } => super::mpv::mpv_plan(app, *reinstall),
     }
 }
 
@@ -455,12 +462,13 @@ mod tests {
             QueuedDownload::Ytdlp,
             QueuedDownload::Alass,
             QueuedDownload::Dictionary,
+            QueuedDownload::Mpv { reinstall: false },
         ];
         let mut kinds: Vec<AssetKind> = requests.iter().map(QueuedDownload::kind).collect();
         kinds.sort_by_key(|kind| kind.label());
         kinds.dedup();
 
-        assert_eq!(kinds.len(), 6, "got {kinds:?}");
+        assert_eq!(kinds.len(), 7, "got {kinds:?}");
     }
 
     /// A reinstall is a different request from a download, so asking for one while the other is
@@ -494,6 +502,7 @@ mod tests {
             QueuedDownload::Ytdlp,
             QueuedDownload::Alass,
             QueuedDownload::Dictionary,
+            QueuedDownload::Mpv { reinstall: false },
         ] {
             let message = request.busy_message();
             assert!(

@@ -29,9 +29,6 @@ hound = "3.5.1"
 wasapi = "0.23.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-# mpv's Windows builds ship as .7z (the format mpv.io itself points at), which `zip`
-# cannot read. Pure Rust, so it adds no system dependency.
-sevenz-rust = { version = "0.6", default-features = false }
 tiny_http = "0.12"
 
 # Japanese morphological analysis for i+1 sentence ranking. Default features are `mmap`
@@ -47,6 +44,10 @@ unicode-normalization = "0.1"
 # Local time as an RFC 3339 string for log records. `clock` is the only feature needed;
 # the default feature set pulls in serialisation and locale support this does not use.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Checks a pinned download against its published digest. Already in the tree through reqwest,
+# so naming it directly costs nothing to build.
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10.1"

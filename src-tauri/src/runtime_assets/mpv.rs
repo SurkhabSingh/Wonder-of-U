@@ -115,7 +115,12 @@ pub(crate) fn verify_mpv_binary(executable_path: &Path) -> Result<(), String> {
 /// is the fallback for someone who has no mpv at all.
 pub(crate) fn detect_local_mpv(settings: &AppSettings) -> MpvDetection {
     for candidate in system_mpv_candidates() {
-        if managed_binary_is_present(&candidate) && verify_mpv_binary(&candidate).is_ok() {
+        // Presence, not a launch. This runs inside the app snapshot, which is rebuilt on
+        // every emit — several times a second during a download — and spawning a player to ask
+        // whether it starts is far too expensive to repeat at that rate. The managed candidates
+        // below are already trusted the same way, and a binary that is present but broken fails
+        // at watch-start with mpv's own error rather than silently.
+        if managed_binary_is_present(&candidate) {
             return MpvDetection {
                 status: "ready".into(),
                 executable_path: Some(candidate.display().to_string()),

@@ -787,6 +787,7 @@ pub(crate) struct AppBootstrap {
     pub(crate) ffmpeg_detection: FfmpegDetection,
     pub(crate) ytdlp_detection: YtdlpDetection,
     pub(crate) alass_detection: AlassDetection,
+    pub(crate) mpv_detection: MpvDetection,
     pub(crate) model_download: ModelDownloadSnapshot,
     pub(crate) dictionary_detection: DictionaryDetection,
     pub(crate) known_words: KnownWordsSnapshot,

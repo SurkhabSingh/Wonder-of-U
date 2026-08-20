@@ -343,6 +343,15 @@ export type YtdlpDetection = {
 };
 
 // alass is managed-only: there is no conventional system install to probe for.
+// Whether a player the app can drive is available. Detection prefers a user's own install
+// over the managed one, so `managed` says which is in use.
+export type MpvDetection = {
+  status: string;
+  executablePath: string | null;
+  managed: boolean;
+  message: string;
+};
+
 export type AlassDetection = {
   status: string;
   executablePath: string | null;
@@ -483,7 +492,8 @@ export type AssetKind =
   | "ffmpeg"
   | "ytdlp"
   | "alass"
-  | "dictionary";
+  | "dictionary"
+  | "mpv";
 
 export type ModelDownloadSnapshot = {
   // Typed, so `snapshot.kind !== kind` in the progress card is a comparison the compiler
@@ -540,6 +550,7 @@ export type AppBootstrap = {
   ffmpegDetection: FfmpegDetection;
   ytdlpDetection: YtdlpDetection;
   alassDetection: AlassDetection;
+  mpvDetection: MpvDetection;
   modelDownload: ModelDownloadSnapshot;
   dictionaryDetection: DictionaryDetection;
   knownWords: KnownWordsSnapshot;
@@ -691,6 +702,8 @@ export const DOWNLOAD_BUSY_ACTIONS = [
   "downloadAlass",
   "downloadYtdlp",
   "downloadDictionary",
+  "downloadMpv",
+  "reinstallMpv",
   "downloadEssentials",
   "reinstallFfmpeg",
 ] as const;

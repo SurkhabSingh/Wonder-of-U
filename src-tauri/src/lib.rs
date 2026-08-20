@@ -96,6 +96,8 @@ pub fn run() {
             download_recommended_ffmpeg,
             reinstall_ffmpeg,
             download_recommended_ytdlp,
+            download_recommended_mpv,
+            reinstall_mpv,
             download_missing_essentials,
             check_whisper_runtime_update,
             check_whisper_model_update,

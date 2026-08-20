@@ -252,11 +252,14 @@ pub(super) fn run_asset_download<R: Runtime>(
                     format!("{failed_shell_prefix}: {error}")
                 };
             });
+            // A cancel is the outcome the user asked for, so it is not an error. Logging it as
+            // one made every count of real failures wrong, and the snapshot and the shell text
+            // above already draw this distinction.
             log_event(
                 app,
-                "ERROR",
+                if cancelled { "INFO" } else { "ERROR" },
                 failure_log_event,
-                serde_json::json!({ "message": error }),
+                serde_json::json!({ "message": error, "cancelled": cancelled }),
             );
             Err(failure)
         }
