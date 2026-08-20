@@ -444,6 +444,7 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
   },
   transcriptionRequirements: [],
   logPath: "",
+  loggingFailure: null,
 };
 
 export const DEFAULT_ANKI_CATALOG: AnkiCatalog = {

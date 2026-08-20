@@ -5938,6 +5938,7 @@ dependencies = [
 name = "wonder_of_u_desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "hound",
  "lindera",
  "reqwest 0.12.28",

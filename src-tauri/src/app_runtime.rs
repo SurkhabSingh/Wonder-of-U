@@ -1,6 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -36,16 +35,7 @@ pub(crate) fn append_structured_log(
     event: &str,
     details: serde_json::Value,
 ) {
-    let payload = serde_json::json!({
-        "tsMs": now_ms(),
-        "level": level,
-        "event": event,
-        "details": details
-    });
-
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{payload}");
-    }
+    crate::logging::write(path, level, event, details);
 }
 
 pub(crate) fn log_event<R: Runtime>(
@@ -123,6 +113,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         known_words,
         transcription_requirements,
         log_path,
+        logging_failure: crate::logging::failure(),
     })
 }
 
