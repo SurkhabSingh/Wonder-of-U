@@ -19,7 +19,10 @@ pub(crate) use alass::{
     alass_args, alass_archive_entry, collect_managed_alass_candidates, detect_local_alass,
     managed_alass_install_directory, verify_alass_binary,
 };
-pub(crate) use mpv::detect_local_mpv;
+pub(crate) use mpv::{
+    collect_managed_mpv_candidates, detect_local_mpv, managed_mpv_install_directory,
+    verify_mpv_binary,
+};
 pub(crate) use updates::{
     check_whisper_model_update_inner, check_whisper_runtime_update_inner, check_ytdlp_update_inner,
 };

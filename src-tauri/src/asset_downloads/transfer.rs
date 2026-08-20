@@ -56,6 +56,28 @@ where
     Ok(())
 }
 
+/// Checks a downloaded file against a published digest.
+///
+/// A transfer that ends early still leaves a file, and every asset before this treated the file
+/// existing as proof the download worked. Only assets pinned to an immutable URL can have a
+/// constant to compare against, which is why this is not applied to all of them.
+pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    // Streamed rather than read whole: the archives this guards are tens of megabytes.
+    std::io::copy(&mut file, &mut hasher).map_err(|error| error.to_string())?;
+    let actual = format!("{:x}", hasher.finalize());
+
+    if actual.eq_ignore_ascii_case(expected) {
+        return Ok(());
+    }
+    Err(format!(
+        "the download did not match its published checksum (expected {expected}, got {actual})"
+    ))
+}
+
 /// How often a download in flight may announce its progress.
 ///
 /// An emit is not cheap. `emit_app_snapshot` rebuilds the *entire* bootstrap — it deep-clones
@@ -315,6 +337,19 @@ pub(super) fn extract_zip_archive_to_directory(
     archive_path: &Path,
     target_directory: &Path,
 ) -> Result<(), String> {
+    extract_zip_archive_except(archive_path, target_directory, |_| false)
+}
+
+/// Extraction that can leave entries out.
+///
+/// One archive carries debug symbols four times the size of everything else in it. Skipping
+/// them while unpacking costs nothing; writing them and deleting them afterwards would need the
+/// disk for both.
+pub(super) fn extract_zip_archive_except(
+    archive_path: &Path,
+    target_directory: &Path,
+    skip: impl Fn(&str) -> bool,
+) -> Result<(), String> {
     // Open and validate the archive BEFORE touching what is already installed.
     //
     // The wipe used to come first, so a truncated or corrupt download destroyed a working
@@ -337,6 +372,14 @@ pub(super) fn extract_zip_archive_to_directory(
         let Some(relative_path) = entry.enclosed_name() else {
             continue;
         };
+
+        if relative_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(&skip)
+        {
+            continue;
+        }
 
         let output_path = target_directory.join(relative_path);
         if entry.is_dir() {
@@ -774,8 +817,78 @@ where
 
 #[cfg(test)]
 mod extraction_ordering_tests {
-    use super::extract_zip_archive_to_directory;
+    use super::{extract_zip_archive_except, extract_zip_archive_to_directory, verify_sha256};
     use std::fs;
+
+    /// A digest that matches passes, and one that does not is refused.
+    ///
+    /// The refusal is the point: a transfer that ends early still leaves a file, and every
+    /// other asset treats the file existing as proof the download worked.
+    #[test]
+    fn a_download_is_checked_against_its_published_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("payload.bin");
+        fs::write(&path, b"wonder of u").unwrap();
+
+        // Both literal, so the test states the answer rather than recomputing it with the
+        // same library it is checking.
+        let digest = "841b102561af1b399e7d212daaa0a7e7da79953e4cfa9ee349bd5b1c314f30b0";
+        let other_digest = "0d3b0b1cbe0e6a05e2c56ba9e3b3bd3f88ea0f61f5e3e0a3cbd6ea5e2c9d3aa4";
+
+        assert!(verify_sha256(&path, digest).is_ok(), "the file's own digest must pass");
+        assert!(
+            verify_sha256(&path, &digest.to_uppercase()).is_ok(),
+            "case must not decide whether a download is trusted"
+        );
+        assert!(
+            verify_sha256(&path, other_digest).is_err(),
+            "any other digest must be refused"
+        );
+
+        let reason = verify_sha256(&path, other_digest).unwrap_err();
+        assert!(reason.contains(other_digest), "the reason names what was expected: {reason}");
+    }
+
+    #[test]
+    fn a_missing_file_fails_the_digest_check_rather_than_passing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(verify_sha256(&directory.path().join("absent.bin"), "abc").is_err());
+    }
+
+    /// One archive carries debug symbols several times the size of everything else, so
+    /// extraction can leave an entry out rather than write it and delete it.
+    #[test]
+    fn extraction_can_skip_an_entry_and_keeps_the_rest() {
+        let staging = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let archive_path = staging.path().join("bundle.zip");
+
+        let file = fs::File::create(&archive_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        // The nested entry is what makes this test able to fail: with every entry at the
+        // root, a predicate given the whole relative path behaves identically to one given the
+        // file name, and the test cannot tell the two apart.
+        for name in ["mpv.exe", "mpv.pdb", "vulkan-1.dll", "nested/mpv.pdb"] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut zip, name.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+
+        extract_zip_archive_except(&archive_path, install.path(), |name| {
+            name.eq_ignore_ascii_case("mpv.pdb")
+        })
+        .unwrap();
+
+        assert!(install.path().join("mpv.exe").exists());
+        assert!(install.path().join("vulkan-1.dll").exists(), "only the named entry is skipped");
+        assert!(!install.path().join("mpv.pdb").exists(), "the skipped entry was written");
+        assert!(
+            !install.path().join("nested").join("mpv.pdb").exists(),
+            "the predicate is given a file name, so a nested copy is skipped too"
+        );
+    }
+
 
     /// A bad archive must not cost the user what they already had.
     ///

@@ -14,7 +14,7 @@ use crate::{
         SharedShellState, ShellSnapshot, WhisperDetectionState,
     },
     runtime_assets::{
-        detect_local_alass, detect_local_dictionary, detect_local_ffmpeg, detect_local_ytdlp,
+        detect_local_alass, detect_local_dictionary, detect_local_ffmpeg, detect_local_mpv, detect_local_ytdlp,
     },
 };
 
@@ -53,6 +53,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         .map_err(|_| "Could not read the app settings.".to_string())?
         .clone();
     let ffmpeg_detection = detect_local_ffmpeg(&persisted.settings);
+    let mpv_detection = detect_local_mpv(&persisted.settings);
     let ytdlp_detection = detect_local_ytdlp(&persisted.settings);
     let alass_detection = detect_local_alass(&persisted.settings);
     let whisper_detection = app
@@ -99,6 +100,7 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         ffmpeg_detection,
         ytdlp_detection,
         alass_detection,
+        mpv_detection,
         model_download,
         dictionary_detection,
         known_words,
@@ -160,6 +162,7 @@ pub(crate) fn diagnostics_text<R: Runtime>(app: &AppHandle<R>) -> String {
                 state.whisper_detection.status, state.settings.whisper.model_choice
             ));
             lines.push(format!("FFmpeg: {}", state.ffmpeg_detection.status));
+            lines.push(format!("mpv: {}", state.mpv_detection.status));
             lines.push(format!("yt-dlp: {}", state.ytdlp_detection.status));
             lines.push(format!("alass: {}", state.alass_detection.status));
             lines.push(format!("Dictionary: {}", state.dictionary_detection.status));

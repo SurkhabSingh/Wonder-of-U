@@ -18,6 +18,8 @@ export function StorageSettingsPage({
   onReinstallFfmpeg,
   onDownloadRecommendedYtdlp,
   onDownloadRecommendedAlass,
+  onDownloadRecommendedMpv,
+  onReinstallMpv,
   onCheckYtdlpUpdate,
   onToggleDownloadPause,
 }: {
@@ -30,11 +32,14 @@ export function StorageSettingsPage({
   onReinstallFfmpeg: () => void | Promise<void>;
   onDownloadRecommendedYtdlp: () => void | Promise<void>;
   onDownloadRecommendedAlass: () => void | Promise<void>;
+  onDownloadRecommendedMpv: () => void | Promise<void>;
+  onReinstallMpv: () => void | Promise<void>;
   onCheckYtdlpUpdate: () => void | Promise<void>;
   onToggleDownloadPause: () => void | Promise<void>;
 }) {
   const ytdlpReady = bootstrap.ytdlpDetection.status === "ready";
   const alassReady = bootstrap.alassDetection.status === "ready";
+  const mpvReady = bootstrap.mpvDetection.status === "ready";
   // Re-downloading the recommended yt-dlp overwrites the binary in place, so the
   // download action doubles as the install for an update the check turned up.
   const ytdlpUpdateVersion =
@@ -171,6 +176,73 @@ export function StorageSettingsPage({
         )}
       </div>
       <UpdateResultCard result={ytdlpUpdateResult} />
+
+      <header className="panel-header">
+        <div>
+          <p className="panel-kicker">Storage</p>
+          <h2>Watch &amp; Mine Player</h2>
+        </div>
+        <span
+          className={`status-chip status-chip-${mpvReady ? "success" : "warning"}`}
+          title={bootstrap.mpvDetection.message}
+        >
+          {mpvReady ? "Ready" : "Missing"}
+        </span>
+      </header>
+
+      <div
+        className={`update-card ${mpvReady ? "current" : "available"}`}
+      >
+        <strong>{bootstrap.mpvDetection.message}</strong>
+        <p className="microcopy">
+          Watching a video and mining lines as you go needs mpv. Your own
+          install is used when you have one; otherwise the app keeps its own
+          copy. It downloads about 77&nbsp;MB and keeps 56&nbsp;MB, and the
+          download is checked against a published fingerprint before it is
+          unpacked.
+        </p>
+        {bootstrap.mpvDetection.executablePath ? (
+          <p className="path-copy" title={bootstrap.mpvDetection.executablePath}>
+            {fileNameFromPath(bootstrap.mpvDetection.executablePath)}
+          </p>
+        ) : null}
+      </div>
+
+      {/* Offered even when a system mpv was found, because that one is not ours to rely on:
+          it can be uninstalled or upgraded to something the app cannot drive.
+
+          The managed case sends a REINSTALL, not a download. The plain download skips when a
+          runnable copy is present, so a button offering to replace one would have reported a
+          download it never made. */}
+      <div className="action-row inline-actions">
+        {bootstrap.mpvDetection.managed ? (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onReinstallMpv()}
+            disabled={isDownloadBusy(busyAction)}
+            title="Downloads a fresh copy and replaces the app's copy of mpv"
+          >
+            Reinstall mpv
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={mpvReady ? "secondary" : undefined}
+            onClick={() => void onDownloadRecommendedMpv()}
+            disabled={isDownloadBusy(busyAction)}
+          >
+            {mpvReady ? "Download the app's own mpv" : "Download mpv"}
+          </button>
+        )}
+      </div>
+      <DownloadProgressCard
+        snapshot={bootstrap.modelDownload}
+        kind="mpv"
+        downloadIsActive={downloadIsActive}
+        onTogglePause={() => void onToggleDownloadPause()}
+        onCancel={() => void onCancelDownload()}
+      />
 
       <header className="panel-header">
         <div>

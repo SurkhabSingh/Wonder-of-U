@@ -196,6 +196,20 @@ pub(crate) fn reinstall_ffmpeg(app: AppHandle) -> Result<AppBootstrap, String> {
     build_app_bootstrap(&app)
 }
 
+/// Fetches the player Watch & Mine drives.
+#[tauri::command]
+pub(crate) fn download_recommended_mpv(app: AppHandle) -> Result<AppBootstrap, String> {
+    enqueue_download(&app, QueuedDownload::Mpv { reinstall: false })?;
+    build_app_bootstrap(&app)
+}
+
+/// Fetches a fresh mpv over a working one, for the button offered once a managed copy exists.
+#[tauri::command]
+pub(crate) fn reinstall_mpv(app: AppHandle) -> Result<AppBootstrap, String> {
+    enqueue_download(&app, QueuedDownload::Mpv { reinstall: true })?;
+    build_app_bootstrap(&app)
+}
+
 #[tauri::command]
 pub(crate) fn download_recommended_ytdlp(app: AppHandle) -> Result<AppBootstrap, String> {
     enqueue_download(&app, QueuedDownload::Ytdlp)?;
@@ -444,7 +458,8 @@ pub(crate) async fn start_watch_session(
         };
         let detection = detect_local_mpv(&settings);
         let executable_path = detection.executable_path.clone().ok_or_else(|| {
-            "mpv is required to watch a video; install it in Setup.".to_string()
+            "mpv is required to watch a video. Download it in Settings, under Storage."
+                .to_string()
         })?;
         // The stored value is already the answer: `resume_point_ms` judged it when it was
         // written, so there is nothing to re-decide here. A video never played, or played to

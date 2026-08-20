@@ -575,6 +575,8 @@ function App() {
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
+    downloadRecommendedMpv,
+    reinstallMpv,
     downloadRecommendedDictionary,
     downloadMissingEssentials,
     refreshKnownWords,
@@ -1400,6 +1402,8 @@ function App() {
             onReinstallFfmpeg={reinstallFfmpeg}
             onDownloadRecommendedYtdlp={downloadRecommendedYtdlp}
             onDownloadRecommendedAlass={downloadRecommendedAlass}
+            onDownloadRecommendedMpv={downloadRecommendedMpv}
+            onReinstallMpv={reinstallMpv}
             onDownloadRecommendedDictionary={downloadRecommendedDictionary}
             onRefreshKnownWords={refreshKnownWords}
             onScanVocabularySources={scanVocabularySources}

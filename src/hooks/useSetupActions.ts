@@ -161,6 +161,39 @@ export function useSetupActions({
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
+  const downloadRecommendedMpv = useCallback(async () => {
+    try {
+      setBusyAction("downloadMpv");
+      const nextBootstrap = await invoke<AppBootstrap>("download_recommended_mpv");
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("storage");
+    } catch (error) {
+      showError(errorMessage(error, "mpv could not be prepared."));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
+
+  /**
+   * Fetches a fresh mpv over a working one.
+   *
+   * Its own action for the same reason FFmpeg has one: the plain download skips when a runnable
+   * copy is present, which is right for "I have none" and silently does nothing for "replace
+   * what I have".
+   */
+  const reinstallMpv = useCallback(async () => {
+    try {
+      setBusyAction("reinstallMpv");
+      const nextBootstrap = await invoke<AppBootstrap>("reinstall_mpv");
+      applyBootstrap(nextBootstrap);
+      openSettingsSection("storage");
+    } catch (error) {
+      showError(errorMessage(error, "mpv could not be prepared."));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
+
   const downloadRecommendedAlass = useCallback(async () => {
     try {
       setBusyAction("downloadAlass");
@@ -455,6 +488,8 @@ export function useSetupActions({
     downloadRecommendedRuntime,
     downloadRecommendedYtdlp,
     downloadRecommendedAlass,
+    downloadRecommendedMpv,
+    reinstallMpv,
     downloadRecommendedDictionary,
     downloadMissingEssentials,
     downloadRuntimeVersion,

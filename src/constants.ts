@@ -413,6 +413,12 @@ export const DEFAULT_BOOTSTRAP: AppBootstrap = {
     managed: false,
     message: "Install app-managed yt-dlp to import audio from YouTube and other sites.",
   },
+  mpvDetection: {
+    status: "notFound",
+    executablePath: null,
+    managed: false,
+    message: "Install mpv to watch a video and mine lines as you go.",
+  },
   alassDetection: {
     status: "notFound",
     executablePath: null,
