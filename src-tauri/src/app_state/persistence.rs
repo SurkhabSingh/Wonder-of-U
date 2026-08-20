@@ -7,7 +7,7 @@ use std::{
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
-    app_runtime::{append_structured_log, now_ms},
+    app_runtime::now_ms,
     app_types::{
         default_indicator_position, default_theme_preference, AnkiSettings, AppPathsState,
         AppSettings, FeatureSettings, PersistedData, ScannerSettings, TranslationSettings,
@@ -103,7 +103,7 @@ fn preserve_unparseable_state_file(paths: &AppPathsState, reason: &str) {
         .err()
         .map(|error| error.to_string());
 
-    append_structured_log(
+    crate::logging::write(
         &paths.log_file,
         "ERROR",
         "state.unreadable",
@@ -140,7 +140,7 @@ pub(crate) fn load_persisted_data<R: Runtime>(
             // Present but unreadable (locked, permissions). The contents are fine, so
             // there is nothing to move aside — but this session still starts with an
             // empty library and will persist it, so say so.
-            append_structured_log(
+            crate::logging::write(
                 &paths.log_file,
                 "ERROR",
                 "state.unreadable",

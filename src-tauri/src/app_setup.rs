@@ -4,7 +4,7 @@ use tauri::{App, Manager};
 
 use crate::{
     asset_downloads::DownloadQueue,
-    app_runtime::{append_structured_log, setup_error},
+    app_runtime::setup_error,
     app_state::{build_app_paths, load_persisted_data, write_persisted_data},
     anki::restore_known_words_index,
     app_types::{
@@ -85,7 +85,11 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
             serde_json::json!(paths.state_file.display().to_string()),
         );
     }
-    append_structured_log(&paths.log_file, "INFO", "app.startup", startup);
+    // Before the first line, so no recording name can be written unredacted.
+    if let Ok(persisted) = app_handle.state::<SharedPersistedState>().0.lock() {
+        crate::logging::set_recordings_directory(&persisted.settings.output_directory);
+    }
+    crate::logging::write(&paths.log_file, "INFO", "app.startup", startup);
 
     if let Err(error) = refresh_whisper_detection_state(&app_handle) {
         startup_warnings.push(format!(

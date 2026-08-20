@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "../../lib/errors";
 
 /**
  * Everything a user needs to report a problem.
@@ -22,9 +23,9 @@ export function TroubleshootingSettings({
     try {
       await invoke("open_log_folder");
     } catch (error) {
-      onError(
-        error instanceof Error ? error.message : "The log folder could not be opened.",
-      );
+      // A rejected invoke carries the backend's plain string, never an Error, so an
+      // `instanceof` test discards every reason the command can give.
+      onError(errorMessage(error, "The log folder could not be opened."));
     }
   };
 
@@ -36,9 +37,7 @@ export function TroubleshootingSettings({
       // Long enough to read, short enough that the button does not look stuck.
       setTimeout(() => setCopied(false), 2500);
     } catch (error) {
-      onError(
-        error instanceof Error ? error.message : "The diagnostics could not be copied.",
-      );
+      onError(errorMessage(error, "The summary could not be copied."));
     }
   };
 
@@ -75,7 +74,8 @@ export function TroubleshootingSettings({
             should have to open it to find out what is in it. */}
         <p className="microcopy">
           The log holds file locations, recording names, and what each action
-          did. Your Windows account name is replaced before anything is written.
+          did. Your Windows account name is replaced before anything is written,
+          but recording names come from what was said, so read it before sending.
         </p>
 
         {logPath ? (

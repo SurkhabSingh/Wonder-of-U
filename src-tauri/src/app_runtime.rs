@@ -29,15 +29,6 @@ pub(crate) fn ensure_directory_exists(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| error.to_string())
 }
 
-pub(crate) fn append_structured_log(
-    path: &Path,
-    level: &str,
-    event: &str,
-    details: serde_json::Value,
-) {
-    crate::logging::write(path, level, event, details);
-}
-
 pub(crate) fn log_event<R: Runtime>(
     app: &AppHandle<R>,
     level: &str,
@@ -45,7 +36,7 @@ pub(crate) fn log_event<R: Runtime>(
     details: serde_json::Value,
 ) {
     let path = app.state::<AppPathsState>().inner().log_file.clone();
-    append_structured_log(&path, level, event, details);
+    crate::logging::write(&path, level, event, details);
 }
 
 pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppBootstrap, String> {
