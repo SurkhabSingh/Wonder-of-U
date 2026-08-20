@@ -917,6 +917,12 @@ function App() {
           }}
         />
 
+      {bootstrap.loggingFailure ? (
+        <section className="banner banner-error">
+          Logging is unavailable, so a problem report from this session will be
+          incomplete. {bootstrap.loggingFailure}
+        </section>
+      ) : null}
       {loadError ? (
         <section className="banner banner-error">{loadError}</section>
       ) : null}

@@ -795,6 +795,12 @@ pub(crate) struct AppBootstrap {
     /// be listed as optional while nothing could be transcribed without it.
     pub(crate) transcription_requirements: Vec<TranscriptionRequirement>,
     pub(crate) log_path: String,
+    /// Why logging is not working, when it is not.
+    ///
+    /// A write failure used to be discarded, so a user could hand over a file that was silently
+    /// short and neither side could tell. This is a condition the app is IN rather than the
+    /// outcome of one action, which is what makes it the banner's business and not a toast's.
+    pub(crate) logging_failure: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

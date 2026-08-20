@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -27,17 +26,12 @@ fn now_ms() -> u64 {
 }
 
 fn write_worker_log(log_path: &Path, level: &str, event: &str, message: &str) {
-    let payload = serde_json::json!({
-        "tsMs": now_ms(),
-        "level": level,
-        "event": event,
-        "message": message,
-        "source": "recording-worker"
-    });
-
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-        let _ = writeln!(file, "{payload}");
-    }
+    crate::logging::write(
+        log_path,
+        level,
+        event,
+        serde_json::json!({ "message": message, "source": "recording-worker" }),
+    );
 }
 
 /// How often the capture loop reports the input level to the UI. Fast enough for

@@ -545,6 +545,7 @@ export type AppBootstrap = {
   knownWords: KnownWordsSnapshot;
   transcriptionRequirements: TranscriptionRequirement[];
   logPath: string;
+  loggingFailure: string | null;
 };
 
 export type AnkiCatalog = {

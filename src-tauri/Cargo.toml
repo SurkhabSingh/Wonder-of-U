@@ -44,6 +44,10 @@ lindera = "4"
 # half-width katakana, and a word differing only by width is the same word.
 unicode-normalization = "0.1"
 
+# Local time as an RFC 3339 string for log records. `clock` is the only feature needed;
+# the default feature set pulls in serialisation and locale support this does not use.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10.1"
 windows-sys = { version = "0.61.2", features = [
