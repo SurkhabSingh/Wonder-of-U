@@ -344,6 +344,21 @@ mod tests {
         assert!(!path.with_extension("1.log").exists());
     }
 
+    /// A write that cannot land has to be reported, because the alternative is a user handing
+    /// over a file that is silently short.
+    ///
+    /// Deliberately only asserts that a failure IS recorded, never that none is: the context is
+    /// process-wide, so a test asserting the absence would race any other test that writes.
+    #[test]
+    fn a_write_that_cannot_land_is_reported() {
+        let unwritable = Path::new("Z:/no-such-directory/nested/app.log");
+
+        write(unwritable, "INFO", "test.unwritable", serde_json::json!({}));
+
+        let reported = failure().expect("a failed write records why");
+        assert!(!reported.trim().is_empty(), "the reason must say something");
+    }
+
     /// End to end through the real writer: a line lands, it is valid JSON, and the account name
     /// is not in it.
     #[test]
