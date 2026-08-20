@@ -66,15 +66,26 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
         write_persisted_data(&app_handle, &snapshot).map_err(setup_error)?;
     }
 
-    append_structured_log(
-        &paths.log_file,
-        "INFO",
-        "app.startup",
-        serde_json::json!({
-            "dataDir": paths.data_dir.display().to_string(),
-            "stateFile": paths.state_file.display().to_string()
-        }),
-    );
+    // The hook goes in before anything else can panic, so a crash during the rest of startup
+    // is still recorded.
+    crate::logging::install_panic_hook(paths.log_file.clone());
+
+    let mut startup = crate::logging::environment();
+    if let Some(fields) = startup.as_object_mut() {
+        fields.insert(
+            "message".into(),
+            serde_json::json!("Wonder of U started."),
+        );
+        fields.insert(
+            "dataDir".into(),
+            serde_json::json!(paths.data_dir.display().to_string()),
+        );
+        fields.insert(
+            "stateFile".into(),
+            serde_json::json!(paths.state_file.display().to_string()),
+        );
+    }
+    append_structured_log(&paths.log_file, "INFO", "app.startup", startup);
 
     if let Err(error) = refresh_whisper_detection_state(&app_handle) {
         startup_warnings.push(format!(

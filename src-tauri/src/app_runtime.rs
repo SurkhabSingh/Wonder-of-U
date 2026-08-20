@@ -145,3 +145,56 @@ pub(crate) fn setup_error(message: impl Into<String>) -> tauri::Error {
     let boxed_error: Box<dyn std::error::Error> = Box::new(std::io::Error::other(message.into()));
     tauri::Error::Setup(boxed_error.into())
 }
+
+/// A plain-text block a user can paste into a bug report.
+///
+/// Deliberately not the log: this is the part a person will actually complete, and it answers
+/// the questions every report starts with. The log file is the optional attachment beside it.
+pub(crate) fn diagnostics_text<R: Runtime>(app: &AppHandle<R>) -> String {
+    let bootstrap = build_app_bootstrap(app);
+    let mut lines = vec![format!("Run: {}", crate::logging::run_id())];
+
+    if let Some(fields) = crate::logging::environment().as_object() {
+        for key in ["app", "os", "arch", "cpus", "webview"] {
+            if let Some(value) = fields.get(key) {
+                lines.push(format!("{key}: {}", value.to_string().trim_matches('"')));
+            }
+        }
+    }
+
+    match bootstrap {
+        Ok(state) => {
+            lines.push(format!(
+                "Whisper: {} ({})",
+                state.whisper_detection.status, state.settings.whisper.model_choice
+            ));
+            lines.push(format!("FFmpeg: {}", state.ffmpeg_detection.status));
+            lines.push(format!("yt-dlp: {}", state.ytdlp_detection.status));
+            lines.push(format!("alass: {}", state.alass_detection.status));
+            lines.push(format!("Dictionary: {}", state.dictionary_detection.status));
+            lines.push(format!(
+                "Anki mapping: {}",
+                if state.settings.anki.fields.transcription.is_empty() {
+                    "not mapped"
+                } else {
+                    "mapped"
+                }
+            ));
+            for requirement in &state.transcription_requirements {
+                lines.push(format!(
+                    "Requirement {}: {}",
+                    requirement.id,
+                    if requirement.ready { "ready" } else { "MISSING" }
+                ));
+            }
+        }
+        // Worth reporting rather than hiding: if this is what fails, it IS the bug.
+        Err(error) => lines.push(format!("State could not be read: {error}")),
+    }
+
+    if let Some(reason) = crate::logging::failure() {
+        lines.push(format!("Logging: UNAVAILABLE ({reason})"));
+    }
+
+    lines.join("\n")
+}

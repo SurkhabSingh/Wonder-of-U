@@ -179,8 +179,25 @@ fn rotate_if_needed(path: &Path) {
     let _ = fs::rename(path, numbered(1));
 }
 
+/// Whether routine detail is written.
+///
+/// Four levels, and DEBUG is the one that is normally dropped: two events accounted for 44% of
+/// the file, and a log whose signal is a twentieth of its lines is one nobody reads. Set
+/// `WONDER_OF_U_LOG=debug` to keep them while working on something.
+fn debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("WONDER_OF_U_LOG")
+            .map(|value| value.eq_ignore_ascii_case("debug"))
+            .unwrap_or(false)
+    })
+}
+
 /// Writes one line. The only function in the app that appends to the log.
 pub(crate) fn write(path: &Path, level: &str, event: &str, mut details: Value) {
+    if level == "DEBUG" && !debug_enabled() {
+        return;
+    }
     let msg = take_message(&mut details);
     let mut line = LogLine {
         ts: timestamp(),
@@ -221,6 +238,97 @@ pub(crate) fn write(path: &Path, level: &str, event: &str, mut details: Value) {
 /// file is read on another machine.
 fn timestamp() -> String {
     chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false)
+}
+
+/// What this machine is, for the first line of every run.
+///
+/// A handed-over log answers "what went wrong" only if it also answers "on what". Without this
+/// every question about a report starts with a round trip asking for the version.
+///
+/// The run id is not here: every record already carries it, and describing the machine is a
+/// different question from identifying the launch.
+pub(crate) fn environment() -> serde_json::Value {
+    serde_json::json!({
+        "app": env!("CARGO_PKG_VERSION"),
+        "os": windows_release(),
+        "arch": std::env::consts::ARCH,
+        "cpus": std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(0),
+        "webview": tauri::webview_version().unwrap_or_else(|_| "unknown".into()),
+    })
+}
+
+/// The Windows edition and build, read from the registry.
+///
+/// The registry rather than an API call because `winreg` is already a dependency and this needs
+/// no unsafe block. `CurrentBuild` is what distinguishes the releases that actually behave
+/// differently; the marketing name alone does not.
+#[cfg(windows)]
+fn windows_release() -> String {
+    use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+
+    let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+    else {
+        return "windows (unreadable)".into();
+    };
+    let read = |name: &str| key.get_value::<String, _>(name).unwrap_or_default();
+
+    let product = read("ProductName");
+    let display = read("DisplayVersion");
+    let build = read("CurrentBuild");
+    let ubr: u32 = key.get_value("UBR").unwrap_or(0);
+
+    let mut description = if product.is_empty() { "Windows".into() } else { product };
+    if !display.is_empty() {
+        description.push_str(&format!(" {display}"));
+    }
+    if !build.is_empty() {
+        description.push_str(&format!(" (build {build}.{ubr})"));
+    }
+    description
+}
+
+#[cfg(not(windows))]
+fn windows_release() -> String {
+    std::env::consts::OS.to_string()
+}
+
+/// Writes a panic to the log before the process goes.
+///
+/// A crash is the one case where nothing was recorded at all: the default hook prints to a
+/// stderr no user sees. Installed once at startup, and it chains to the previous hook so the
+/// usual console output still happens while developing.
+pub(crate) fn install_panic_hook(path: std::path::PathBuf) {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // `info.payload()` is the panic's own message; the location is where it was raised.
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".to_string());
+        let location = info
+            .location()
+            .map(|at| format!("{}:{}:{}", at.file(), at.line(), at.column()))
+            .unwrap_or_else(|| "unknown".into());
+
+        write(
+            &path,
+            "ERROR",
+            "app.panicked",
+            serde_json::json!({
+                "message": message,
+                "location": location,
+                "thread": std::thread::current().name().unwrap_or("unnamed").to_string(),
+                "backtrace": std::backtrace::Backtrace::force_capture().to_string(),
+            }),
+        );
+
+        previous(info);
+    }));
 }
 
 #[cfg(test)]
@@ -357,6 +465,52 @@ mod tests {
 
         let reported = failure().expect("a failed write records why");
         assert!(!reported.trim().is_empty(), "the reason must say something");
+    }
+
+    /// Routine detail stays out of the file unless it is asked for.
+    ///
+    /// Asserted against the default environment, which is what a user runs: two events were 44%
+    /// of the file before this, and a log that is mostly routine success is one nobody reads.
+    #[test]
+    fn debug_records_are_dropped_unless_enabled() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("levels.log");
+
+        write(&path, "DEBUG", "test.routine", serde_json::json!({ "message": "noise" }));
+        assert!(!path.exists(), "a DEBUG record created the file");
+
+        for level in ["INFO", "WARN", "ERROR"] {
+            write(&path, level, "test.kept", serde_json::json!({ "message": level }));
+        }
+        let kept = fs::read_to_string(&path).unwrap();
+        assert_eq!(kept.lines().count(), 3, "{kept}");
+        assert!(!kept.contains("noise"));
+    }
+
+    /// A real panic, through the real hook, landing in a real file.
+    ///
+    /// `catch_unwind` stops the test process dying while still running the hook exactly as a
+    /// crash would, so this exercises the thing rather than a stand-in for it.
+    #[test]
+    fn a_panic_is_written_before_the_process_goes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("panic.log");
+        install_panic_hook(path.clone());
+
+        let result = std::panic::catch_unwind(|| panic!("a deliberate test panic"));
+        assert!(result.is_err(), "the panic must still propagate");
+
+        let contents = fs::read_to_string(&path).expect("the hook wrote the file");
+        let record: Value = serde_json::from_str(contents.lines().next().unwrap()).unwrap();
+        assert_eq!(record["level"], "ERROR");
+        assert_eq!(record["event"], "app.panicked");
+        assert_eq!(record["msg"], "a deliberate test panic");
+        let location = record["details"]["location"].as_str().unwrap();
+        assert!(location.contains("logging.rs"), "{location}");
+        assert!(
+            record["details"]["backtrace"].as_str().is_some_and(|t| !t.is_empty()),
+            "a panic without a backtrace is half a report"
+        );
     }
 
     /// End to end through the real writer: a line lands, it is valid JSON, and the account name

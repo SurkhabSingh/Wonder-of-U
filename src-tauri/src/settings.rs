@@ -131,7 +131,7 @@ pub(crate) fn save_settings_inner<R: Runtime>(
     write_persisted_data(app, &snapshot)?;
     log_event(
         app,
-        "INFO",
+        "DEBUG",
         "settings.saved",
         serde_json::json!({
             "outputDirectory": normalized.output_directory,

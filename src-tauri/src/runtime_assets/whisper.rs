@@ -352,7 +352,7 @@ pub(crate) fn refresh_whisper_detection_state<R: Runtime>(
 
     log_event(
         app,
-        "INFO",
+        "DEBUG",
         "whisper.ready_state",
         serde_json::json!({
             "status": detection.status,

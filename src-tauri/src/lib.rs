@@ -86,6 +86,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_bootstrap,
+            log_from_ui,
+            open_log_folder,
+            copy_diagnostics,
             download_recommended_whisper_model,
             download_whisper_vad_model,
             download_recommended_whisper_runtime,

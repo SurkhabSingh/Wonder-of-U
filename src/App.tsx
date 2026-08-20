@@ -31,6 +31,7 @@ import { useSetupActions } from "./hooks/useSetupActions";
 import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import { useYoutubeQueue } from "./hooks/useYoutubeQueue";
 import { fileNameFromPath } from "./lib/format";
+import { logToFile } from "./lib/log";
 import { isDownloadBusy } from "./types";
 import type {
   AppBootstrap,
@@ -93,6 +94,9 @@ function App() {
   // reading.
   function showError(message: string) {
     toast.error(message, { duration: 5000 });
+    // Every failed command already funnels through here, so this is the one place that catches
+    // them without fifty call sites each remembering to log.
+    logToFile("ERROR", "action_failed", message);
   }
 
   // The engine reports a user Cancel as an ordinary Err carrying this exact string, so
@@ -1384,6 +1388,7 @@ function App() {
             downloadIsActive={downloadIsActive}
             onUpdateSettings={updateSettings}
             onBrowseDirectory={browseForDirectory}
+            onShowError={showError}
             onBrowseFile={browseForFile}
             onCheckRuntimeUpdate={checkRuntimeUpdate}
             onDownloadRuntimeVersion={downloadRuntimeVersion}
