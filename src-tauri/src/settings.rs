@@ -106,6 +106,9 @@ pub(crate) fn save_settings_inner<R: Runtime>(
     let mut normalized =
         normalize_settings(app, &paths, settings).map_err(|error| error.to_string())?;
     ensure_directory_exists(Path::new(&normalized.output_directory))?;
+    // The folder can move, and a name is only replaced while the writer knows where recordings
+    // live — so this follows the setting rather than being read once at startup.
+    crate::logging::set_recordings_directory(&normalized.output_directory);
     ensure_directory_exists(Path::new(&normalized.asset_directory))?;
 
     let launch_at_login_changed = normalized.launch_at_login != previous_settings.launch_at_login;
@@ -131,7 +134,7 @@ pub(crate) fn save_settings_inner<R: Runtime>(
     write_persisted_data(app, &snapshot)?;
     log_event(
         app,
-        "INFO",
+        "DEBUG",
         "settings.saved",
         serde_json::json!({
             "outputDirectory": normalized.output_directory,

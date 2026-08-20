@@ -17,6 +17,7 @@ import { ScannerSettingsPage } from "./ScannerSettingsPage";
 import { AnkiMappingSettingsPage } from "./AnkiMappingSettingsPage";
 import { ModelSettingsPage } from "./ModelSettingsPage";
 import { PreferencesSettingsPage } from "./PreferencesSettingsPage";
+import { TroubleshootingSettings } from "./TroubleshootingSettings";
 import { RuntimeSettingsPage } from "./RuntimeSettingsPage";
 import type {
   BrowseDirectoryField,
@@ -51,6 +52,7 @@ export function SettingsPages({
   downloadIsActive,
   onUpdateSettings,
   onBrowseDirectory,
+  onShowError,
   onBrowseFile,
   onCheckRuntimeUpdate,
   onDownloadRuntimeVersion,
@@ -94,6 +96,7 @@ export function SettingsPages({
   downloadIsActive: boolean;
   onUpdateSettings: (update: SettingsUpdate) => void;
   onBrowseDirectory: (field: BrowseDirectoryField) => void | Promise<void>;
+  onShowError: (message: string) => void;
   onBrowseFile: (field: BrowseFileField) => void | Promise<void>;
   onCheckRuntimeUpdate: () => void | Promise<void>;
   onDownloadRuntimeVersion: (version: string) => void | Promise<void>;
@@ -144,6 +147,10 @@ export function SettingsPages({
             onBrowseDirectory={onBrowseDirectory}
             onUpdateSettings={onUpdateSettings}
             settingsDraft={settingsDraft}
+          />
+          <TroubleshootingSettings
+            logPath={bootstrap.logPath}
+            onError={onShowError}
           />
         </section>
 

@@ -38,7 +38,7 @@ use crate::{
         push_recordings_to_anki_inner, rank_transcript_lines_inner, refresh_known_words_inner,
         scan_vocabulary_sources_inner,
     },
-    app_runtime::{build_app_bootstrap, emit_app_snapshot},
+    app_runtime::{build_app_bootstrap, emit_app_snapshot, log_event},
     app_types::{
         AnkiCatalog, AppBootstrap, AppSettings, KnownWordsSnapshot, MinedSentences,
         MineLineRequest, MinedLinesResult, RecordingBatchResult, RecordingTexts,
@@ -64,6 +64,80 @@ use crate::{
     },
     settings::save_settings_inner,
 };
+
+/// Writes a line the interface produced.
+///
+/// The frontend has no file access of its own, and it should not: the backend owns the path,
+/// the redaction and the rotation, so a record from either side is treated identically. The
+/// level is clamped rather than trusted — a value from the webview must not be able to invent
+/// a severity the file has never carried.
+#[tauri::command]
+pub(crate) fn log_from_ui(
+    app: AppHandle,
+    level: String,
+    event: String,
+    message: String,
+    details: serde_json::Value,
+) {
+    let level = match level.as_str() {
+        "ERROR" => "ERROR",
+        "WARN" => "WARN",
+        _ => "INFO",
+    };
+    let mut details = details;
+    if let Some(fields) = details.as_object_mut() {
+        fields.insert("message".into(), serde_json::json!(message));
+    }
+    log_event(&app, level, &format!("ui.{}", event.trim_start_matches("ui.")), details);
+}
+
+/// Shows the log file in the file manager, with it selected.
+///
+/// Spawning the file manager rather than adding an opener plugin: one process spawn against a
+/// path the app itself owns, which is a thing this codebase already does in several places.
+#[tauri::command]
+pub(crate) fn open_log_folder(app: AppHandle) -> Result<(), String> {
+    let path = app.state::<crate::app_types::AppPathsState>().inner().log_file.clone();
+    let folder = path
+        .parent()
+        .ok_or_else(|| "The log file has no folder.".to_string())?
+        .to_path_buf();
+    // Create it first: on a fresh install nothing has been logged yet, and opening a folder
+    // that does not exist reports a confusing failure.
+    let _ = std::fs::create_dir_all(&folder);
+
+    #[cfg(windows)]
+    {
+        // `/select,` highlights the file itself. Without it the user lands in a folder and has
+        // to work out which of several rotated files is the current one.
+        let argument = if path.exists() {
+            format!("/select,{}", path.display())
+        } else {
+            folder.display().to_string()
+        };
+        std::process::Command::new("explorer.exe")
+            .arg(argument)
+            // explorer returns a non-zero exit code even when it succeeds, so the status is
+            // deliberately not checked; only a failure to spawn is a real failure.
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&folder)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// The text block for a bug report.
+#[tauri::command]
+pub(crate) fn copy_diagnostics(app: AppHandle) -> String {
+    crate::app_runtime::diagnostics_text(&app)
+}
 
 #[tauri::command]
 pub(crate) fn get_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {

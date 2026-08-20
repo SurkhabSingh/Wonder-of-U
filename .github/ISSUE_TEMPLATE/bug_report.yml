@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in Wonder of U does not work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things make a report answerable: what the app is running on, and what it recorded
+        while the problem happened. Both are one button each in **Settings → Troubleshooting**.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: |
+        I pressed Download what's missing on the Home page.
+        I expected the model to download.
+        The card went back to showing the button and nothing downloaded.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: App and system summary
+      description: >-
+        Settings → Troubleshooting → **Copy summary**, then paste it here. It reports the app
+        version, Windows build, and which components are installed.
+      render: text
+      placeholder: |
+        Run: 1a01ea258c9
+        app: 0.1.0
+        os: Windows 11 (build 26200.9168)
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >-
+        Settings → Troubleshooting → **Open log folder**, then attach `wonder-of-u.log` by
+        dragging it here, or paste the lines from around the time it went wrong.
+
+
+        The log holds file locations, recording names, and what each action did. Your Windows
+        account name is replaced before anything is written, but recording names come from what
+        was said, so read it before posting if that matters to you.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Only needed if you could not run Copy summary.
+      placeholder: "0.1.0"
+    validations:
+      required: false
