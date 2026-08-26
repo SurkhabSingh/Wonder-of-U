@@ -680,6 +680,7 @@ pub(crate) async fn add_watched_video(
         } else {
             ffmpeg.as_ref().and_then(|ffmpeg| {
                 capture_thumbnail(
+                    &app,
                     Path::new(ffmpeg),
                     &path,
                     Path::new(&settings.asset_directory),

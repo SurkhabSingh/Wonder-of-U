@@ -14,6 +14,8 @@ use std::{collections::HashSet, path::Path};
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::app_runtime::log_event;
+
 use crate::{
     app_types::{
         KnownWordsBuild, SharedPersistedState, VocabularySource, VocabularySuggestion,
@@ -261,19 +263,31 @@ fn mature_notes_query(note_type: &str, mature_after_days: u32) -> String {
     format!("note:\"{escaped}\" prop:ivl>={mature_after_days}")
 }
 
+/// `Ok(None)` is "no suggestion for this note type" — the ordinary answer for most of them.
+/// `Err` is a query that FAILED, which used to be the same `None` and so was invisible.
+///
+/// The two are told apart here and logged by the caller, which is the half that holds the
+/// app handle. Keeping this function free of one also keeps it callable from the collection
+/// test, which has no Tauri runtime to hand it.
+///
+/// Anki is known reachable by the time this runs — the caller's `modelNames` request would
+/// have failed the whole scan otherwise — so a failure here is unusual enough to be worth a
+/// line rather than a shrug.
 fn examine_note_type(
     note_type: &str,
     mature_after_days: u32,
     dictionary_path: &Path,
     already_configured: &HashSet<(String, String)>,
-) -> Option<VocabularySuggestion> {
-    let mature = anki_find_notes(&mature_notes_query(note_type, mature_after_days)).ok()?;
+) -> Result<Option<VocabularySuggestion>, String> {
+    let mature = anki_find_notes(&mature_notes_query(note_type, mature_after_days))
+        .map_err(|error| format!("findNotes: {error}"))?;
     if mature.len() < MIN_MATURE_NOTES {
-        return None;
+        return Ok(None);
     }
 
     let sample = spread_sample(mature.clone());
-    let notes = anki_notes_info(&sample).ok()?;
+    let notes =
+        anki_notes_info(&sample).map_err(|error| format!("notesInfo: {error}"))?;
 
     // Best single-token rate wins. The name is a tie-break only, and the field's own
     // order breaks a remaining tie so the answer is stable across runs rather than
@@ -291,16 +305,19 @@ fn examine_note_type(
                 std::cmp::Reverse(*index),
             )
         })
-        .map(|(_, score)| score)?;
+        .map(|(_, score)| score);
+    let Some(best) = best else {
+        return Ok(None);
+    };
 
-    Some(VocabularySuggestion {
+    Ok(Some(VocabularySuggestion {
         already_added: already_configured
             .contains(&(note_type.to_string(), best.field.clone())),
         note_type: note_type.to_string(),
         field: best.field,
         mature_note_count: mature.len(),
         samples: best.samples,
-    })
+    }))
 }
 
 fn scan_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(u32, String, Vec<VocabularySource>), String> {
@@ -357,12 +374,26 @@ pub(crate) fn scan_vocabulary_sources_inner<R: Runtime>(
     let mut suggestions: Vec<VocabularySuggestion> = note_types
         .iter()
         .filter_map(|note_type| {
-            examine_note_type(
+            match examine_note_type(
                 note_type,
                 mature_after_days,
                 &dictionary_path,
                 &already_configured,
-            )
+            ) {
+                Ok(suggestion) => suggestion,
+                // Logged rather than dropped: with Anki already proven reachable, a note
+                // type failing its own query is worth knowing about, and a scan that
+                // quietly returns fewer decks than it examined explains nothing.
+                Err(message) => {
+                    log_event(
+                        app,
+                        "WARN",
+                        "anki.note_type_scan_failed",
+                        serde_json::json!({ "message": message }),
+                    );
+                    None
+                }
+            }
         })
         .collect();
     // Biggest first: the deck contributing the most words is the one whose
@@ -567,14 +598,16 @@ mod tests {
         let empty = HashSet::new();
         for note_type in &note_types {
             match examine_note_type(note_type, 21, &dictionary, &empty) {
-                Some(found) => println!(
+                Ok(Some(found)) => println!(
                     "  PROPOSE  {:<28} -> {:<22} {:>5} mature   {}",
                     found.note_type,
                     found.field,
                     found.mature_note_count,
                     found.samples.join(" | ")
                 ),
-                None => println!("  skip     {note_type}"),
+                Ok(None) => println!("  skip     {note_type}"),
+                // Previously indistinguishable from a skip, which is the whole point.
+                Err(message) => println!("  FAILED   {note_type}: {message}"),
             }
         }
     }
