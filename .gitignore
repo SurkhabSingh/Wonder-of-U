@@ -48,3 +48,9 @@ tmp/
 # Test artifacts
 test-output/
 playwright-report/
+
+# Design drafts. Scaffolding for arguing about layouts, never shipped: the markup is
+# static strings and nothing is wired to state. Ignored so a stray `git add -A` on any
+# branch cannot carry it into a push.
+/src/components/design/
+/src/styles/designPreview.css
