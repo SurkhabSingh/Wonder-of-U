@@ -239,7 +239,7 @@ pub(crate) fn derive_transcript_language_from_path(
         return Some(language);
     }
 
-    let transcript = fs::read_to_string(transcript_path).ok()?;
+    let transcript = crate::text_files::read_external_text(transcript_path).ok()?;
     if transcript_looks_japanese(&transcript) {
         Some("ja".into())
     } else {

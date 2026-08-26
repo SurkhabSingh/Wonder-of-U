@@ -119,8 +119,12 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
         video_path,
     );
 
-    let raw = parse_whisper_segments(&result.json_path)
-        .ok_or_else(|| "Whisper produced no readable segments for this video.".to_string())?;
+    // Carries the reason rather than collapsing every cause into one sentence: this path had
+    // the same silent hole as the recording library, where a single truncated byte in
+    // whisper's json discarded every cue.
+    let raw = parse_whisper_segments(&result.json_path).map_err(|reason| {
+        format!("No subtitles could be generated for this video. {}", reason.message())
+    })?;
     // Deliberately the OLD rule, not the waveform trim the recording library uses. This path
     // is verified working and frozen on request: the trim moves cue starts, which is the one
     // thing that could disturb subtitle sync, and no rule at all leaves each cue running to

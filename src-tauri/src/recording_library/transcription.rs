@@ -309,6 +309,18 @@ pub(crate) fn resolve_whisper_engine<R: Runtime>(
     })
 }
 
+/// Whether the transcript for `language` carries per-sentence timings.
+///
+/// Asks about THAT language rather than whether ANY transcript has segments. A recording can
+/// hold a Japanese transcript with timings and a Korean one without, and "any" would report
+/// the Korean one as fine — which is exactly the blindness `hasSegments` was added to remove.
+fn transcript_has_segments(transcripts: &[RecordingTranscript], language: &str) -> bool {
+    transcripts
+        .iter()
+        .find(|transcript| transcript.language == language)
+        .is_some_and(|transcript| transcript.segments_path.is_some())
+}
+
 fn apply_transcription_result_to_recording<R: Runtime>(
     app: &AppHandle<R>,
     original_file_path: &str,
@@ -413,8 +425,8 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     // Parse whisper's per-segment json and drop a clean `{stem}.{lang}.segments.json`
     // sidecar beside the audio so playback can jump per sentence. `recording.file_path`
     // is now the final audio path (renamed for the first transcript, unchanged for
-    // additional languages), so its stem is exactly the one to mirror. A missing or
-    // unparseable json leaves `segments_path` None and never fails transcription.
+    // additional languages), so its stem is exactly the one to mirror. Losing the timings
+    // still never fails transcription — but every way of losing them now says so.
     let segments_path =
         match store_segments_sidecar(
             &recording.file_path,
@@ -424,7 +436,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
             recording.duration_ms,
             envelope,
         ) {
-            Ok(sidecars) => sidecars.map(|sidecars| {
+            Ok(SegmentsOutcome::Written(sidecars)) => {
                 if sidecars.subtitle_path.is_none() {
                     log_event(
                         app,
@@ -432,12 +444,28 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                         "recording.store_subtitle_failed",
                         serde_json::json!({
                             "audioPath": recording.file_path,
-                            "message": "The segments were saved but the subtitle file could                                         not be written."
+                            "message": "The segments were saved but the subtitle file could not be written."
                         }),
                     );
                 }
-                sidecars.segments_path.display().to_string()
-            }),
+                Some(sidecars.segments_path.display().to_string())
+            }
+            // The branch that used to be silent. A recording keeps its transcript and
+            // loses per-sentence playback, which is worth a line either way.
+            Ok(SegmentsOutcome::Skipped(reason)) => {
+                log_event(
+                    app,
+                    "WARN",
+                    "recording.segments_skipped",
+                    serde_json::json!({
+                        "audioPath": recording.file_path,
+                        "language": language,
+                        "reason": reason.id(),
+                        "message": reason.message()
+                    }),
+                );
+                None
+            }
             Err(error) => {
                 log_event(
                     app,
@@ -496,13 +524,8 @@ fn store_additional_language_transcript(
     Ok(target)
 }
 
-/// Parse whisper's `--output-json` sidecar into the clean segment array and write
-/// `{stem}.{lang}.segments.json` beside the audio, mirroring how the transcript
-/// sidecar is named/placed. Returns `Ok(Some(path))` on success, `Ok(None)` when
-/// the json is absent or carries no parseable segments (a normal, non-fatal case),
-/// and `Err` only when the sidecar itself could not be written.
 /// What a successful transcription left beside the audio.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct TranscriptSidecars {
     /// `{stem}.{lang}.segments.json`, the per-sentence timings the viewer and miner read.
     pub(crate) segments_path: PathBuf,
@@ -511,6 +534,11 @@ pub(crate) struct TranscriptSidecars {
     pub(crate) subtitle_path: Option<PathBuf>,
 }
 
+/// Parse whisper's `--output-json` sidecar into the clean segment array and write
+/// `{stem}.{lang}.segments.json` beside the audio, mirroring how the transcript sidecar is
+/// named/placed. `Skipped` carries WHY nothing was written — it used to be a bare `None`
+/// that logged nothing, so a recording could lose every timestamp silently. `Err` is
+/// reserved for the sidecar itself failing to write.
 pub(crate) fn store_segments_sidecar(
     audio_file_path: &str,
     json_path: &Path,
@@ -518,17 +546,19 @@ pub(crate) fn store_segments_sidecar(
     transcript_path: &Path,
     duration_ms: u64,
     envelope: Option<&SpeechEnvelope>,
-) -> Result<Option<TranscriptSidecars>, String> {
+) -> Result<SegmentsOutcome, String> {
     let raw = match parse_whisper_segments(json_path) {
-        Some(segments) if !segments.is_empty() => segments,
-        _ => return Ok(None),
+        Ok(segments) => segments,
+        Err(reason) => return Ok(SegmentsOutcome::Skipped(reason)),
     };
 
     // Repair whisper's runaway repetition and out-of-bounds tails before persisting.
     let raw_len = raw.len();
     let segments = clean_segments(raw, duration_ms, CueTiming::TrimToSpeech(envelope));
     if segments.is_empty() {
-        return Ok(None);
+        return Ok(SegmentsOutcome::Skipped(
+            SegmentsSkip::CleaningRemovedEverything,
+        ));
     }
 
     let _rename_guard = OUTPUT_RENAME_LOCK
@@ -584,7 +614,7 @@ pub(crate) fn store_segments_sidecar(
         Err(_) => None,
     };
 
-    Ok(Some(TranscriptSidecars {
+    Ok(SegmentsOutcome::Written(TranscriptSidecars {
         segments_path: target,
         subtitle_path,
     }))
@@ -784,10 +814,17 @@ pub(crate) fn clean_segments(
 /// Read whisper's json and convert its `transcription[].offsets.{from,to}` (ms)
 /// plus text into the clean segment array. Returns `None` for a missing or
 /// unparseable file so the caller can degrade to no segments.
-pub(crate) fn parse_whisper_segments(json_path: &Path) -> Option<Vec<RecordingSegment>> {
-    let raw = fs::read_to_string(json_path).ok()?;
-    let parsed: WhisperJson = serde_json::from_str(&raw).ok()?;
-    let segments = parsed
+pub(crate) fn parse_whisper_segments(
+    json_path: &Path,
+) -> Result<Vec<RecordingSegment>, SegmentsSkip> {
+    // `read_external_text`, never `read_to_string`: whisper can end a segment on a
+    // truncated multi-byte character, and a strict read throws away every timestamp in
+    // the file over that one byte. See `text_files`.
+    let raw = crate::text_files::read_external_text(json_path)
+        .map_err(|_| SegmentsSkip::JsonUnreadable)?;
+    let parsed: WhisperJson =
+        serde_json::from_str(&raw).map_err(|_| SegmentsSkip::JsonNotWhisperShaped)?;
+    let segments: Vec<RecordingSegment> = parsed
         .transcription
         .into_iter()
         .map(|entry| RecordingSegment {
@@ -796,7 +833,62 @@ pub(crate) fn parse_whisper_segments(json_path: &Path) -> Option<Vec<RecordingSe
             end_ms: entry.offsets.to,
         })
         .collect();
-    Some(segments)
+    if segments.is_empty() {
+        return Err(SegmentsSkip::JsonHeldNoSegments);
+    }
+    Ok(segments)
+}
+
+/// Why no segments sidecar was written.
+///
+/// These were one `Ok(None)` before, indistinguishable from each other AND from success:
+/// nothing was logged on that path at all, so a recording could lose every timestamp and
+/// leave no evidence anywhere. Each arm is a genuinely different problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SegmentsSkip {
+    /// The json whisper was asked to write is absent or could not be opened.
+    JsonUnreadable,
+    /// It was read, but it is not the `--output-json` shape.
+    JsonNotWhisperShaped,
+    /// Valid json, but it carried no transcription entries.
+    JsonHeldNoSegments,
+    /// Whisper produced segments and cleaning removed all of them — every one was a stock
+    /// hallucination phrase, or started past the end of the audio.
+    CleaningRemovedEverything,
+}
+
+impl SegmentsSkip {
+    /// Stable id for the log, so these can be counted across users.
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            SegmentsSkip::JsonUnreadable => "json_unreadable",
+            SegmentsSkip::JsonNotWhisperShaped => "json_not_whisper_shaped",
+            SegmentsSkip::JsonHeldNoSegments => "json_held_no_segments",
+            SegmentsSkip::CleaningRemovedEverything => "cleaning_removed_everything",
+        }
+    }
+
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            SegmentsSkip::JsonUnreadable => {
+                "Whisper's timing file was missing or could not be opened."
+            }
+            SegmentsSkip::JsonNotWhisperShaped => {
+                "Whisper's timing file was not in the expected format."
+            }
+            SegmentsSkip::JsonHeldNoSegments => "Whisper's timing file listed no segments.",
+            SegmentsSkip::CleaningRemovedEverything => {
+                "Every segment was filtered out as a hallucination or past the end of the audio."
+            }
+        }
+    }
+}
+
+/// What `store_segments_sidecar` did. Replaces `Option`, which could not say why.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SegmentsOutcome {
+    Written(TranscriptSidecars),
+    Skipped(SegmentsSkip),
 }
 
 #[derive(serde::Deserialize)]
@@ -1061,9 +1153,16 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                     app,
                     "INFO",
                     "transcription.saved",
+                    // `hasSegments` so "does this recording have per-sentence playback"
+                    // is answerable from the log alone. Without it the only way to tell
+                    // was listing the user's folder.
                     serde_json::json!({
                         "audioPath": updated_recording.file_path,
-                        "transcriptPath": updated_recording.transcript_path
+                        "transcriptPath": updated_recording.transcript_path,
+                        "hasSegments": transcript_has_segments(
+                            &updated_recording.transcripts,
+                            &transcript_language_key(&settings.whisper.language),
+                        )
                     }),
                 );
 
@@ -1162,7 +1261,7 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
 }
 
 fn derive_transcript_stem(transcript_path: &Path) -> Result<String, String> {
-    let transcript = fs::read_to_string(transcript_path).map_err(|error| error.to_string())?;
+    let transcript = crate::text_files::read_external_text(transcript_path).map_err(|error| error.to_string())?;
     let collapsed = transcript.split_whitespace().collect::<Vec<_>>().join(" ");
     let shortened = collapsed.chars().take(10).collect::<String>();
     let sanitized = sanitize_recording_name(&shortened);
@@ -1224,6 +1323,118 @@ fn unique_recording_output_paths(directory: &Path, file_stem: &str) -> (PathBuf,
 
 #[cfg(test)]
 mod tests {
+    /// The discriminating case for `hasSegments`, which cannot be forced through the UI:
+    /// it needs one language WITH timings and another WITHOUT on the same recording, and
+    /// whether a given language loses its timings depends on what whisper happens to emit.
+    #[test]
+    fn has_segments_answers_for_the_language_asked_not_for_any_language() {
+        use super::transcript_has_segments;
+        use crate::app_types::RecordingTranscript;
+
+        let transcripts = vec![
+            RecordingTranscript {
+                language: "ja".into(),
+                file_path: "clip.ja.transcript.txt".into(),
+                detected_language: Some("ja".into()),
+                segments_path: Some("clip.ja.segments.json".into()),
+            },
+            RecordingTranscript {
+                language: "ko".into(),
+                file_path: "clip.ko.transcript.txt".into(),
+                detected_language: Some("ko".into()),
+                segments_path: None,
+            },
+        ];
+
+        assert!(
+            transcript_has_segments(&transcripts, "ja"),
+            "the language that has timings must report true",
+        );
+        assert!(
+            !transcript_has_segments(&transcripts, "ko"),
+            "the language WITHOUT timings must report false even though a sibling has them",
+        );
+        assert!(
+            !transcript_has_segments(&transcripts, "fr"),
+            "a language with no transcript at all has no timings",
+        );
+
+        // The shape this replaced. Kept as an assertion rather than a comment so the
+        // difference is executable: `any()` calls the Korean transcript fine.
+        let any_says = transcripts
+            .iter()
+            .any(|transcript| transcript.segments_path.is_some());
+        assert!(
+            any_says && !transcript_has_segments(&transcripts, "ko"),
+            "this test only means something while the two answers disagree",
+        );
+    }
+
+    /// The bug this file's lossy read exists for, in the shape it actually arrived in.
+    ///
+    /// whisper ended a segment on a truncated multi-byte character — "농" (EB 86 8D) emitted
+    /// as its first two bytes. `fs::read_to_string` rejects the whole file for that one byte,
+    /// so a 22-minute Korean recording kept its transcript and lost all 164 of its
+    /// timestamps, with nothing logged. Re-transcribing reproduced it exactly.
+    #[test]
+    fn a_truncated_character_in_whispers_json_still_yields_every_other_segment() {
+        use super::{parse_whisper_segments, SegmentsSkip};
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("whisper-temp.json");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(
+            br#"{"transcription":[
+                {"offsets":{"from":0,"to":900},"text":"first"},
+                {"offsets":{"from":900,"to":1800},"text":""#,
+        );
+        bytes.extend_from_slice(&[0xEB, 0x86, 0x8D]); // a whole character
+        bytes.extend_from_slice(&[0xEB, 0x86]); // and one cut short — the bug
+        bytes.extend_from_slice(
+            br#""},
+                {"offsets":{"from":1800,"to":2700},"text":"third"}
+            ]}"#,
+        );
+        fs::write(&json_path, &bytes).unwrap();
+
+        assert!(
+            fs::read_to_string(&json_path).is_err(),
+            "the fixture must be invalid UTF-8, or this test proves nothing",
+        );
+
+        let segments = parse_whisper_segments(&json_path)
+            .expect("a truncated character must not discard the file");
+        assert_eq!(segments.len(), 3, "every segment survives");
+        assert_eq!(segments[0].text, "first");
+        assert_eq!(segments[2].text, "third");
+        assert_eq!(segments[2].end_ms, 2700, "timings are intact");
+        assert!(
+            segments[1].text.contains('\u{FFFD}'),
+            "only the truncated character is lost",
+        );
+
+        // And the reasons stay distinguishable, which is what makes the log useful.
+        let absent = dir.path().join("not-here.json");
+        assert_eq!(
+            parse_whisper_segments(&absent).unwrap_err(),
+            SegmentsSkip::JsonUnreadable,
+        );
+        let empty = dir.path().join("empty.json");
+        fs::write(&empty, br#"{"transcription":[]}"#).unwrap();
+        assert_eq!(
+            parse_whisper_segments(&empty).unwrap_err(),
+            SegmentsSkip::JsonHeldNoSegments,
+        );
+        let wrong = dir.path().join("wrong.json");
+        fs::write(&wrong, b"not json at all").unwrap();
+        assert_eq!(
+            parse_whisper_segments(&wrong).unwrap_err(),
+            SegmentsSkip::JsonNotWhisperShaped,
+        );
+    }
+
     use super::*;
 
     /// Settings whose only interesting field is the audio type and the asset directory.
@@ -1625,8 +1836,11 @@ mod tests {
             0,
             None,
         )
-        .unwrap()
-        .expect("a parseable json must yield a sidecar path");
+        .unwrap();
+        let stored = match stored {
+            SegmentsOutcome::Written(sidecars) => sidecars,
+            SegmentsOutcome::Skipped(reason) => panic!("expected a sidecar, skipped: {reason:?}"),
+        };
 
         assert_eq!(
             stored.segments_path,
@@ -1678,7 +1892,11 @@ Bonjour le monde
             None,
         )
         .unwrap();
-        assert!(result.is_none(), "a missing json must not produce a sidecar");
+        assert_eq!(
+            result,
+            SegmentsOutcome::Skipped(SegmentsSkip::JsonUnreadable),
+            "a missing json must say why, not just yield nothing",
+        );
 
         // A json that is not whisper-shaped parses to no segments.
         let garbage = dir.path().join("garbage.json");
@@ -1692,7 +1910,11 @@ Bonjour le monde
             None,
         )
         .unwrap();
-        assert!(result.is_none(), "unparseable json must not produce a sidecar");
+        assert_eq!(
+            result,
+            SegmentsOutcome::Skipped(SegmentsSkip::JsonNotWhisperShaped),
+            "unparseable json must say why, not just yield nothing",
+        );
 
         // No sidecar file was left behind for the language.
         assert!(!dir.path().join("hola_100.fr.segments.json").exists());
@@ -1934,8 +2156,11 @@ Bonjour le monde
             60_000,
             None,
         )
-        .unwrap()
-        .expect("a parseable json must yield a sidecar path");
+        .unwrap();
+        let stored = match stored {
+            SegmentsOutcome::Written(sidecars) => sidecars,
+            SegmentsOutcome::Skipped(reason) => panic!("expected a sidecar, skipped: {reason:?}"),
+        };
 
         let segments: Vec<RecordingSegment> =
             serde_json::from_str(&fs::read_to_string(&stored.segments_path).unwrap()).unwrap();
