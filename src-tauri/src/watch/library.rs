@@ -15,6 +15,8 @@ use std::{
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::app_runtime::log_event;
+
 use crate::{
     anki::screenshot::capture_screenshot,
     app_runtime::emit_app_snapshot,
@@ -200,7 +202,8 @@ pub(crate) fn remove_watched_video<R: Runtime>(
 ///
 /// Returns `None` on any failure. A missing thumbnail is a film icon in the list; it must never
 /// be the reason a video cannot be added.
-pub(crate) fn capture_thumbnail(
+pub(crate) fn capture_thumbnail<R: Runtime>(
+    app: &AppHandle<R>,
     ffmpeg_path: &Path,
     video_path: &Path,
     asset_directory: &Path,
@@ -208,7 +211,15 @@ pub(crate) fn capture_thumbnail(
     added_at_ms: u64,
 ) -> Option<std::path::PathBuf> {
     let directory = asset_directory.join("thumbnails");
-    fs::create_dir_all(&directory).ok()?;
+    if let Err(error) = fs::create_dir_all(&directory) {
+        log_event(
+            app,
+            "WARN",
+            "watch.thumbnail_failed",
+            serde_json::json!({ "stage": "createDirectory", "message": error.to_string() }),
+        );
+        return None;
+    }
 
     let stem: String = video_path
         .file_stem()
@@ -228,13 +239,20 @@ pub(crate) fn capture_thumbnail(
     // The timestamp keeps two videos with the same name apart, and re-adding one makes a fresh
     // file rather than silently reusing a still of the old.
     let target = directory.join(format!("{stem}-{added_at_ms}.jpg"));
-    capture_screenshot(
+    if let Err(error) = capture_screenshot(
         ffmpeg_path,
         video_path,
         thumbnail_at_ms(duration_ms),
         &target,
-    )
-    .ok()?;
+    ) {
+        log_event(
+            app,
+            "WARN",
+            "watch.thumbnail_failed",
+            serde_json::json!({ "stage": "captureFrame", "message": error }),
+        );
+        return None;
+    }
     Some(target)
 }
 
