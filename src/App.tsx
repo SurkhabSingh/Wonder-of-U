@@ -914,10 +914,14 @@ function App() {
   return (
     <main className="app-shell">
       <TooltipPrimitive.Provider delayDuration={180}>
+        {/* `expand`: sonner stacks toasts on top of each other by default and only fans
+            them out on hover, so two at once read as one damaged toast. Expanded is the
+            resting state now — every toast is legible without pointing at it. */}
         <Toaster
           position="top-right"
           richColors
           closeButton
+          expand
           toastOptions={{
             className: "app-toast",
           }}

@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -162,7 +162,7 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
                 format!("Transcribe this recording for {transcription_language} before adding furigana."),
             )
         })?;
-    let transcript = fs::read_to_string(transcript_path).map_err(|error| {
+    let transcript = crate::text_files::read_external_text(transcript_path).map_err(|error| {
         (
             file_path.clone(),
             Some(note_id),

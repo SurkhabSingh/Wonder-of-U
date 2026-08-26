@@ -76,7 +76,7 @@ fn push_single_recording_to_anki<R: Runtime>(
         .ok_or_else(|| {
             format!("This recording has not been transcribed for {transcription_language} yet.")
         })?;
-    let transcript = fs::read_to_string(transcript_path)
+    let transcript = crate::text_files::read_external_text(transcript_path)
         .map_err(|error| format!("Could not read transcript: {error}"))?;
     let audio_path = PathBuf::from(&recording.file_path);
     if !audio_path.exists() {
@@ -132,7 +132,7 @@ fn push_single_recording_to_anki<R: Runtime>(
     let mut translation_message = None;
     if !settings.fields.translation.is_empty() {
         if let Some(translation_path) = recording.translation_path.as_deref() {
-            match fs::read_to_string(translation_path) {
+            match crate::text_files::read_external_text(translation_path) {
                 Ok(translation) => {
                     fields.insert(
                         settings.fields.translation.clone(),

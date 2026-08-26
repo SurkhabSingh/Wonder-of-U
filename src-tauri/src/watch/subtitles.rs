@@ -187,7 +187,7 @@ fn extract_embedded_track(
         });
     }
 
-    let content = fs::read_to_string(&output_path)
+    let content = crate::text_files::read_external_text(&output_path)
         .map_err(|error| format!("The extracted subtitles could not be read: {error}"))?;
     let _ = fs::remove_file(&output_path);
     Ok(content)
@@ -206,6 +206,10 @@ pub(crate) fn load_subtitle_source(
     let tracks = list_subtitle_tracks(settings, video_path);
 
     if let Some(subtitle_path) = subtitle_path {
+        // Strict on purpose, unlike every other reader in this file. A subtitle file the
+        // user picked is often Shift-JIS or EUC-KR, and decoding one leniently yields a
+        // screen of mojibake instead of an honest "this file is not UTF-8". Reading it
+        // properly needs encoding detection, which is a separate piece of work.
         let content = fs::read_to_string(subtitle_path)
             .map_err(|error| format!("That subtitle file could not be read: {error}"))?;
         return Ok(SubtitleSource {

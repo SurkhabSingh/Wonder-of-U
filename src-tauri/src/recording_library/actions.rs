@@ -405,7 +405,7 @@ fn translate_single_recording<R: Runtime>(
         }
     };
 
-    let source_text = match fs::read_to_string(&transcript_path) {
+    let source_text = match crate::text_files::read_external_text(&transcript_path) {
         Ok(text) => text,
         Err(error) => {
             return failed_translation_item(&recording, format!("Could not read the transcript: {error}"))
