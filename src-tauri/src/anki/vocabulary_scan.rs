@@ -389,7 +389,7 @@ pub(crate) fn scan_vocabulary_sources_inner<R: Runtime>(
                         app,
                         "WARN",
                         "anki.note_type_scan_failed",
-                        serde_json::json!({ "message": message }),
+                        serde_json::json!({ "noteType": note_type, "message": message }),
                     );
                     None
                 }
