@@ -216,7 +216,11 @@ pub(crate) fn capture_thumbnail<R: Runtime>(
             app,
             "WARN",
             "watch.thumbnail_failed",
-            serde_json::json!({ "stage": "createDirectory", "message": error.to_string() }),
+            serde_json::json!({
+                "videoPath": video_path.display().to_string(),
+                "stage": "createDirectory",
+                "message": error.to_string()
+            }),
         );
         return None;
     }
@@ -249,7 +253,11 @@ pub(crate) fn capture_thumbnail<R: Runtime>(
             app,
             "WARN",
             "watch.thumbnail_failed",
-            serde_json::json!({ "stage": "captureFrame", "message": error }),
+            serde_json::json!({
+                "videoPath": video_path.display().to_string(),
+                "stage": "captureFrame",
+                "message": error
+            }),
         );
         return None;
     }
