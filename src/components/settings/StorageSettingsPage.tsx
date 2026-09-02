@@ -125,7 +125,7 @@ export function StorageSettingsPage({
       <header className="panel-header">
         <div>
           <p className="panel-kicker">Storage</p>
-          <h2>YouTube Import</h2>
+          <h2>Import from a link</h2>
         </div>
         <span
           className={`status-chip status-chip-${ytdlpReady ? "success" : "warning"}`}
@@ -139,14 +139,15 @@ export function StorageSettingsPage({
         <strong>
           {bootstrap.ytdlpDetection.message ||
             (ytdlpReady
-              ? "yt-dlp is installed and ready to fetch YouTube audio."
-              : "Install yt-dlp to import audio from a YouTube link.")}
+              ? "yt-dlp is installed and ready to fetch audio from a link."
+              : "Install yt-dlp to import audio from a link.")}
         </strong>
         <p className="microcopy">
-          Wonder of U uses yt-dlp to fetch a YouTube video's audio into your
-          Library. Once it lands, transcribe it from the Library like any other
-          recording. yt-dlp is fetched from its official releases (GPLv3); it is
-          not bundled.
+          Wonder of U uses yt-dlp to fetch a video's audio into your Library —
+          YouTube, and many other sites besides. Once it lands, transcribe it from
+          the Library like any other recording. Whether a particular site works is
+          up to yt-dlp rather than this app. yt-dlp is fetched from its official
+          releases (GPLv3); it is not bundled.
         </p>
         {bootstrap.ytdlpDetection.executablePath ? (
           <p className="path-copy" title={bootstrap.ytdlpDetection.executablePath}>

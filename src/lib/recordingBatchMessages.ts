@@ -108,14 +108,14 @@ export function formatBatchToastMessage(
   // fetch (private/blocked video, missing yt-dlp) must name the reason.
   if (action === "youtube") {
     if (failedCount > 0 && successCount === 0) {
-      return firstFailure ?? "The YouTube link could not be imported.";
+      return firstFailure ?? "That link could not be imported.";
     }
 
     if (successCount === 0) {
       return result.message;
     }
 
-    return "Fetched from YouTube. Transcribe it from the Library when you are ready.";
+    return "Fetched. Transcribe it from the Library when you are ready.";
   }
 
   if (failedCount > 0 && successCount === 0) {

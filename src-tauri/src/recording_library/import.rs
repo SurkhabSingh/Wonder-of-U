@@ -471,9 +471,9 @@ pub(crate) fn import_media_inner<R: Runtime>(
 }
 
 const YTDLP_REQUIRED_MESSAGE: &str =
-    "yt-dlp is required to import from YouTube; install it in Setup.";
+    "yt-dlp is required to import from a link; install it in Setup.";
 const YOUTUBE_FFMPEG_REQUIRED_MESSAGE: &str =
-    "FFmpeg is required to import from YouTube; install it in Setup.";
+    "FFmpeg is required to import from a link; install it in Setup.";
 const LIVESTREAM_REJECTED_MESSAGE: &str =
     "This is a live or upcoming stream, so it can't be imported.";
 const OVERSIZE_REJECTED_MESSAGE: &str =
@@ -719,7 +719,7 @@ fn resolve_downloaded_audio(output_directory: &Path, expected_output: &Path) -> 
 fn validate_import_url(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err("Enter a video URL to import from YouTube.".into());
+        return Err("Enter a video URL to import.".into());
     }
 
     let lower = trimmed.to_ascii_lowercase();
@@ -1170,17 +1170,17 @@ fn finish_youtube_cancelled<R: Runtime>(
     source_url: &str,
 ) -> Result<RecordingBatchResult, String> {
     update_shell_snapshot(app, |shell| {
-        shell.status_text = "YouTube import cancelled.".into();
+        shell.status_text = "Import cancelled.".into();
         shell.transition_count += 1;
     })?;
 
     Ok(RecordingBatchResult {
         status: "cancelled".into(),
-        message: "YouTube import cancelled.".into(),
+        message: "Import cancelled.".into(),
         items: vec![RecordingActionItem {
             file_path: source_url.to_string(),
             status: "failed".into(),
-            message: "YouTube import cancelled.".into(),
+            message: "Import cancelled.".into(),
             note_id: None,
         }],
         bootstrap: build_app_bootstrap(app)?,
@@ -1297,7 +1297,7 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
     // cleanly. Progress is streamed as `youtube-progress` events; the shell just
     // shows a status line.
     update_shell_snapshot(app, |shell| {
-        shell.status_text = "Importing audio from YouTube…".into();
+        shell.status_text = "Importing audio from the link…".into();
         shell.transition_count += 1;
     })?;
 
@@ -1348,7 +1348,7 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
                 &normalized_url,
             ) {
                 Ok(recording) => {
-                    let message = format!("Imported {} from YouTube.", recording.file_name);
+                    let message = format!("Imported {}.", recording.file_name);
                     let status_text = message.clone();
                     update_shell_snapshot(app, |shell| {
                         shell.status_text = status_text;

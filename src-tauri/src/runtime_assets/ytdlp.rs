@@ -91,7 +91,7 @@ pub(crate) fn detect_local_ytdlp(settings: &AppSettings) -> YtdlpDetection {
             status: "ready".into(),
             executable_path: Some(managed_path.display().to_string()),
             managed: true,
-            message: "App-managed yt-dlp is ready. You can import audio from YouTube.".into(),
+            message: "App-managed yt-dlp is ready. You can import audio from a link.".into(),
         };
     }
 
@@ -104,7 +104,7 @@ pub(crate) fn detect_local_ytdlp(settings: &AppSettings) -> YtdlpDetection {
             status: "ready".into(),
             executable_path: Some("yt-dlp".into()),
             managed: false,
-            message: "System yt-dlp is available. You can import audio from YouTube.".into(),
+            message: "System yt-dlp is available. You can import audio from a link.".into(),
         };
     }
 

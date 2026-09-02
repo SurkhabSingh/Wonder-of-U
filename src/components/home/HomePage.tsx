@@ -367,7 +367,7 @@ export function HomePage({
 
         <div className="home-youtube-row">
           <div className="home-youtube-header">
-            <span className="home-youtube-label">From YouTube</span>
+            <span className="home-youtube-label">From a link</span>
             {/* Finished rows are history, not work in progress — offer the
                 dismissal only once there is something to dismiss. */}
             {youtubeFinishedCount > 0 ? (
@@ -386,7 +386,7 @@ export function HomePage({
             <input
               type="url"
               value={youtubeUrl}
-              placeholder="Paste a YouTube link (or several)"
+              placeholder="Paste a video link (or several)"
               onChange={(event) => setYoutubeUrl(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
