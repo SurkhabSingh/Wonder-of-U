@@ -63,7 +63,7 @@ pub(super) fn ytdlp_plan<R: Runtime>(
             verify_managed_binary_or_remove(&installed_path, verify_ytdlp_binary)?;
 
             Ok(Installed {
-                completed_message: "yt-dlp downloaded. Importing from a link is now enabled."
+                completed_message: "yt-dlp downloaded. You can now import from a link."
                     .into(),
                 shell_success_text: format!(
                     "yt-dlp is ready at {}. You can import audio from a link.",

@@ -719,7 +719,7 @@ fn resolve_downloaded_audio(output_directory: &Path, expected_output: &Path) -> 
 fn validate_import_url(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err("Enter a video URL to import.".into());
+        return Err("Enter a link to import.".into());
     }
 
     let lower = trimmed.to_ascii_lowercase();
