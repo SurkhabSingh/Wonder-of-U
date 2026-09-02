@@ -934,7 +934,7 @@ impl Default for YtdlpDetection {
             status: "notFound".into(),
             executable_path: None,
             managed: false,
-            message: "Install app-managed yt-dlp to import audio from YouTube and other sites."
+            message: "Install app-managed yt-dlp to import audio from a link."
                 .into(),
         }
     }

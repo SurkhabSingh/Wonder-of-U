@@ -180,10 +180,10 @@ export function createSetupChecklist({
     {
       id: "ytdlp",
       target: "storage",
-      label: "YouTube Import",
+      label: "Link Import",
       description: ytdlpReady
         ? "yt-dlp ready"
-        : "Install yt-dlp for optional YouTube import",
+        : "Install yt-dlp to import from a link",
       done: ytdlpReady,
       required: false,
     },

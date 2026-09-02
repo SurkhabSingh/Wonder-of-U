@@ -305,7 +305,7 @@ export function useRecordingActions({
     async (url: string): Promise<YoutubeImportOutcome> => {
       const trimmed = url.trim();
       if (trimmed.length === 0) {
-        return { ok: false, message: "No YouTube link was provided." };
+        return { ok: false, message: "No link was provided." };
       }
 
       try {
@@ -332,7 +332,7 @@ export function useRecordingActions({
       } catch (error) {
         const message = errorMessage(
           error,
-          "The YouTube link could not be imported.",
+          "That link could not be imported.",
         );
         // Surface the failure as a transient toast only — matching transcription
         // and translation. Avoid `setLoadError`, which pins a permanent banner
