@@ -605,7 +605,10 @@ export type YoutubeQueueItem = {
   id: string;
   url: string;
   title?: string;
-  status: "queued" | "active" | "done" | "failed" | "cancelled";
+  // "partial" is one link that held several videos where some arrived and some did
+  // not — a tweet with two clips, one of them silent. Reporting that row as "done"
+  // would show half a result as a whole one.
+  status: "queued" | "active" | "done" | "partial" | "failed" | "cancelled";
   message?: string;
 };
 

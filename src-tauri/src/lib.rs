@@ -9,6 +9,7 @@ mod commands;
 mod desktop_shell;
 mod jimaku;
 mod logging;
+mod media_errors;
 mod recording;
 mod recording_indicator;
 mod recording_library;

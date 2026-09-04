@@ -14,6 +14,8 @@ logs/
 .idea/
 .vscode/
 .bootstrap/
+# Agent settings and skill definitions: per-machine tooling, not part of the app.
+.claude/
 
 # Repository documentation policy
 *.md

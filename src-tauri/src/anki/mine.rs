@@ -29,6 +29,7 @@ use crate::{
         AppSettings, MineLineRequest, MinedLineOutcome, MinedLinesResult, RecentRecording,
         RecordingActionItem, RecordingBatchResult, SharedPersistedState,
     },
+    media_errors::stderr_indicates_no_audio,
     recording_library::{find_recent_recording, playback_path, unique_path_with_suffix},
     runtime_assets::detect_local_ffmpeg,
 };
@@ -126,6 +127,26 @@ fn temp_media_path(stem_source: &Path, label: &str, start_ms: u64, extension: &s
     ))
 }
 
+/// Shown when the media a mine was asked for carries no audio track at all.
+///
+/// Fatal, unlike a missing screenshot or clip: the sentence audio is the one part of
+/// a card with no fallback. Reached from a watch session, whose `MineSource` sets
+/// `media_path` and `video_path` to the same file — so a silent video in the Video
+/// Library fails here, and this is the message it fails with.
+const NO_AUDIO_MESSAGE: &str = "This video has no sound, so there is nothing to mine.";
+
+/// What a failed slice reports. Kept pure so every branch can be asserted without
+/// spawning ffmpeg, the same way the argument builders in this module are tested.
+fn slice_failure_message(stderr: &str) -> String {
+    if stderr_indicates_no_audio(stderr) {
+        NO_AUDIO_MESSAGE.to_string()
+    } else if stderr.is_empty() {
+        "FFmpeg did not produce an audio clip for this sentence.".to_string()
+    } else {
+        format!("FFmpeg could not slice the audio clip: {stderr}")
+    }
+}
+
 /// Slices the requested sentence out of `audio_path` into a fresh MP3.
 /// FFmpeg is mandatory here: unlike the optional WAV->MP3 compression, a mine has
 /// nothing to attach without the clip, so a missing binary is a hard error.
@@ -177,11 +198,7 @@ fn slice_segment_clip(
 
     if !clip_ready {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "FFmpeg did not produce an audio clip for this sentence.".to_string()
-        } else {
-            format!("FFmpeg could not slice the audio clip: {stderr}")
-        });
+        return Err(slice_failure_message(&stderr));
     }
 
     Ok(clip)
@@ -1189,9 +1206,33 @@ fn recording_display_title(recording: &RecentRecording) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_ffmpeg_timestamp, format_position, slice_ffmpeg_args, ClipPadding,
-        youtube_timestamped_link,
+        format_ffmpeg_timestamp, format_position, slice_failure_message, slice_ffmpeg_args,
+        ClipPadding, youtube_timestamped_link,
     };
+
+    #[test]
+    fn a_silent_video_is_named_rather_than_reported_as_an_ffmpeg_fault() {
+        // Verbatim from the bundled ffmpeg asked for `-map 0:a:0` on a video that has
+        // only a video stream. Reached by mining a line from a silent Video Library
+        // entry, where the sentence audio has no fallback and the mine ends here.
+        assert_eq!(
+            slice_failure_message(
+                "Stream map '' matches no streams.\nTo ignore this, add a trailing '?' to the map."
+            ),
+            "This video has no sound, so there is nothing to mine."
+        );
+
+        // Every other failure still shows what ffmpeg actually said — replacing those
+        // with a friendly sentence would hide the one clue there is.
+        assert_eq!(
+            slice_failure_message("Unknown encoder 'libmp3lame'"),
+            "FFmpeg could not slice the audio clip: Unknown encoder 'libmp3lame'"
+        );
+        assert_eq!(
+            slice_failure_message(""),
+            "FFmpeg did not produce an audio clip for this sentence."
+        );
+    }
 
     #[test]
     fn formats_millisecond_offsets_as_padded_seconds() {

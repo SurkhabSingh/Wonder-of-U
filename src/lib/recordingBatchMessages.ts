@@ -103,9 +103,11 @@ export function formatBatchToastMessage(
     return `${successCount} file${successCount === 1 ? "" : "s"} imported. Transcribe from the library when you are ready.`;
   }
 
-  // A YouTube import is a single-item batch that, like a file import, deliberately
-  // stops short of transcribing — so a success is only half the job. A failed
-  // fetch (private/blocked video, missing yt-dlp) must name the reason.
+  // A link import, like a file import, deliberately stops short of transcribing —
+  // so a success is only half the job. A failed fetch (private/blocked video,
+  // missing yt-dlp) must name the reason. And one link is not always one video: a
+  // tweet can hold several clips, so this batch can come back part-landed, and
+  // saying only what arrived would report half a result as a whole one.
   if (action === "youtube") {
     if (failedCount > 0 && successCount === 0) {
       return firstFailure ?? "That link could not be imported.";
@@ -113,6 +115,14 @@ export function formatBatchToastMessage(
 
     if (successCount === 0) {
       return result.message;
+    }
+
+    if (failedCount > 0) {
+      return `${successCount} of ${successCount + failedCount} videos fetched. ${failedCount} failed: ${firstFailure ?? "check the link."}`;
+    }
+
+    if (successCount > 1) {
+      return `${successCount} videos fetched. Transcribe them from the Library when you are ready.`;
     }
 
     return "Fetched. Transcribe it from the Library when you are ready.";

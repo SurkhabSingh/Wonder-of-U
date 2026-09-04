@@ -1,10 +1,11 @@
 use std::{
+    collections::VecDeque,
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Arc, Mutex,
     },
     thread,
@@ -22,6 +23,7 @@ use crate::{
         AppSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
     },
+    media_errors::stderr_indicates_no_audio,
     runtime_assets::{detect_local_ffmpeg, detect_local_ytdlp},
 };
 
@@ -255,7 +257,11 @@ fn transcode_to_mp3<R: Runtime>(
                 "message": stderr
             }),
         );
-        return Err(if stderr.is_empty() {
+        return Err(if stderr_indicates_no_audio(&stderr) {
+            // `-map 0:a:0` on a video with no audio track. The user handed over a
+            // silent file, which is a normal thing to do and not a conversion fault.
+            NO_AUDIO_REJECTED_MESSAGE.to_string()
+        } else if stderr.is_empty() {
             "FFmpeg did not produce a playable MP3 for this file.".to_string()
         } else {
             format!("FFmpeg could not convert this file: {stderr}")
@@ -478,6 +484,8 @@ const LIVESTREAM_REJECTED_MESSAGE: &str =
     "This is a live or upcoming stream, so it can't be imported.";
 const OVERSIZE_REJECTED_MESSAGE: &str =
     "This video is too large to import; the limit is 2 GB.";
+const NO_AUDIO_REJECTED_MESSAGE: &str =
+    "This video has no sound, so there is nothing to import.";
 
 /// True when yt-dlp's stderr indicates a live/upcoming/premiere video was rejected.
 /// Matched case-insensitively because the wording differs across yt-dlp versions
@@ -508,24 +516,46 @@ fn stderr_indicates_oversize(stderr: &str) -> bool {
         .any(|needle| lower.contains(needle))
 }
 
+/// The lines of yt-dlp's stderr that say why the run FAILED.
+///
+/// yt-dlp prefixes fatal output with `ERROR:` and advisory output with `WARNING:`,
+/// and the two must never be conflated. Current releases print
+/// `WARNING: [youtube] No supported JavaScript runtime could be found` on EVERY
+/// YouTube extraction when no runtime is installed, including runs that go on to
+/// succeed. Matching that text anywhere in stderr made every YouTube failure — an
+/// unavailable video, a network drop — look like the nsig challenge: each was
+/// retried three times and then reported as "install a JavaScript runtime",
+/// whatever had actually gone wrong.
+fn fatal_stderr_lines(stderr: &str) -> impl Iterator<Item = &str> {
+    stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("ERROR:"))
+}
+
 /// True when yt-dlp failed because it needs a JavaScript runtime to solve YouTube's
 /// `nsig` challenge. YouTube serves this challenge intermittently, so the SAME url
 /// usually succeeds on a later attempt — the importer keys its auto-retry off this.
 /// Matched case-insensitively because the wording varies across yt-dlp versions
 /// ("Failed to extract nsig", "requires a JavaScript interpreter", "no supported
-/// JavaScript runtime", "install a JS runtime").
+/// JavaScript runtime", "install a JS runtime"), and only against the run's fatal
+/// lines: the identical words appear in a warning that every YouTube extraction
+/// emits, so reading the whole of stderr matched failures that had nothing to do
+/// with a JS runtime. See `fatal_stderr_lines`.
 fn stderr_indicates_js_runtime(stderr: &str) -> bool {
-    let lower = stderr.to_ascii_lowercase();
-    [
-        "javascript runtime",
-        "javascript interpreter",
-        "js runtime",
-        "failed to extract nsig",
-        "nsig extraction failed",
-        "unable to run the javascript",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    fatal_stderr_lines(stderr).any(|line| {
+        let lower = line.to_ascii_lowercase();
+        [
+            "javascript runtime",
+            "javascript interpreter",
+            "js runtime",
+            "failed to extract nsig",
+            "nsig extraction failed",
+            "unable to run the javascript",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    })
 }
 
 /// Shown when every attempt hit the JS-runtime challenge. Frames it as the usually-
@@ -604,6 +634,19 @@ fn youtube_output_stem(title: &str, id: &str) -> String {
     }
 }
 
+/// How many entries a run announced (`[download] Downloading item 2 of 3` -> 3).
+///
+/// A single-video link never prints this line, so its absence is what "one video"
+/// looks like. It is the only way the fetch can tell that a link held more videos
+/// than it produced files for: yt-dlp reports the run's exit status, not a per-entry
+/// tally, so without this a tweet whose second clip failed to download looks
+/// identical to a tweet that only ever had one.
+fn parse_ytdlp_item_total(line: &str) -> Option<usize> {
+    let rest = line.strip_prefix("[download] Downloading item ")?;
+    let (_, total) = rest.split_once(" of ")?;
+    total.trim().parse().ok()
+}
+
 /// Builds yt-dlp's `-o` value for a caller-precomputed literal path. yt-dlp reads `%`
 /// as the start of a format spec and its docs require `%%` for a literal one, so a
 /// `100% Real` title otherwise dies on "ERROR: Invalid output template". The
@@ -611,9 +654,24 @@ fn youtube_output_stem(title: &str, id: &str) -> String {
 /// `C:\100%\clips` — and the intended `%(ext)s` is appended afterwards, unescaped.
 /// The caller's `expected_output` deliberately keeps its single literal `%`: yt-dlp
 /// writes the UNESCAPED name to disk, and the two must name the same file.
+///
+/// One link is not always one video. A tweet can carry several clips, and its
+/// extractor returns them as a genuine playlist that `--no-playlist` does not
+/// collapse (that flag only picks a video OUT of a playlist a URL points into).
+/// Every entry then renders the same template, so a template naming one fixed file
+/// made entry 1 win and yt-dlp skip the rest as "already downloaded" — the second
+/// clip of a two-clip tweet was downloaded to nowhere, and if the first happened to
+/// be silent the whole import failed with a usable video sitting right there.
+///
+/// `%(playlist_index& {}|)s` appends ` 1`, ` 2`, … for playlist entries and NOTHING
+/// at all for a standalone video, so the ordinary single-video path still produces
+/// exactly `<stem>.<ext>` and `expected_output` still names it.
 fn ytdlp_output_template(output_directory: &Path, unique_stem: &str) -> String {
     let literal_path = output_directory.join(unique_stem).display().to_string();
-    format!("{}.%(ext)s", literal_path.replace('%', "%%"))
+    format!(
+        "{}%(playlist_index& {{}}|)s.%(ext)s",
+        literal_path.replace('%', "%%")
+    )
 }
 
 /// True when a probed `live_status` marks a stream we must never download.
@@ -667,49 +725,245 @@ impl<R: Runtime> Drop for CancelListener<R> {
     }
 }
 
+/// Why a fetch failed, decided from yt-dlp's own output while that output is still
+/// intact.
+///
+/// Carried as a value rather than a sentence because the caller has to ACT on it: the
+/// JS-runtime challenge is retried, everything else is not. It used to be decided
+/// here, rendered into a sentence, and then decided again by re-reading that
+/// sentence — which stopped working the moment the sentence gained a prefix and a
+/// length cap, because the fatal `ERROR:` line the second read looks for was no
+/// longer at the start of a line, and on a chatty run was no longer present at all.
+enum FetchFailure {
+    JsRuntime,
+    Livestream,
+    Oversize,
+    NoAudio,
+    Other(String),
+}
+
+impl FetchFailure {
+    /// The sentence the user reads. Every named reason has one written for it; only
+    /// `Other` falls back to what the tool said.
+    fn message(self) -> String {
+        match self {
+            FetchFailure::JsRuntime => JS_RUNTIME_REJECTED_MESSAGE.to_string(),
+            FetchFailure::Livestream => LIVESTREAM_REJECTED_MESSAGE.to_string(),
+            FetchFailure::Oversize => OVERSIZE_REJECTED_MESSAGE.to_string(),
+            FetchFailure::NoAudio => NO_AUDIO_REJECTED_MESSAGE.to_string(),
+            FetchFailure::Other(message) => message,
+        }
+    }
+}
+
+/// The part of a failed run's output worth showing when nothing else explains it.
+///
+/// Prefers the fatal `ERROR:` lines, and otherwise keeps the END of the text. Which
+/// end is not a detail: yt-dlp opens with progress and warnings and closes with the
+/// line that says what went wrong, so a cap taken from the front reliably shows the
+/// least useful 600 characters of a long failure — the same mistake, one step later,
+/// as the buffer that used to keep only the first 8 KiB.
+fn failure_detail(stderr: &str) -> String {
+    let fatal = fatal_stderr_lines(stderr).collect::<Vec<_>>().join("\n");
+    let source = if fatal.is_empty() { stderr } else { fatal.as_str() };
+    let characters: Vec<char> = source.chars().collect();
+    if characters.len() <= 600 {
+        return source.to_string();
+    }
+    characters[characters.len() - 600..].iter().collect()
+}
+
+/// yt-dlp echoes our own inputs back — the URL it was given, and the output path it
+/// was told to write — so the phrases a classifier looks for can arrive in text the
+/// USER supplied rather than text yt-dlp wrote. A video titled "...premieres in
+/// Hollywood" would otherwise be refused as a livestream, naming a reason that is not
+/// merely unhelpful but false. Removing our own inputs first leaves only what yt-dlp
+/// said about the video, which is the only thing worth classifying.
+fn without_reflected_inputs(stderr: &str, url: &str, stem: &str) -> String {
+    let stripped = stderr.replace(url, " ");
+    if stem.is_empty() {
+        return stripped;
+    }
+    stripped.replace(stem, " ")
+}
+
 /// What a completed yt-dlp fetch produced, or the signal that the user cancelled.
-/// The path is the caller's precomputed `expected_output` in the normal case, or a
-/// same-stem fallback the resolver found if the literal name was munged.
+/// Normally one path — the caller's precomputed `expected_output`, or a same-stem
+/// fallback the resolver found if the literal name was munged — but a link carrying
+/// several videos yields one per entry, in playlist order.
 enum FetchOutcome {
-    Completed { path: PathBuf },
+    Completed {
+        paths: Vec<PathBuf>,
+        /// One message per entry the link announced but did not produce a file for.
+        /// Normally empty. A run that lands some entries and loses others exits
+        /// non-zero as a whole, so without this the lost ones would leave no trace
+        /// and part of a link would be reported as all of it.
+        missing: Vec<String>,
+    },
     Cancelled,
 }
 
-/// Resolves the audio file a successful fetch produced. Normally it is exactly
-/// `expected_output`; if that precise name is absent, fall back to any same-stem
-/// audio file in the output directory so a produced download is never reported as
-/// missing. Returns `None` when nothing was produced (a filter/livestream skip on a
-/// clean exit).
-fn resolve_downloaded_audio(output_directory: &Path, expected_output: &Path) -> Option<PathBuf> {
-    if expected_output.is_file() {
-        return Some(expected_output.to_path_buf());
-    }
-    let stem = expected_output.file_stem().and_then(|value| value.to_str())?;
-    for entry in fs::read_dir(output_directory).ok()?.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let same_stem = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .map(|value| value == stem)
-            .unwrap_or(false);
-        let is_audio = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|value| {
-                matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "mp3" | "m4a" | "opus" | "webm" | "ogg" | "oga" | "aac" | "wav" | "flac"
-                )
-            })
-            .unwrap_or(false);
-        if same_stem && is_audio {
-            return Some(path);
+/// The sentence shown for an entry that never produced a file, on a run where other
+/// entries did. The run's own output is all there is to go on — yt-dlp does not say
+/// which entry an error belonged to — so this names the condition when it can and
+/// quotes the tool when it cannot.
+fn entry_failure_message(classifiable: &str, stderr: &str) -> String {
+    if stderr_indicates_no_audio(classifiable) {
+        NO_AUDIO_REJECTED_MESSAGE.to_string()
+    } else if stderr_indicates_livestream(classifiable) {
+        LIVESTREAM_REJECTED_MESSAGE.to_string()
+    } else if stderr_indicates_oversize(classifiable) {
+        OVERSIZE_REJECTED_MESSAGE.to_string()
+    } else {
+        let detail = failure_detail(stderr);
+        if detail.is_empty() {
+            "A video in this link could not be fetched.".to_string()
+        } else {
+            format!("A video in this link could not be fetched: {detail}")
         }
     }
-    None
+}
+
+/// True when `name` is a file the import owning `stem` produced, or part-produced.
+///
+/// The name must be the stem, then an optional ` <digits>` playlist index, then an
+/// extension. That boundary is the whole point: it tells our own `Cats [ab12] 2.mp3`
+/// apart from an unrelated `Cats [ab12] live.mp3` that a shared recordings folder may
+/// already hold, so a sweep can never reach past this import's own work.
+fn is_own_import_artifact(name: &str, stem: &str) -> bool {
+    let Some(remainder) = name.strip_prefix(stem) else {
+        return false;
+    };
+    strip_playlist_index(remainder).starts_with('.')
+}
+
+/// Strips a leading ` <digits>` playlist index, returning the remainder untouched
+/// when there is none — which is what a single-video import always looks like.
+fn strip_playlist_index(remainder: &str) -> &str {
+    let Some(rest) = remainder.strip_prefix(' ') else {
+        return remainder;
+    };
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 {
+        return remainder;
+    }
+    &rest[digits..]
+}
+
+/// The playlist index a produced file's name carries (`clip [id] 2.mp3` -> 2), or 0
+/// when it carries none. Orders a multi-video link's files the way the link presents
+/// them rather than the way the filesystem happens to list them.
+fn artifact_playlist_index(name: &str, stem: &str) -> u32 {
+    name.strip_prefix(stem)
+        .and_then(|remainder| remainder.strip_prefix(' '))
+        .map(|rest| {
+            rest.chars()
+                .take_while(|value| value.is_ascii_digit())
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Picks a stem no file already in the recordings folder could belong to.
+///
+/// `unique_path_with_suffix` guarantees `<stem>.mp3` is free, which was the whole
+/// requirement while an import produced exactly that one file. It no longer is: a
+/// link carrying several videos produces `<stem> 1.mp3`, `<stem> 2.mp3`, … and never
+/// takes `<stem>.mp3` at all, so importing the same link a second time would be
+/// handed the same stem again — and the failure sweep, which removes everything the
+/// stem owns, would take the first import's recordings with it.
+///
+/// Exclusive ownership of the stem is the invariant `sweep_import_artifacts` rests
+/// on, so it is established here rather than assumed — and a folder that cannot be
+/// read is an error rather than an empty one. Treating "I could not look" as "nothing
+/// is there" would claim a stem that another import already owns, and the first
+/// failure or Cancel would then sweep that import's recordings away.
+///
+/// Compared case-insensitively, because the target filesystem is. `NARUTO OP [ab].mp3`
+/// and the stem `Naruto OP [ab]` are the same file on Windows, and yt-dlp would find
+/// it "already downloaded" and write nothing. Only the freeness test folds case — the
+/// sweep's own predicate stays byte-exact, since widening what may be DELETED is the
+/// opposite of what is wanted.
+fn unique_import_stem(directory: &Path, base_stem: &str) -> Result<String, String> {
+    let base = if base_stem.is_empty() {
+        "youtube"
+    } else {
+        base_stem
+    };
+    let existing: Vec<String> = fs::read_dir(directory)
+        .map_err(|error| format!("Could not read the recordings folder: {error}"))?
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_lowercase))
+        .collect();
+
+    let mut attempt = 0usize;
+    loop {
+        let candidate = if attempt == 0 {
+            base.to_string()
+        } else {
+            format!("{base}_{attempt}")
+        };
+        let folded = candidate.to_lowercase();
+        if !existing
+            .iter()
+            .any(|name| is_own_import_artifact(name, &folded))
+        {
+            return Ok(candidate);
+        }
+        attempt += 1;
+    }
+}
+
+/// True when this is the file a fetch set out to produce.
+///
+/// Only `.mp3`, because `--audio-format mp3` produces nothing else. Accepting the
+/// other audio containers looked harmless and was not: `-x` downloads the source
+/// first and converts second, so a failed extract leaves the untouched download —
+/// often a `.webm` or `.m4a` — sitting under this import's own stem. Counting that as
+/// the produced recording turned a failed run into a reported success AND put a
+/// container in the Library that whisper cannot read and that the local-import path
+/// would have refused.
+fn is_produced_audio(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("mp3"))
+        .unwrap_or(false)
+}
+
+/// Resolves the audio files a fetch produced, in playlist order.
+///
+/// Normally there is exactly one and it is exactly `expected_output`. A link carrying
+/// several videos writes one numbered file per entry instead (see
+/// `ytdlp_output_template`), and those are found by the same ownership test, so a
+/// produced download is never reported as missing.
+///
+/// Empty means nothing was produced — a filter/livestream skip on a clean exit.
+fn resolve_downloaded_audio_files(output_directory: &Path, expected_output: &Path) -> Vec<PathBuf> {
+    let Some(stem) = expected_output.file_stem().and_then(|value| value.to_str()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(output_directory) else {
+        return Vec::new();
+    };
+
+    let mut produced: Vec<(u32, PathBuf)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_produced_audio(path))
+        .filter_map(|path| {
+            let index = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|name| is_own_import_artifact(name, stem))
+                .map(|name| artifact_playlist_index(name, stem))?;
+            Some((index, path))
+        })
+        .collect();
+
+    produced.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    produced.into_iter().map(|(_, path)| path).collect()
 }
 
 /// Validates a user-supplied import URL with a light parse: it must carry an
@@ -863,7 +1117,7 @@ fn fetch_youtube_audio<R: Runtime>(
     output_template: &str,
     expected_output: &Path,
     url: &str,
-) -> Result<FetchOutcome, String> {
+) -> Result<FetchOutcome, FetchFailure> {
     let args = ytdlp_fetch_args(output_template, ffmpeg_location, url);
 
     let mut command = Command::new(ytdlp_executable);
@@ -878,28 +1132,28 @@ fn fetch_youtube_audio<R: Runtime>(
 
     let mut child = command
         .spawn()
-        .map_err(|error| format!("Could not start yt-dlp: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "yt-dlp produced no stdout stream.".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "yt-dlp produced no stderr stream.".to_string())?;
+        .map_err(|error| FetchFailure::Other(format!("Could not start yt-dlp: {error}")))?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        FetchFailure::Other("yt-dlp produced no stdout stream.".to_string())
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        FetchFailure::Other("yt-dlp produced no stderr stream.".to_string())
+    })?;
 
     // stderr carries only error/warning text for this invocation; drain it on its
     // own thread into a bounded buffer so a chatty stderr can never fill the pipe
     // and block yt-dlp. Joined after the child is reaped.
-    let stderr_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let stderr_buffer: Arc<Mutex<StderrTail>> = Arc::new(Mutex::new(StderrTail::default()));
     let stderr_sink = Arc::clone(&stderr_buffer);
     let stderr_thread = thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        // `filter_map`, never `map_while`: a line that is not valid UTF-8 must skip
+        // that line, not END the drain. yt-dlp is frozen Python whose stdio encoding
+        // follows the console codepage (it reports `out cp1252` on this machine), so a
+        // non-ASCII video title is enough to produce one — and ending the drain here
+        // would silently stop collecting the very output a failure is explained from.
+        for line in BufReader::new(stderr).lines().filter_map(Result::ok) {
             if let Ok(mut sink) = stderr_sink.lock() {
-                if sink.len() < 8192 {
-                    sink.push_str(&line);
-                    sink.push('\n');
-                }
+                sink.push(line);
             }
         }
     });
@@ -910,13 +1164,24 @@ fn fetch_youtube_audio<R: Runtime>(
     // returns `Disconnected` the moment yt-dlp closes stdout.
     let (done_sender, done_receiver) = mpsc::channel::<()>();
     let app_for_stdout = app.clone();
+    // Written by the drain as yt-dlp announces entries, read once the child is reaped.
+    let announced_entries = Arc::new(AtomicUsize::new(0));
+    let announced_sink = Arc::clone(&announced_entries);
     let stdout_thread = thread::spawn(move || {
         let _done_sender = done_sender;
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        // As with stderr: skip an undecodable line rather than ending the drain. On
+        // stdout ending it is worse than losing text — the sender drops, the wait loop
+        // below breaks on `Disconnected` and stops polling the cancel flag, and the
+        // import blocks in `wait()` on a child that is still downloading and can no
+        // longer be cancelled.
+        for line in BufReader::new(stdout).lines().filter_map(Result::ok) {
             let line = line.replace('\r', "");
             let line = line.trim();
             if let Some(percent) = parse_ytdlp_progress_line(line) {
                 let _ = app_for_stdout.emit("youtube-progress", percent);
+            }
+            if let Some(total) = parse_ytdlp_item_total(line) {
+                announced_sink.store(total, Ordering::Relaxed);
             }
         }
     });
@@ -948,66 +1213,157 @@ fn fetch_youtube_audio<R: Runtime>(
     // join the drains, which end as soon as the reaped process's pipes close.
     let exit_status = child
         .wait()
-        .map_err(|error| format!("yt-dlp did not exit cleanly: {error}"))?;
+        .map_err(|error| FetchFailure::Other(format!("yt-dlp did not exit cleanly: {error}")))?;
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
 
     let stderr_text = stderr_buffer
         .lock()
         .ok()
-        .map(|guard| guard.trim().to_string())
+        .map(|guard| guard.text().trim().to_string())
+        .unwrap_or_default();
+
+    // The stem every file this import produced is named from. Derived the same way
+    // the caller derived it, so the sweep below can only ever reach our own work.
+    let unique_stem = expected_output
+        .file_stem()
+        .and_then(|stem| stem.to_str())
         .unwrap_or_default();
 
     // A Cancel reached the child (killed in the loop above and reaped by `wait`):
-    // remove the precomputed partial output, sweep leftover `.part`/temp fragments,
-    // and report the cancellation.
+    // take everything this import wrote with it — finished entries included, because
+    // a cancelled import leaves nothing behind — and report the cancellation.
     if cancel.load(Ordering::Relaxed) {
-        let _ = fs::remove_file(expected_output);
-        // Scoped to this import's own unique stem — see `sweep_partial_fragments`.
-        if let Some(stem) = expected_output.file_stem().and_then(|stem| stem.to_str()) {
-            sweep_partial_fragments(output_directory, stem);
-        }
+        sweep_import_artifacts(output_directory, unique_stem, &[]);
         return Ok(FetchOutcome::Cancelled);
     }
 
-    if !exit_status.success() {
-        // Upcoming/premiere videos fail on this non-zero-exit path (the filter only
-        // fires for already-live streams), so translate the raw stderr into the
-        // friendly livestream message before falling back to the generic error.
-        if stderr_indicates_livestream(&stderr_text) {
-            return Err(LIVESTREAM_REJECTED_MESSAGE.to_string());
-        }
-        let capped: String = stderr_text.chars().take(600).collect();
-        return Err(if capped.is_empty() {
-            "yt-dlp could not download this video.".to_string()
-        } else {
-            format!("yt-dlp could not download this video: {capped}")
+    // Classified against yt-dlp's own words only — see `without_reflected_inputs`.
+    let classifiable = without_reflected_inputs(&stderr_text, url, unique_stem);
+
+    // What landed is read BEFORE the exit status, because the two disagree on a link
+    // carrying several videos: one entry can fail (a silent clip) while another
+    // succeeds, and yt-dlp reports non-zero for the run as a whole. Judging by the
+    // exit status alone would sweep away a perfectly good recording sitting right
+    // there. A file outside the recordings folder is refused rather than kept.
+    let produced: Vec<PathBuf> = resolve_downloaded_audio_files(output_directory, expected_output)
+        .into_iter()
+        .filter(|path| path_is_within(output_directory, path))
+        .collect();
+
+    if !produced.is_empty() {
+        // Whatever else the run wrote — the video a failed extract left whole, a
+        // stranded fragment — goes now, while the produced audio stays.
+        sweep_import_artifacts(output_directory, unique_stem, &produced);
+        // An announced entry with no file is one that did not arrive. Counted rather
+        // than inferred from the exit status, which is one value for the whole run.
+        let shortfall = announced_entries
+            .load(Ordering::Relaxed)
+            .saturating_sub(produced.len());
+        let missing = (0..shortfall)
+            .map(|_| entry_failure_message(&classifiable, &stderr_text))
+            .collect();
+        return Ok(FetchOutcome::Completed {
+            paths: produced,
+            missing,
         });
     }
 
-    // Resolve the produced audio file (normally exactly `expected_output`). No file
-    // at all on a clean exit is what a skip looks like — yt-dlp downloads nothing and
-    // exits 0 — so stderr is what distinguishes the two skips we can name (a
+    // Nothing usable landed, so nothing this import wrote should outlive it.
+    sweep_import_artifacts(output_directory, unique_stem, &[]);
+
+    if !exit_status.success() {
+        // The raw stderr is logged before it is translated: every branch below
+        // replaces it with a sentence written for the user, and without this the
+        // reason a link failed would be unrecoverable the moment it was rendered.
+        log_event(
+            app,
+            "WARN",
+            "youtube.ytdlp_failed",
+            serde_json::json!({
+                "sourceUrl": url,
+                "exitCode": exit_status.code(),
+                "stderr": stderr_text.clone()
+            }),
+        );
+
+        // Upcoming/premiere videos fail on this non-zero-exit path (the filter only
+        // fires for already-live streams).
+        if stderr_indicates_livestream(&classifiable) {
+            return Err(FetchFailure::Livestream);
+        }
+        // A video with no audio track is a normal thing to be handed, and yt-dlp
+        // reports it as an ffprobe malfunction. Say what it is instead.
+        if stderr_indicates_no_audio(&classifiable) {
+            return Err(FetchFailure::NoAudio);
+        }
+        // The retry the caller runs keys off this, so it is decided here — where the
+        // output is whole — rather than re-read from the sentence built below.
+        if stderr_indicates_js_runtime(&classifiable) {
+            return Err(FetchFailure::JsRuntime);
+        }
+        let detail = failure_detail(&stderr_text);
+        return Err(FetchFailure::Other(if detail.is_empty() {
+            "yt-dlp could not download this video.".to_string()
+        } else {
+            format!("yt-dlp could not download this video: {detail}")
+        }));
+    }
+
+    // A clean exit that produced nothing is what a skip looks like — yt-dlp downloads
+    // nothing and exits 0 — so stderr is what distinguishes the skips we can name (a
     // `--match-filter` livestream rejection, a `--max-filesize` oversize video) from a
-    // genuinely inexplicable empty run.
-    match resolve_downloaded_audio(output_directory, expected_output) {
-        Some(path) => {
-            // The produced file must live inside the recordings folder; a path that
-            // escaped it is refused rather than registered into the library.
-            if !path_is_within(output_directory, &path) {
-                return Err("yt-dlp wrote outside the recordings folder.".into());
+    // genuinely inexplicable empty run. These are NOT scoped to fatal lines: on a
+    // clean exit there is no `ERROR:` line to scope to.
+    if stderr_indicates_livestream(&classifiable) {
+        Err(FetchFailure::Livestream)
+    } else if stderr_indicates_oversize(&classifiable) {
+        Err(FetchFailure::Oversize)
+    } else if stderr_indicates_no_audio(&classifiable) {
+        Err(FetchFailure::NoAudio)
+    } else {
+        Err(FetchFailure::Other(
+            "yt-dlp finished but did not produce an audio file.".into(),
+        ))
+    }
+}
+
+/// yt-dlp's stderr, bounded so a chatty extractor can never fill the pipe and block
+/// the child, and bounded at the FRONT.
+///
+/// Which end gets dropped decides whether a failure can be explained at all. yt-dlp
+/// prints its warnings while it works and its one fatal `ERROR:` line last, so a
+/// buffer that keeps the first N bytes and discards the rest throws away precisely
+/// the line that says what went wrong — and does it only on the chattiest runs,
+/// which is the kind of failure hardest to reproduce on purpose. Dropping the oldest
+/// lines instead keeps the end of the run, which is the part that explains it.
+#[derive(Default)]
+struct StderrTail {
+    lines: VecDeque<String>,
+    bytes: usize,
+}
+
+impl StderrTail {
+    const MAX_BYTES: usize = 8192;
+
+    fn push(&mut self, line: String) {
+        self.bytes += line.len() + 1;
+        self.lines.push_back(line);
+        // Never empties itself: one line longer than the cap is still the best
+        // account of the failure we have.
+        while self.bytes > Self::MAX_BYTES && self.lines.len() > 1 {
+            if let Some(dropped) = self.lines.pop_front() {
+                self.bytes -= dropped.len() + 1;
             }
-            Ok(FetchOutcome::Completed { path })
         }
-        None => {
-            if stderr_indicates_livestream(&stderr_text) {
-                Err(LIVESTREAM_REJECTED_MESSAGE.into())
-            } else if stderr_indicates_oversize(&stderr_text) {
-                Err(OVERSIZE_REJECTED_MESSAGE.into())
-            } else {
-                Err("yt-dlp finished but did not produce an audio file.".into())
-            }
-        }
+    }
+
+    fn text(&self) -> String {
+        self.lines
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -1031,15 +1387,24 @@ fn kill_process_tree(pid: u32) {
 #[cfg(not(target_os = "windows"))]
 fn kill_process_tree(_pid: u32) {}
 
-/// Best-effort sweep of leftover download fragments in the recordings folder
-/// after a cancelled import. yt-dlp writes `.part` (and fragment/temp) files it
-/// only renames on success, so a mid-download kill can strand them.
+/// Best-effort sweep of everything this import put in the recordings folder,
+/// after a cancellation or a failure. yt-dlp writes `.part` (and fragment/temp)
+/// files it only renames on success, so a mid-download kill can strand them.
 ///
-/// Scoped to THIS import's unique stem, and never run without one. The recordings
+/// It also removes what a FAILED extract leaves whole. `-x` downloads the video
+/// first and converts second, so a postprocessor that gives up returns a non-zero
+/// exit with the full `<stem>.mp4` still on disk — invisible to the Library, which
+/// reads only audio, but real on the user's disk, and worse than dead weight: the
+/// next attempt at the same link recomputes the same stem (uniqueness is checked
+/// against `.mp3`, which is absent), so yt-dlp finds that file already downloaded,
+/// skips the fetch, and fails again on the stale copy for as long as it sits there.
+///
+/// Scoped to THIS import's own files, and never run without a stem. The recordings
 /// folder is user-configurable and may well be a shared one (Downloads), where an
-/// unrelated in-flight `movie.mp4.part` is none of our business — deleting on a bare
-/// extension match would destroy someone else's download to tidy up our own.
-fn sweep_partial_fragments(directory: &Path, stem: &str) {
+/// unrelated in-flight `movie.mp4.part` is none of our business — `keep` holds the
+/// files a partly-successful run produced, which must survive the tidy-up of the
+/// entries beside them that did not.
+fn sweep_import_artifacts(directory: &Path, stem: &str, keep: &[PathBuf]) {
     if stem.is_empty() {
         return;
     }
@@ -1048,21 +1413,15 @@ fn sweep_partial_fragments(directory: &Path, stem: &str) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() {
+        if !path.is_file() || keep.contains(&path) {
             continue;
         }
-        let is_own_fragment = path
+        let is_own = path
             .file_name()
             .and_then(|name| name.to_str())
-            .map(|name| {
-                name.starts_with(stem)
-                    && (name.ends_with(".part")
-                        || name.ends_with(".ytdl")
-                        || name.ends_with(".temp")
-                        || name.contains(".part-"))
-            })
+            .map(|name| is_own_import_artifact(name, stem))
             .unwrap_or(false);
-        if is_own_fragment {
+        if is_own {
             let _ = fs::remove_file(&path);
         }
     }
@@ -1254,15 +1613,18 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
             Some(metadata)
         }
         Err(stderr) => {
-            if stderr_indicates_livestream(&stderr) {
+            // Against yt-dlp's words, not the URL it quotes back: a pasted link whose
+            // slug happens to read "...is-not-live..." would otherwise be refused as a
+            // livestream before anything was even attempted.
+            if stderr_indicates_livestream(&without_reflected_inputs(&stderr, &normalized_url, "")) {
                 return Err(LIVESTREAM_REJECTED_MESSAGE.to_string());
             }
             None
         }
     };
 
-    // Precompute a guaranteed-unique output path from the probed title+id, exactly
-    // like a local import uses `unique_path_with_suffix`. This is what makes two
+    // Precompute a guaranteed-unique output path from the probed title+id, the way
+    // a local import does with `unique_path_with_suffix`. This is what makes two
     // imports of the same video (or two same-titled videos) land on DISTINCT paths
     // instead of colliding into one library entry. yt-dlp gets a FIXED `-o` — a
     // literal stem, not a `%(title)s [%(id)s]` template — so the final file lands
@@ -1281,14 +1643,11 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
         None => (None, "youtube".to_string()),
     };
 
-    let expected_output = unique_path_with_suffix(&output_directory, &output_stem, ".mp3");
-    // Reuse the exact (possibly `_N`-suffixed) stem the uniqueness check chose, and
-    // hand yt-dlp `<stem>.%(ext)s` so it downloads/extracts to `<stem>.mp3`.
-    let unique_stem = expected_output
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("youtube");
-    let output_template = ytdlp_output_template(&output_directory, unique_stem);
+    // The stem must own nothing that already exists, not merely leave `<stem>.mp3`
+    // free — everything named from it is this import's to clean up on failure.
+    let unique_stem = unique_import_stem(&output_directory, &output_stem)?;
+    let expected_output = output_directory.join(format!("{unique_stem}.mp3"));
+    let output_template = ytdlp_output_template(&output_directory, &unique_stem);
 
     // Single-flight is now the frontend's sequential import loop; cancellation is
     // the `youtube-cancel` event and the `CancelListener` flag registered above,
@@ -1322,7 +1681,7 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
         );
         let should_retry = attempt < MAX_JS_RUNTIME_ATTEMPTS
             && !cancel_listener.flag().load(Ordering::Relaxed)
-            && matches!(&outcome, Err(message) if stderr_indicates_js_runtime(message));
+            && matches!(&outcome, Err(FetchFailure::JsRuntime));
         if !should_retry {
             break outcome;
         }
@@ -1339,68 +1698,132 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
     };
 
     match fetch_result {
-        Ok(FetchOutcome::Completed { path }) => {
-            match register_youtube_recording(
-                app,
-                Some(ffmpeg_executable.as_str()),
-                &path,
-                video_title,
-                &normalized_url,
-            ) {
-                Ok(recording) => {
-                    let message = format!("Imported {}.", recording.file_name);
-                    let status_text = message.clone();
-                    update_shell_snapshot(app, |shell| {
-                        shell.status_text = status_text;
-                        shell.transition_count += 1;
-                    })?;
-                    log_event(
-                        app,
-                        "INFO",
-                        "youtube.imported",
-                        serde_json::json!({
-                            "sourceUrl": normalized_url,
-                            "targetPath": recording.file_path.clone(),
-                            "durationMs": recording.duration_ms,
-                            "bytesWritten": recording.bytes_written
-                        }),
-                    );
+        Ok(FetchOutcome::Completed { paths, missing }) => {
+            // Normally one file. A link that carried several videos registers each on
+            // its own, so one unusable entry costs only itself — the same shape the
+            // multi-file local import already reports.
+            let mut items = Vec::new();
+            let mut first_failure: Option<String> = None;
 
-                    Ok(RecordingBatchResult {
-                        status: "completed".into(),
-                        message: message.clone(),
-                        items: vec![RecordingActionItem {
+            for path in &paths {
+                match register_youtube_recording(
+                    app,
+                    Some(ffmpeg_executable.as_str()),
+                    path,
+                    video_title.clone(),
+                    &normalized_url,
+                ) {
+                    Ok(recording) => {
+                        log_event(
+                            app,
+                            "INFO",
+                            "youtube.imported",
+                            serde_json::json!({
+                                "sourceUrl": normalized_url,
+                                "targetPath": recording.file_path.clone(),
+                                "durationMs": recording.duration_ms,
+                                "bytesWritten": recording.bytes_written
+                            }),
+                        );
+                        items.push(RecordingActionItem {
                             file_path: recording.file_path,
                             status: "success".into(),
+                            message: format!("Imported {}.", recording.file_name),
+                            note_id: None,
+                        });
+                    }
+                    Err(message) => {
+                        log_event(
+                            app,
+                            "WARN",
+                            "youtube.register_failed",
+                            serde_json::json!({
+                                "sourceUrl": normalized_url,
+                                "targetPath": path.display().to_string(),
+                                "message": message.clone()
+                            }),
+                        );
+                        if first_failure.is_none() {
+                            first_failure = Some(message.clone());
+                        }
+                        items.push(RecordingActionItem {
+                            file_path: path.display().to_string(),
+                            status: "failed".into(),
                             message,
                             note_id: None,
-                        }],
-                        bootstrap: build_app_bootstrap(app)?,
-                    })
+                        });
+                    }
                 }
-                Err(message) => finish_youtube_failure(app, &normalized_url, message),
             }
+
+            // Entries the link announced that never produced a file. They failed
+            // inside yt-dlp rather than during registration, so nothing above has seen
+            // them — and a link that delivered half its videos must not read as whole.
+            for message in missing {
+                log_event(
+                    app,
+                    "WARN",
+                    "youtube.entry_missing",
+                    serde_json::json!({ "sourceUrl": normalized_url, "message": message.clone() }),
+                );
+                items.push(RecordingActionItem {
+                    file_path: normalized_url.clone(),
+                    status: "failed".into(),
+                    message,
+                    note_id: None,
+                });
+            }
+
+            let succeeded = items.iter().filter(|item| item.status == "success").count();
+            let failed = items.len() - succeeded;
+
+            // Nothing registered at all is a failed import, not an import of zero
+            // things, and it must reach the same failure reporting as a failed fetch.
+            if succeeded == 0 {
+                let message = first_failure
+                    .unwrap_or_else(|| "yt-dlp finished but did not produce an audio file.".into());
+                return finish_youtube_failure(app, &normalized_url, message);
+            }
+
+            // The single-video wording is the file's own name, which is what a link
+            // import has always said and what nearly every link still produces.
+            let message = match (succeeded, failed) {
+                (1, 0) => items
+                    .iter()
+                    .find(|item| item.status == "success")
+                    .map(|item| item.message.clone())
+                    .unwrap_or_else(|| "Imported 1 recording from this link.".into()),
+                (_, 0) => format!("Imported {succeeded} recordings from this link."),
+                _ => format!("Import finished: {succeeded} imported, {failed} failed."),
+            };
+
+            let status_text = message.clone();
+            update_shell_snapshot(app, |shell| {
+                shell.status_text = status_text;
+                shell.transition_count += 1;
+            })?;
+
+            Ok(RecordingBatchResult {
+                status: if failed == 0 { "completed" } else { "partial" }.into(),
+                message,
+                items,
+                bootstrap: build_app_bootstrap(app)?,
+            })
         }
         Ok(FetchOutcome::Cancelled) => finish_youtube_cancelled(app, &normalized_url),
-        Err(message) => {
-            let friendly = if stderr_indicates_js_runtime(&message) {
-                JS_RUNTIME_REJECTED_MESSAGE.to_string()
-            } else {
-                message
-            };
-            finish_youtube_failure(app, &normalized_url, friendly)
-        }
+        Err(failure) => finish_youtube_failure(app, &normalized_url, failure.message()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
+        stderr_indicates_no_audio,
         classify_extension, convert_ffmpeg_args, ffprobe_path_for, is_same_file,
         parse_ffprobe_duration_ms, parse_probe_metadata_line, parse_ytdlp_progress_line,
-        stderr_indicates_js_runtime, stderr_indicates_livestream, stderr_indicates_oversize,
-        validate_import_url,
-        ytdlp_fetch_args, ytdlp_output_template, youtube_output_stem, ImportPlan,
+        is_own_import_artifact, stderr_indicates_js_runtime, stderr_indicates_livestream,
+        stderr_indicates_oversize, validate_import_url,
+        ytdlp_fetch_args, ytdlp_output_template, youtube_output_stem, ImportPlan, StderrTail,
     };
     use std::path::{Path, PathBuf};
 
@@ -1656,29 +2079,53 @@ mod tests {
     }
 
     #[test]
-    fn resolve_downloaded_audio_prefers_exact_then_same_stem_fallback() {
+    fn the_resolver_finds_the_exact_file_a_same_stem_one_or_none() {
         let dir = tempfile::tempdir().unwrap();
-        // Exact match wins.
+        // Exact match.
         let exact = dir.path().join("clip [id].mp3");
         std::fs::write(&exact, b"a").unwrap();
         assert_eq!(
-            super::resolve_downloaded_audio(dir.path(), &exact),
-            Some(exact.clone())
+            super::resolve_downloaded_audio_files(dir.path(), &exact),
+            vec![exact.clone()]
         );
 
-        // Same stem, different (audio) extension is the fallback when the exact
-        // .mp3 is absent.
+        // Same stem, but NOT the file the fetch asked for. `-x` downloads the source
+        // and converts second, so a same-stem `.opus`/`.webm`/`.m4a` is the untouched
+        // download a FAILED extract left behind. Counting it would report the failure
+        // as a success and put a container in the Library whisper cannot read.
         let expected = dir.path().join("song [id2].mp3");
-        let produced = dir.path().join("song [id2].opus");
-        std::fs::write(&produced, b"a").unwrap();
-        assert_eq!(
-            super::resolve_downloaded_audio(dir.path(), &expected),
-            Some(produced)
-        );
+        let leftover = dir.path().join("song [id2].opus");
+        std::fs::write(&leftover, b"a").unwrap();
+        assert!(super::resolve_downloaded_audio_files(dir.path(), &expected).is_empty());
 
-        // Nothing produced -> None (a filter/livestream skip).
+        // Nothing produced -> empty (a filter/livestream skip).
         let missing = dir.path().join("nope [id3].mp3");
-        assert_eq!(super::resolve_downloaded_audio(dir.path(), &missing), None);
+        assert!(super::resolve_downloaded_audio_files(dir.path(), &missing).is_empty());
+    }
+
+    #[test]
+    fn the_resolver_returns_every_entry_of_a_multi_video_link_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = dir.path().join("tweet [id].mp3");
+
+        // Written out of order, and with a two-digit index, so neither filesystem
+        // order nor a lexicographic sort would produce the right answer by accident.
+        let second = dir.path().join("tweet [id] 2.mp3");
+        let tenth = dir.path().join("tweet [id] 10.mp3");
+        let first = dir.path().join("tweet [id] 1.mp3");
+        // The video a failed extract left whole is not audio, so it is never returned
+        // as a recording however it is named.
+        let leftover_video = dir.path().join("tweet [id] 3.mp4");
+        // A different recording that merely starts with the same characters.
+        let bystander = dir.path().join("tweet [id] extra.mp3");
+        for path in [&second, &tenth, &first, &leftover_video, &bystander] {
+            std::fs::write(path, b"a").unwrap();
+        }
+
+        assert_eq!(
+            super::resolve_downloaded_audio_files(dir.path(), &expected),
+            vec![first, second, tenth]
+        );
     }
 
     #[test]
@@ -1691,8 +2138,8 @@ mod tests {
         // The extension spec is the only `%` yt-dlp is meant to parse, so it must
         // survive the escaping untouched and unescaped.
         let literal = template
-            .strip_suffix(".%(ext)s")
-            .expect("the template ends in the extension spec");
+            .strip_suffix("%(playlist_index& {}|)s.%(ext)s")
+            .expect("the template ends in the index and extension specs");
         assert!(!literal.contains("%(ext)s"));
         // Every literal percent is doubled, and un-doubling returns the exact path.
         assert!(literal.contains("100%% Real [abc123]"), "stem: {template}");
@@ -1716,7 +2163,7 @@ mod tests {
         // A percent-free path is left exactly as it was.
         let plain = ytdlp_output_template(Path::new("C:\\recordings"), "clip [abc]");
         assert!(!plain.contains("%%"));
-        assert!(plain.ends_with("clip [abc].%(ext)s"));
+        assert!(plain.ends_with("clip [abc]%(playlist_index& {}|)s.%(ext)s"));
     }
 
     #[test]
@@ -1748,19 +2195,248 @@ mod tests {
             "ERROR: [youtube] abc: Failed to extract nsig function code; please install a JavaScript runtime"
         ));
         assert!(stderr_indicates_js_runtime(
-            "nsig extraction failed: Some formats may be missing"
+            "ERROR: nsig extraction failed: Some formats may be missing"
         ));
         assert!(stderr_indicates_js_runtime(
-            "This extractor requires a JavaScript interpreter"
+            "ERROR: This extractor requires a JavaScript interpreter"
         ));
         // Matching is case-insensitive.
-        assert!(stderr_indicates_js_runtime("NO SUPPORTED JS RUNTIME FOUND"));
+        assert!(stderr_indicates_js_runtime(
+            "ERROR: NO SUPPORTED JS RUNTIME FOUND"
+        ));
         // The other named skips must never be mistaken for it, nor it for them.
         assert!(!stderr_indicates_js_runtime(
             "ERROR: [youtube] abc: Video has not passed filter (!is_live), skipping .."
         ));
-        assert!(!stderr_indicates_livestream("please install a js runtime"));
+        assert!(!stderr_indicates_livestream("ERROR: please install a js runtime"));
         assert!(!stderr_indicates_js_runtime(""));
+    }
+
+    #[test]
+    fn the_js_runtime_warning_every_youtube_run_prints_is_not_a_js_runtime_failure() {
+        // Verbatim from yt-dlp 2026.08.19 with no runtime installed. It precedes
+        // EVERY YouTube extraction, including the ones that go on to succeed, so
+        // reading it as the cause made every YouTube failure — whatever it was —
+        // retry three times and then tell the user to install a JavaScript runtime.
+        let unavailable = "WARNING: [youtube] No supported JavaScript runtime could be found. \
+             Only deno is enabled by default; to use another runtime add  --js-runtimes \
+             RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime \
+             has been deprecated, and some formats may be missing.\n\
+             ERROR: [youtube] aaaaaaaaaaa: This video is unavailable";
+
+        assert!(
+            !stderr_indicates_js_runtime(unavailable),
+            "the fatal line names the real cause; the warning above it is noise"
+        );
+
+        // The same warning must not suppress the real thing when it does happen.
+        let genuine = format!("{unavailable}\nERROR: [youtube] abc: Failed to extract nsig function");
+        assert!(stderr_indicates_js_runtime(&genuine));
+    }
+
+    #[test]
+    fn a_multi_entry_link_announces_how_many_videos_it_holds() {
+        // Verbatim from yt-dlp on a two-clip tweet, as the drain sees it once the
+        // carriage returns are stripped and the line trimmed. This line is the ONLY
+        // signal that a link held more videos than the run produced files for.
+        assert_eq!(
+            super::parse_ytdlp_item_total("[download] Downloading item 1 of 2"),
+            Some(2)
+        );
+        assert_eq!(
+            super::parse_ytdlp_item_total("[download] Downloading item 10 of 12"),
+            Some(12)
+        );
+
+        // A single-video link never prints it, and its absence is what "one" means —
+        // so nothing else may be mistaken for it.
+        assert_eq!(super::parse_ytdlp_item_total(""), None);
+        assert_eq!(
+            super::parse_ytdlp_item_total("[download] Destination: clip of 2.mp3"),
+            None
+        );
+        assert_eq!(
+            super::parse_ytdlp_item_total("[download] Downloading item 1 of many"),
+            None
+        );
+        assert_eq!(super::parse_ytdlp_item_total("YTDLP_PCT  42.0%"), None);
+        // The prefix is what earns its keep here. This is a real line from the same
+        // run, and its tail parses as a number just as readily — matching on " of N"
+        // alone would read the count off whichever line happened to come last.
+        assert_eq!(
+            super::parse_ytdlp_item_total(
+                "[twitter] Playlist Ben Davis - The computer use…: Downloading 2 items of 2"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn every_named_failure_reason_carries_its_own_sentence() {
+        // The reason is decided once, from intact output, and rendered here. It used
+        // to be rendered first and re-decided by reading the rendered sentence back,
+        // which stopped working as soon as that sentence gained a prefix.
+        use super::FetchFailure;
+        assert_eq!(
+            FetchFailure::JsRuntime.message(),
+            super::JS_RUNTIME_REJECTED_MESSAGE
+        );
+        assert_eq!(
+            FetchFailure::Livestream.message(),
+            super::LIVESTREAM_REJECTED_MESSAGE
+        );
+        assert_eq!(
+            FetchFailure::Oversize.message(),
+            super::OVERSIZE_REJECTED_MESSAGE
+        );
+        assert_eq!(
+            FetchFailure::NoAudio.message(),
+            super::NO_AUDIO_REJECTED_MESSAGE
+        );
+        assert_eq!(
+            FetchFailure::Other("raw tool text".into()).message(),
+            "raw tool text"
+        );
+    }
+
+    #[test]
+    fn the_failure_detail_keeps_the_end_and_prefers_the_fatal_lines() {
+        // yt-dlp opens with warnings and closes with the line that explains the run,
+        // so a cap taken from the front shows the least useful part of a long failure.
+        let chatty = format!(
+            "{}\nERROR: [youtube] abc: This video is unavailable",
+            "WARNING: [youtube] some advisory line that goes on\n".repeat(40)
+        );
+        let detail = super::failure_detail(&chatty);
+        assert_eq!(detail, "ERROR: [youtube] abc: This video is unavailable");
+
+        // With no fatal line marked, the END of the output is kept, not the start.
+        let unmarked = format!("{}TAIL", "x".repeat(1000));
+        let detail = super::failure_detail(&unmarked);
+        assert!(detail.ends_with("TAIL"), "kept: {detail}");
+        assert_eq!(detail.chars().count(), 600);
+
+        // Short output survives whole.
+        assert_eq!(super::failure_detail("brief"), "brief");
+    }
+
+    #[test]
+    fn a_video_title_is_never_classified_as_the_reason_the_run_failed() {
+        // yt-dlp quotes the output path back, so the TITLE arrives inside its error
+        // text. Without stripping our own inputs first, this video is refused as a
+        // livestream and the real reason is discarded.
+        let stem = "Cruella marks return of film premieres in Hollywood [ab12]";
+        let stderr = format!(
+            "ERROR: Postprocessing: Error opening output file C:\\rec\\{stem}.mp3"
+        );
+        assert!(
+            stderr_indicates_livestream(&stderr),
+            "the raw text does contain the needle — that is the trap"
+        );
+        assert!(!stderr_indicates_livestream(&super::without_reflected_inputs(
+            &stderr, "https://x.com/a/1", stem
+        )));
+
+        // The URL is stripped too, but defensively rather than against a proven trap:
+        // every needle contains a space and a valid URL percent-encodes spaces, so a
+        // reflected URL cannot match one. Stripping it costs nothing and removes the
+        // question.
+        let url = "https://example.com/watch/this-is-not-live-anymore";
+        assert!(
+            !stderr_indicates_livestream(&format!("ERROR: Unable to download {url}")),
+            "hyphens are not spaces, so this never matched in the first place"
+        );
+
+        // And yt-dlp's own wording still classifies.
+        assert!(stderr_indicates_livestream(&super::without_reflected_inputs(
+            "ERROR: [youtube] TQRjW0WSdy0: This live event will begin in 46 hours.",
+            "https://x.com/a/1",
+            "clip [ab12]",
+        )));
+    }
+
+    #[test]
+    fn only_the_mp3_a_fetch_asked_for_counts_as_produced() {
+        // `-x` downloads the source and converts second, so these are what a FAILED
+        // extract leaves behind — not the recording the run was supposed to make.
+        for leftover in ["clip.webm", "clip.m4a", "clip.opus", "clip.mp4"] {
+            assert!(
+                !super::is_produced_audio(Path::new(leftover)),
+                "{leftover} is a leftover download, not a produced recording"
+            );
+        }
+        assert!(super::is_produced_audio(Path::new("clip.mp3")));
+        assert!(super::is_produced_audio(Path::new("clip.MP3")));
+    }
+
+    #[test]
+    fn a_stem_is_refused_when_a_case_variant_already_answers_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // Windows treats these as the same file, so yt-dlp would find the output
+        // "already downloaded" and write nothing at all.
+        std::fs::write(dir.path().join("NARUTO OP [ab12].mp3"), b"x").unwrap();
+        assert_eq!(
+            super::unique_import_stem(dir.path(), "Naruto OP [ab12]").unwrap(),
+            "Naruto OP [ab12]_1"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_read_refuses_to_claim_a_stem() {
+        // "I could not look" must never become "nothing is there": the sweep would
+        // then delete an earlier import's recordings under the same stem.
+        let missing = std::path::Path::new("C:\\definitely\\not\\a\\folder\\here");
+        assert!(super::unique_import_stem(missing, "clip [ab12]").is_err());
+    }
+
+    #[test]
+    fn a_silent_link_is_answered_with_the_import_sentence() {
+        // The two tool wordings are pinned in `media_errors`; what this path owns is
+        // which sentence they are answered with.
+        assert!(stderr_indicates_no_audio(
+            "ERROR: Postprocessing: WARNING: unable to obtain file audio codec with ffprobe"
+        ));
+        assert_eq!(
+            super::NO_AUDIO_REJECTED_MESSAGE,
+            "This video has no sound, so there is nothing to import."
+        );
+    }
+
+    #[test]
+    fn the_stderr_buffer_drops_the_oldest_lines_not_the_decisive_last_one() {
+        let mut tail = StderrTail::default();
+        // Far more warning text than the cap holds, exactly as a chatty extractor
+        // produces, and then the one line that says what actually failed.
+        for index in 0..400 {
+            tail.push(format!(
+                "WARNING: [youtube] filler line {index} padded out to a realistic width \
+                 so the buffer has to start dropping"
+            ));
+        }
+        tail.push("ERROR: [youtube] abc: Failed to extract nsig function".to_string());
+
+        let text = tail.text();
+        assert!(
+            text.contains("Failed to extract nsig"),
+            "the last line is the one worth keeping"
+        );
+        assert!(
+            !text.contains("filler line 0 "),
+            "the oldest lines are the ones dropped"
+        );
+        assert!(text.len() <= StderrTail::MAX_BYTES + 200);
+        // And the classification the retry depends on still lands.
+        assert!(stderr_indicates_js_runtime(&text));
+    }
+
+    #[test]
+    fn a_single_line_longer_than_the_cap_is_still_kept() {
+        let mut tail = StderrTail::default();
+        tail.push(format!("ERROR: {}", "x".repeat(StderrTail::MAX_BYTES * 2)));
+        assert!(
+            tail.text().starts_with("ERROR: xxx"),
+            "an over-long line is the only account of the failure there is"
+        );
     }
 
     #[test]
@@ -1826,7 +2502,7 @@ mod tests {
             std::fs::write(path, b"x").unwrap();
         }
 
-        super::sweep_partial_fragments(dir.path(), "clip [id]");
+        super::sweep_import_artifacts(dir.path(), "clip [id]", &[]);
 
         assert!(!own_part.exists());
         assert!(!own_ytdl.exists());
@@ -1834,12 +2510,88 @@ mod tests {
         assert!(!own_fragment.exists());
         assert!(other_part.exists(), "an unrelated download must survive");
         assert!(
-            own_finished.exists(),
-            "a same-stem non-fragment is never a sweep target"
+            !own_finished.exists(),
+            "a finished file this import produced is swept too: leaving it behind is \
+             what made the next attempt at the same link skip the download and fail \
+             on the stale copy"
         );
 
         // An empty stem would prefix-match every file, so the sweep refuses to run.
-        super::sweep_partial_fragments(dir.path(), "");
+        super::sweep_import_artifacts(dir.path(), "", &[]);
         assert!(other_part.exists());
+    }
+
+    #[test]
+    fn the_sweep_keeps_what_a_partly_successful_run_produced() {
+        let dir = tempfile::tempdir().unwrap();
+        // A two-video link where the first clip was silent: the extract failed and
+        // left the video whole, while the second clip produced real audio.
+        let kept = dir.path().join("tweet [id] 2.mp3");
+        let failed_video = dir.path().join("tweet [id] 1.mp4");
+        let fragment = dir.path().join("tweet [id] 1.mp4.part");
+        // Somebody else's file, in a folder that may well be shared.
+        let bystander = dir.path().join("tweet [id] mine.mp3");
+        for path in [&kept, &failed_video, &fragment, &bystander] {
+            std::fs::write(path, b"x").unwrap();
+        }
+
+        super::sweep_import_artifacts(dir.path(), "tweet [id]", std::slice::from_ref(&kept));
+
+        assert!(kept.exists(), "the recording that landed must survive");
+        assert!(!failed_video.exists());
+        assert!(!fragment.exists());
+        assert!(bystander.exists(), "not this import's file");
+    }
+
+    #[test]
+    fn a_stem_is_only_taken_when_nothing_on_disk_already_answers_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Nothing there: the base stem is free.
+        assert_eq!(super::unique_import_stem(dir.path(), "clip [id]").unwrap(), "clip [id]");
+
+        // An earlier single-video import of the same link.
+        std::fs::write(dir.path().join("clip [id].mp3"), b"x").unwrap();
+        assert_eq!(
+            super::unique_import_stem(dir.path(), "clip [id]").unwrap(),
+            "clip [id]_1"
+        );
+
+        // An earlier MULTI-video import leaves `<stem>.mp3` free while owning the
+        // numbered files. Reusing the stem here would hand the failure sweep two
+        // recordings that belong to that earlier import.
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::write(dir2.path().join("tweet [id] 1.mp3"), b"x").unwrap();
+        std::fs::write(dir2.path().join("tweet [id] 2.mp3"), b"x").unwrap();
+        assert!(!dir2.path().join("tweet [id].mp3").exists());
+        assert_eq!(
+            super::unique_import_stem(dir2.path(), "tweet [id]").unwrap(),
+            "tweet [id]_1"
+        );
+
+        // A file that merely starts the same way is nobody's business but its own.
+        let dir3 = tempfile::tempdir().unwrap();
+        std::fs::write(dir3.path().join("clip [id] notes.txt"), b"x").unwrap();
+        assert_eq!(
+            super::unique_import_stem(dir3.path(), "clip [id]").unwrap(),
+            "clip [id]"
+        );
+    }
+
+    #[test]
+    fn only_the_stem_plus_an_index_and_an_extension_is_this_imports_own_file() {
+        // What yt-dlp produces from our template.
+        assert!(is_own_import_artifact("clip [id].mp3", "clip [id]"));
+        assert!(is_own_import_artifact("clip [id].mp4.part", "clip [id]"));
+        assert!(is_own_import_artifact("clip [id] 2.mp3", "clip [id]"));
+        assert!(is_own_import_artifact("clip [id] 17.f251.webm", "clip [id]"));
+
+        // What it never produces, and must therefore never delete: the recordings
+        // folder may be a shared one, and these are somebody else's.
+        assert!(!is_own_import_artifact("clip [id] extra.mp3", "clip [id]"));
+        assert!(!is_own_import_artifact("clip [id]2.mp3", "clip [id]"));
+        assert!(!is_own_import_artifact("clip [id] .mp3", "clip [id]"));
+        assert!(!is_own_import_artifact("clip [id2].mp3", "clip [id]"));
+        assert!(!is_own_import_artifact("movie.mp4.part", "clip [id]"));
     }
 }
