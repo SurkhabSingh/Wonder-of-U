@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { readyCatalogFields } from "../../lib/ankiCatalog";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
@@ -108,14 +109,34 @@ export function StudyPicksSettingsPage({
         const catalog = await invoke<AnkiCatalog>("load_anki_catalog", {
           noteType,
         });
+        // Only an answer that reached Anki is cached. An offline catalog resolves
+        // rather than failing, carrying an empty field list because nobody was
+        // asked — and caching that MARKED THE NOTE TYPE AS ASKED. The cache key is
+        // the gate below, so nothing asked again for as long as the page stayed
+        // mounted, and opening Anki changed nothing until it was left and
+        // re-entered. The empty dropdown itself was not the damage: it is empty
+        // either way while Anki is down. Losing the retry was.
+        const fields = readyCatalogFields(catalog);
+        if (fields === null) {
+          return;
+        }
         setFieldsByNoteType((current) => ({
           ...current,
-          [noteType]: catalog.fields,
+          [noteType]: fields,
         }));
       } catch {
-        // Anki closed. The row keeps whatever field is already saved and shows it
-        // as a plain option below, so an offline moment cannot silently blank a
-        // configured source.
+        // The catalog REJECTED rather than resolving — Anki answered its health
+        // check and then failed the real call, which is what "collection is not
+        // available" looks like while a profile is closed or a sync is running.
+        // Nothing is cached, so the gate below stays open; but the only retry
+        // signal is the catalog's status string, and that does not change across
+        // this window. So a rejection inside a "ready" plateau still leaves the
+        // dropdown holding only its saved value until the page is re-entered.
+        // Known gap, same shape as the bug above, left rather than fixed here:
+        // making it retry needs a per-note-type outcome, and an outcome written
+        // into the state the effect depends on is a render loop waiting to happen.
+        // The row keeps whatever field is already saved and shows it as a plain
+        // option below, so nothing is silently blanked either way.
       }
     },
     [],
@@ -123,13 +144,27 @@ export function StudyPicksSettingsPage({
 
   // Fetches the fields for note types already chosen, so re-opening settings shows
   // real dropdowns rather than only the saved value.
+  //
+  // Skipped only when Anki is KNOWN to be down, and re-run when that changes.
+  // "idle" — the catalog before its first load — still asks, so a page opened with
+  // Anki already running fills its dropdowns without waiting on the shared catalog.
+  // The status is a dependency because it is the signal that asking is worth it
+  // again: without it, an offline first visit left the dropdowns empty until the
+  // page was unmounted and rebuilt.
+  //
+  // `.status` and not the catalog object: the poll rebuilds that object every ten
+  // seconds, so depending on it would re-run this forever. The string is equal
+  // across ticks, so a steady Anki costs nothing.
   useEffect(() => {
+    if (displayedAnkiCatalog.status === "offline") {
+      return;
+    }
     for (const source of sources) {
       if (source.noteType && !(source.noteType in fieldsByNoteType)) {
         void loadFieldsFor(source.noteType);
       }
     }
-  }, [sources, fieldsByNoteType, loadFieldsFor]);
+  }, [sources, fieldsByNoteType, loadFieldsFor, displayedAnkiCatalog.status]);
 
   const [scan, setScan] = useState<VocabularySuggestions | null>(null);
 
