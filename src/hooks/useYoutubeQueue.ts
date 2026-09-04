@@ -6,13 +6,15 @@ import type { YoutubeImportOutcome, YoutubeQueueItem } from "../types";
 
 type UseYoutubeQueueOptions = {
   // Single-URL backend import. It BLOCKS until the download finishes and
-  // resolves with the outcome: `ok` with the single-item batch (which is also
-  // how a user Cancel arrives — a "cancelled" batch), or not-ok with the reason
-  // the command rejected. That promise resolving IS the completion signal — we
-  // never wait on a progress value or a "done" event.
+  // resolves with the outcome: `ok` with the batch it landed — normally one item,
+  // several when one link carried several videos — which is also how a user Cancel
+  // arrives (a "cancelled" batch), or not-ok with the reason the command rejected.
+  // That promise resolving IS the completion signal — we never wait on a progress
+  // value or a "done" event.
   importYoutube: (url: string) => Promise<YoutubeImportOutcome>;
   // Fired once when the whole queue drains from busy → idle, with the number of
-  // items that actually landed a recording. Lets the caller defer navigation.
+  // RECORDINGS that landed — not the number of links, which differ when one link
+  // held several videos. Lets the caller defer navigation.
   onAllComplete: (landedCount: number) => void;
 };
 
@@ -222,15 +224,26 @@ export function useYoutubeQueue({
               if (result.status === "cancelled") {
                 return { ...item, status: "cancelled" };
               }
-              const landed = result.items.find(
+              // One link can hold several videos, so this counts them rather
+              // than taking the first: a row that reported "done" off one success
+              // would hide a sibling clip that failed, and the landed tally that
+              // decides where the app navigates would undercount.
+              const landed = result.items.filter(
                 (entry) => entry.status === "success",
               );
-              if (landed) {
-                landedRef.current += 1;
+              const failed = result.items.filter(
+                (entry) => entry.status === "failed",
+              );
+              if (landed.length > 0) {
+                landedRef.current += landed.length;
                 return {
                   ...item,
-                  status: "done",
-                  title: fileNameFromPath(landed.filePath),
+                  status: failed.length > 0 ? "partial" : "done",
+                  title:
+                    landed.length === 1
+                      ? fileNameFromPath(landed[0].filePath)
+                      : `${landed.length} videos from this link`,
+                  message: failed[0]?.message,
                 };
               }
               // A result with nothing landed is a real failure — keep the message.
@@ -273,9 +286,13 @@ export function useYoutubeQueue({
 
   const activeCount = items.filter((item) => item.status === "active").length;
   const queuedCount = items.filter((item) => item.status === "queued").length;
+  // Every TERMINAL status, "partial" included. This drives both the "Fetching N of
+  // M" counter and whether "Clear finished" renders, so a terminal status missing
+  // from it leaves the counter stuck a row behind and the rows undismissable.
   const finishedCount = items.filter(
     (item) =>
       item.status === "done" ||
+      item.status === "partial" ||
       item.status === "failed" ||
       item.status === "cancelled",
   ).length;

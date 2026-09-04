@@ -24,7 +24,6 @@ use crate::{
         run_whisper_transcription, transcription_thread_count, WhisperSlotGuard,
         WhisperTranscriptionRequest,
     },
-    watch::subtitles::ffprobe_path_for,
 };
 
 #[derive(Debug, serde::Serialize)]
@@ -115,7 +114,7 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
     // Without a duration the out-of-bounds pass is skipped, and a hallucinated tail past the
     // end of the film would survive into the subtitle file.
     let duration_ms = crate::recording_library::import::probe_duration_ms(
-        Some(&ffprobe_path_for(&ffmpeg_path.display().to_string()).display().to_string()),
+        Some(&ffmpeg_path.display().to_string()),
         video_path,
     );
 

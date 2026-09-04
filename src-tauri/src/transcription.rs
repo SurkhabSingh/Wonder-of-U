@@ -14,6 +14,8 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+use crate::media_errors::stderr_indicates_no_audio;
+
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -634,6 +636,27 @@ fn parse_whisper_progress_line(line: &str) -> Option<u8> {
     Some(value.min(100) as u8)
 }
 
+/// Shown when the media handed to transcription carries no audio track. Reached from
+/// the Video Library's "Generate subtitles", which passes the video itself as the
+/// audio — there is no gate between a silent file and this decode, and whisper has
+/// nothing to hear.
+const NO_AUDIO_MESSAGE: &str = "This video has no sound, so there is nothing to transcribe.";
+
+/// What a failed decode reports. Kept pure so both branches can be asserted without
+/// spawning ffmpeg.
+///
+/// `-map 0:a:0` against a source with no audio track is the one failure here that is
+/// not a fault: the user handed over a silent video, which the Video Library accepts
+/// without probing for streams. Everything else keeps ffmpeg's own words, which are
+/// the only clue there is.
+fn decode_failure_message(stderr: &str) -> String {
+    if stderr_indicates_no_audio(stderr) {
+        NO_AUDIO_MESSAGE.to_string()
+    } else {
+        format!("ffmpeg failed to decode the recording: {}", stderr.trim())
+    }
+}
+
 /// Decodes any recording to a 16 kHz mono s16le WAV at an ASCII temp path — the format
 /// whisper.cpp and its Silero VAD want. ffmpeg handles non-ASCII *input* paths on Windows,
 /// and the ASCII output name feeds whisper-cli cleanly.
@@ -665,10 +688,14 @@ fn decode_to_wav_16k(ffmpeg_path: &Path, input: &Path) -> Result<PathBuf, String
         .output()
         .map_err(|error| format!("Could not run ffmpeg to decode the recording: {error}"))?;
     if !result.status.success() {
-        return Err(format!(
-            "ffmpeg failed to decode the recording: {}",
-            String::from_utf8_lossy(&result.stderr).trim()
-        ));
+        // The caller's `TempCleanup` only starts tracking this path once the decode
+        // has returned Ok, so on the way out nothing else owns whatever ffmpeg left
+        // at it. (For the no-audio failure below there is nothing to remove — ffmpeg
+        // gives up while parsing the output options, before it opens the file.)
+        let _ = fs::remove_file(&output);
+        return Err(decode_failure_message(&String::from_utf8_lossy(
+            &result.stderr,
+        )));
     }
     if !output.exists() {
         return Err("ffmpeg did not produce the decoded audio.".into());
@@ -1029,6 +1056,24 @@ mod tests {
     static SLOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     use super::*;
+
+    #[test]
+    fn a_silent_video_is_named_rather_than_reported_as_a_decode_fault() {
+        // Reached from the Video Library's "Generate subtitles", which hands the video
+        // itself to the decoder — nothing between it and here checks for audio.
+        assert_eq!(
+            decode_failure_message(
+                "Stream map '' matches no streams.\nTo ignore this, add a trailing '?' to the map."
+            ),
+            "This video has no sound, so there is nothing to transcribe."
+        );
+
+        // A real decode fault still says what ffmpeg said.
+        assert_eq!(
+            decode_failure_message("  Error opening input file /nope.mkv.  "),
+            "ffmpeg failed to decode the recording: Error opening input file /nope.mkv."
+        );
+    }
 
     /// Writes a 16 kHz mono WAV whose middle second is loud and whose edges are near-silent,
     /// optionally behind an extra chunk before `data` — ffmpeg writes a LIST/INFO chunk often

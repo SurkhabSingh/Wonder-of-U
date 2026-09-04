@@ -26,6 +26,7 @@ const YOUTUBE_STATUS_GLYPH: Record<YoutubeQueueItem["status"], string> = {
   queued: "•",
   active: "⟳",
   done: "✓",
+  partial: "◐",
   failed: "!",
   cancelled: "–",
 };
@@ -34,6 +35,7 @@ const YOUTUBE_STATUS_LABEL: Record<YoutubeQueueItem["status"], string> = {
   queued: "Queued",
   active: "Fetching",
   done: "Done",
+  partial: "Partial",
   failed: "Failed",
   cancelled: "Cancelled",
 };
@@ -42,6 +44,7 @@ const YOUTUBE_STATUS_CHIP: Record<YoutubeQueueItem["status"], string> = {
   queued: "status-chip-neutral",
   active: "status-chip-accent",
   done: "status-chip-success",
+  partial: "status-chip-warning",
   failed: "status-chip-error",
   cancelled: "status-chip-warning",
 };
