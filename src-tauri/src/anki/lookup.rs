@@ -20,6 +20,20 @@ const ANKI_DICTIONARIES_URL: &str = "http://127.0.0.1:8766/dictionaries";
 /// Longer than the furigana call: a lookup deinflects several candidates and ranks
 /// entries across seven dictionaries, and it runs on Anki's UI thread.
 const LOOKUP_TIMEOUT: Duration = Duration::from_millis(4000);
+/// The dictionary listing's own budget, far longer than a lookup's.
+///
+/// A lookup is interactive: a reading popup that waits longer than four seconds has
+/// already failed the reader. The listing is a one-off settings call nobody is waiting
+/// on mid-sentence, and it can legitimately take much longer than the read itself
+/// suggests — it shares one SQLite file with the dictionary importer, and a reader
+/// blocks behind the importer's write lock for as long as an import runs. Sharing the
+/// popup's budget made "an import is in progress" indistinguishable from "Anki is
+/// closed", and the settings page reported the second.
+const DICTIONARIES_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long to wait for the port to accept at all. A refused connection is instant; a
+/// bound-but-dead socket — Anki shutting down with a large collection — would
+/// otherwise hold the full listing budget before saying anything.
+const DICTIONARIES_CONNECT_TIMEOUT: Duration = Duration::from_millis(750);
 
 /// The longest run of characters offered as a single term. Matches the reviewer
 /// scanner's own cap; beyond this the candidate is never a word.
@@ -140,37 +154,85 @@ struct DictionariesBridgeResponse {
     error: Option<String>,
 }
 
+/// Nobody answered on the port. True whether Anki is shut or running without the
+/// add-on, which the app cannot tell apart and should not pretend to — so the sentence
+/// covers both and gives a next step for each.
+const DICTIONARIES_SILENT: &str =
+    "Anki isn't answering. Open Anki, and check that the Anki Lookup add-on is installed and enabled.";
+/// Anki is there and did not finish in time — an import or a sync holding the
+/// dictionary file. Names the control that retries, because the section has none of
+/// its own and the one that works is at the top of the page.
+const DICTIONARIES_BUSY: &str =
+    "Anki is busy and didn't answer in time. Use Refresh Anki above to try again.";
+/// The add-on predates this endpoint. Reached by its 404 rather than by a parse
+/// failure: the versions that lack it answer 404 with a perfectly parseable body.
+const DICTIONARIES_ADDON_TOO_OLD: &str =
+    "Your Anki Lookup add-on is too old to list dictionaries. Update it, then restart Anki.";
+/// Something answered on the port and it was not the add-on, or the add-on failed
+/// inside itself. Either way there is nothing the user can do about the detail, and the
+/// detail is tool text.
+const DICTIONARIES_UNREADABLE: &str =
+    "Your dictionaries couldn't be listed. Restart Anki and try again.";
+
+/// A listing that carries a reason instead of dictionaries.
+///
+/// Every message the settings page can show for a failed listing is built here, from
+/// the constants above, and never from a tool's own words. The page renders whatever
+/// `message` holds as the section's only copy, so a serde parse error or the add-on's
+/// Python exception text would otherwise land under "Meanings come from" — against the
+/// rule that this app's copy says what the app does, not how it is built.
+fn dictionaries_unavailable(message: &str) -> LookupDictionaries {
+    LookupDictionaries {
+        status: "unavailable".into(),
+        message: message.into(),
+        dictionaries: Vec::new(),
+    }
+}
+
 /// Lists the dictionaries the add-on can answer from.
 ///
 /// Read-only. Which are enabled, and in what order, belongs to the add-on's own
 /// dictionary manager; this only reports it so the app can offer a subset for
 /// mined cards without changing what the reading popup sees.
+///
+/// Not answering is an ordinary state here, so every way of not answering resolves as
+/// an `unavailable` listing rather than an error. The one exception is an add-on that
+/// answered and reported its own failure, which is a real fault worth an `Err`.
 pub(crate) fn lookup_dictionaries_inner() -> Result<LookupDictionaries, String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(LOOKUP_TIMEOUT)
+        .timeout(DICTIONARIES_TIMEOUT)
+        .connect_timeout(DICTIONARIES_CONNECT_TIMEOUT)
         .build()
         .map_err(|error| error.to_string())?;
 
     let response = match client.get(ANKI_DICTIONARIES_URL).send() {
         Ok(response) => response,
-        Err(_) => {
-            return Ok(LookupDictionaries {
-                status: "unavailable".into(),
-                message: "Open Anki to see your dictionaries — they live in the add-on.".into(),
-                dictionaries: Vec::new(),
-            })
-        }
+        // `is_connect` is tested first: reqwest reports a connect TIMEOUT as a timeout
+        // too, and a port that never accepted is a silent Anki, not a busy one.
+        Err(error) if error.is_connect() => return Ok(dictionaries_unavailable(DICTIONARIES_SILENT)),
+        Err(error) if error.is_timeout() => return Ok(dictionaries_unavailable(DICTIONARIES_BUSY)),
+        Err(_) => return Ok(dictionaries_unavailable(DICTIONARIES_SILENT)),
     };
 
-    let body = response
-        .text()
-        .map_err(|error| format!("The dictionary list could not be read. {error}"))?;
-    let parsed = serde_json::from_str::<DictionariesBridgeResponse>(&body).map_err(|error| {
-        // An add-on too old to have the endpoint answers 404 with a body this cannot
-        // parse, so say what to do rather than showing a parse error.
-        format!("Your Anki add-on is too old to list dictionaries. Update it and restart Anki. ({error})")
-    })?;
+    // Checked before the body is parsed. An add-on without this endpoint answers 404
+    // with a body that parses perfectly well, so a parse failure never identifies it.
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(dictionaries_unavailable(DICTIONARIES_ADDON_TOO_OLD));
+    }
+
+    let body = match response.text() {
+        Ok(body) => body,
+        // The budget covers the body too, so the same "Anki is busy" can land here.
+        Err(error) if error.is_timeout() => return Ok(dictionaries_unavailable(DICTIONARIES_BUSY)),
+        Err(_) => return Ok(dictionaries_unavailable(DICTIONARIES_UNREADABLE)),
+    };
+    let Ok(parsed) = serde_json::from_str::<DictionariesBridgeResponse>(&body) else {
+        return Ok(dictionaries_unavailable(DICTIONARIES_UNREADABLE));
+    };
     if !parsed.ok {
+        // The add-on answered and said it failed. That is a genuine fault rather than
+        // an ordinary state, so it stays an error — and its own wording never reaches
+        // the page, which shows fixed copy for a rejected listing.
         return Err(parsed
             .error
             .unwrap_or_else(|| "The dictionaries could not be listed.".into()));
@@ -324,6 +386,50 @@ fn post_lookup(
 #[cfg(test)]
 mod tests {
     use super::{lookup_candidates, LookupBridgeResponse, LookupEntry};
+
+    #[test]
+    fn every_reason_a_listing_failed_is_copy_this_app_wrote() {
+        // The settings page renders `message` as the section's only text, so none of
+        // these may carry tool wording — no serde parse errors, no reqwest internals,
+        // no Python exception text from the add-on.
+        let reasons = [
+            super::DICTIONARIES_SILENT,
+            super::DICTIONARIES_BUSY,
+            super::DICTIONARIES_ADDON_TOO_OLD,
+            super::DICTIONARIES_UNREADABLE,
+        ];
+        for reason in reasons {
+            assert!(
+                !reason.is_empty() && reason.ends_with('.'),
+                "a reason shown to a user is a sentence: {reason}"
+            );
+            for jargon in ["error", "Err", "reqwest", "serde", "http", "404", "None"] {
+                assert!(
+                    !reason.contains(jargon),
+                    "{reason:?} leaks the word {jargon:?} at the user"
+                );
+            }
+        }
+        // Each names a different situation, so none is a copy-paste of another.
+        for (index, reason) in reasons.iter().enumerate() {
+            for other in &reasons[index + 1..] {
+                assert_ne!(reason, other);
+            }
+        }
+        // A busy Anki must never be told to open Anki — that was the original fault.
+        assert!(!super::DICTIONARIES_BUSY.contains("Open Anki"));
+        // And a silent one has to cover BOTH ways of being silent, since the app
+        // cannot tell a closed Anki from a running one with no add-on.
+        assert!(super::DICTIONARIES_SILENT.contains("add-on"));
+    }
+
+    #[test]
+    fn an_unavailable_listing_carries_the_reason_and_no_dictionaries() {
+        let listing = super::dictionaries_unavailable(super::DICTIONARIES_BUSY);
+        assert_eq!(listing.status, "unavailable");
+        assert_eq!(listing.message, super::DICTIONARIES_BUSY);
+        assert!(listing.dictionaries.is_empty());
+    }
 
     /// The two ends of this type speak different conventions — the add-on sends
     /// snake_case, the webview reads camelCase — and getting it wrong shows up as an

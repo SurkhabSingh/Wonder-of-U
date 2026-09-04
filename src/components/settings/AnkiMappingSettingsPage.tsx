@@ -5,12 +5,18 @@ import type {
   AppSettings,
   BusyAction,
   LookupDictionaries,
+  LookupDictionary,
 } from "../../types";
 import type { RefreshAnkiCatalogOptions } from "../../hooks/useAnkiCatalog";
 import { ThemedSelect } from "../ui/ThemedSelect";
 import { TooltipBadge } from "../ui/Tooltip";
 import { AnkiFieldSelect } from "./AnkiFieldSelect";
 import type { SettingsUpdate } from "./settingsTypes";
+import {
+  DICTIONARIES_UNREADABLE,
+  installedDictionaries,
+  missingDictionaryIds,
+} from "../../lib/dictionaryChoice";
 import { invoke } from "@tauri-apps/api/core";
 
 export function AnkiMappingSettingsPage({
@@ -42,11 +48,22 @@ export function AnkiMappingSettingsPage({
   // which is how an older note type picks up the furigana filter and hover styling.
   // The dictionaries the add-on can answer from. Loaded only while the feature is
   // on: it is an HTTP call to Anki, and a page nobody is configuring should not make
-  // one. Null until it has been asked for, which is what tells the empty case from
-  // the not-yet-loaded one.
+  // one. Null means the answer has not arrived yet — every other outcome, Anki being
+  // closed included, arrives as a listing carrying its own message, so "still asking"
+  // is never mistaken for "asked, and this is what came back".
   const [dictionaries, setDictionaries] = useState<LookupDictionaries | null>(
     null,
   );
+  // The last listing that actually answered, kept across re-checks. Without it,
+  // pressing Refresh Anki emptied a working chooser for as long as the new request
+  // took — up to the full listing budget if Anki was mid-import — leaving the section
+  // less usable after pressing the button than before.
+  const [installed, setInstalled] = useState<LookupDictionary[] | null>(null);
+  // Bumped by Refresh Anki. Without it the listing was fetched once per mount and
+  // nothing on the page could re-ask: opening Anki and pressing the one button that
+  // looks like it should help left the stale answer on screen until the user
+  // navigated away and back.
+  const [dictionaryReloads, setDictionaryReloads] = useState(0);
   const definitionsOn = settingsDraft.features.addDefinitionsToMinedCards;
   const chosenIds = settingsDraft.anki.definitionDictionaryIds ?? [];
 
@@ -54,14 +71,39 @@ export function AnkiMappingSettingsPage({
     if (!definitionsOn) {
       return;
     }
+    // Guards against two answers to two requests landing out of order, which would
+    // leave the page showing the older one.
+    let cancelled = false;
+    setDictionaries(null);
     void invoke<LookupDictionaries>("lookup_dictionaries")
-      .then(setDictionaries)
+      .then((listing) => {
+        if (cancelled) {
+          return;
+        }
+        setDictionaries(listing);
+        // Only an answer that listed something replaces what we already knew.
+        const answered = installedDictionaries(listing);
+        if (answered !== null) {
+          setInstalled(answered);
+        }
+      })
       .catch(() => {
-        // Anki closed, or an add-on too old to have the endpoint. The block below
-        // says so; it is not an error worth a toast on a settings page.
-        setDictionaries(null);
+        // The add-on answered and reported its own failure, or the call itself broke.
+        // The rejection carries the backend's wording, which must never be rendered —
+        // every reason worth telling apart is named in Rust and arrives as an ordinary
+        // unavailable listing, so anything reaching here gets the one fixed sentence.
+        if (!cancelled) {
+          setDictionaries({
+            status: "unavailable",
+            message: DICTIONARIES_UNREADABLE,
+            dictionaries: [],
+          });
+        }
       });
-  }, [definitionsOn]);
+    return () => {
+      cancelled = true;
+    };
+  }, [definitionsOn, dictionaryReloads]);
 
   const toggleDictionary = (id: number) => {
     onUpdateSettings({
@@ -77,20 +119,13 @@ export function AnkiMappingSettingsPage({
   // pitch-accent dictionary has none, so listing it offers a choice that could not
   // do anything if taken.
   const usableDictionaries =
-    dictionaries?.dictionaries.filter((entry) => entry.termCount > 0) ?? [];
-  const hiddenCount =
-    (dictionaries?.dictionaries.length ?? 0) - usableDictionaries.length;
+    installed?.filter((entry) => entry.termCount > 0) ?? [];
+  const hiddenCount = (installed?.length ?? 0) - usableDictionaries.length;
 
   // Ids that were chosen and are no longer installed. Shown rather than dropped:
   // updating a dictionary gives it a new id, so silently discarding these would mean
   // card meanings quietly stopping the day a dictionary is updated.
-  // Checked against the FULL list, not the filtered one — otherwise hiding a
-  // dictionary would report it as uninstalled, which it is not.
-  const missingIds = dictionaries
-    ? chosenIds.filter(
-        (id) => !dictionaries.dictionaries.some((entry) => entry.id === id),
-      )
-    : [];
+  const missingIds = missingDictionaryIds(installed, chosenIds);
 
   const handleCreateNoteType = async () => {
     try {
@@ -145,9 +180,15 @@ export function AnkiMappingSettingsPage({
           <button
             type="button"
             className="secondary"
-            onClick={() =>
-              void onRefreshAnkiCatalog(undefined, { notifySuccess: true })
-            }
+            onClick={() => {
+              // Re-ask for the dictionaries as well as the note types. These are two
+              // different services — note types come from AnkiConnect, dictionaries
+              // from the Lookup add-on's own bridge — so they can disagree, and one
+              // can answer while the other times out. Refreshing only the first left
+              // the section below it stale with no way to re-ask.
+              setDictionaryReloads((count) => count + 1);
+              void onRefreshAnkiCatalog(undefined, { notifySuccess: true });
+            }}
             disabled={busyAction === "loadAnki"}
           >
             Refresh Anki
@@ -478,50 +519,57 @@ export function AnkiMappingSettingsPage({
             <p className="microcopy">
               Turn on meanings above to choose which dictionaries answer.
             </p>
-          ) : dictionaries === null ? (
-            <p className="microcopy">
-              Open Anki to choose &mdash; your dictionaries live in the add-on.
-            </p>
-          ) : dictionaries.status !== "ready" ? (
-            <p className="microcopy">{dictionaries.message}</p>
           ) : (
             <>
-              <p className="microcopy">
-                {chosenIds.length === 0
-                  ? "Nothing chosen yet."
-                  : `${chosenIds.length} chosen. Cards use only these.`}
-                {hiddenCount > 0
-                  ? ` ${hiddenCount} more hold no meanings and are not listed.`
-                  : ""}
-              </p>
-              <div className="dictionary-choice-list">
-                {usableDictionaries.map((entry) => (
-                  <label className="dictionary-choice-row" key={entry.id}>
-                    <input
-                      type="checkbox"
-                      checked={chosenIds.includes(entry.id)}
-                      onChange={() => toggleDictionary(entry.id)}
-                    />
-                    <span className="dictionary-choice-text">
-                      <span className="dictionary-choice-title">
-                        {entry.title}
-                      </span>
-                      <span className="dictionary-choice-count">
-                        {entry.termCount > 0
-                          ? `${entry.termCount.toLocaleString()} entries`
-                          : "no terms"}
-                      </span>
-                    </span>
-                  </label>
-                ))}
-              </div>
+              {/* Why there is no fresh listing, shown ABOVE anything already known
+                  rather than instead of it — a re-check that fails must not take the
+                  working chooser down with it. */}
+              {dictionaries !== null && dictionaries.status !== "ready" ? (
+                <p className="microcopy">{dictionaries.message}</p>
+              ) : null}
+              {installed === null && dictionaries === null ? (
+                <p className="microcopy">Checking your dictionaries&hellip;</p>
+              ) : null}
+              {installed === null ? null : (
+                <>
+                  <p className="microcopy">
+                    {chosenIds.length === 0
+                      ? "Nothing chosen yet."
+                      : `${chosenIds.length} chosen. Cards use only these.`}
+                    {hiddenCount > 0
+                      ? ` ${hiddenCount} more hold no meanings and are not listed.`
+                      : ""}
+                  </p>
+                  <div className="dictionary-choice-list">
+                    {usableDictionaries.map((entry) => (
+                      <label className="dictionary-choice-row" key={entry.id}>
+                        <input
+                          type="checkbox"
+                          checked={chosenIds.includes(entry.id)}
+                          onChange={() => toggleDictionary(entry.id)}
+                        />
+                        <span className="dictionary-choice-text">
+                          <span className="dictionary-choice-title">
+                            {entry.title}
+                          </span>
+                          <span className="dictionary-choice-count">
+                            {entry.termCount > 0
+                              ? `${entry.termCount.toLocaleString()} entries`
+                              : "no terms"}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
             </>
           )}
 
           {definitionsOn &&
           settingsDraft.anki.fields.definition &&
           chosenIds.length === 0 &&
-          dictionaries?.status === "ready" ? (
+          installed !== null ? (
             <p className="microcopy field-warning">
               Tick at least one, or mined cards get no meanings. Nothing chosen
               means none &mdash; the mine says so too.
