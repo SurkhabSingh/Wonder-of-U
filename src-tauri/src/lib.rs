@@ -5,6 +5,7 @@ mod app_setup;
 mod app_state;
 mod app_types;
 mod asset_downloads;
+mod child_io;
 mod commands;
 mod desktop_shell;
 mod jimaku;

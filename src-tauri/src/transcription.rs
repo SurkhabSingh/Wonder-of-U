@@ -1,6 +1,5 @@
 use std::{
     env, fs,
-    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -14,7 +13,7 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::media_errors::stderr_indicates_no_audio;
+use crate::{child_io::drain_lines, media_errors::stderr_indicates_no_audio};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -289,24 +288,6 @@ impl Drop for TempCleanup {
             let _ = fs::remove_file(path);
         }
     }
-}
-
-/// Reads a child pipe line by line, and NEVER stops early on a decode error.
-///
-/// `BufRead::lines()` yields `Err(InvalidData)` for a line that is not valid UTF-8, and
-/// the obvious `.map_while(Result::ok)` ends the whole iterator there. On the stdout
-/// drain that is not a cosmetic loss: the drain owns the EOF signal, so an early exit
-/// tells the wait loop that whisper closed its pipes while it is in fact still writing.
-/// Nothing drains the pipe, whisper blocks on a full one, and `wait()` blocks forever —
-/// after the loop that polls for Cancel has already been left, so the run cannot even be
-/// cancelled. Splitting on newlines and decoding lossily keeps one bad byte from
-/// wedging the queue.
-fn drain_lines(pipe: impl Read) -> impl Iterator<Item = String> {
-    BufReader::new(pipe).split(b'\n').map_while(Result::ok).map(|raw| {
-        String::from_utf8_lossy(&raw)
-            .trim_end_matches('\r')
-            .to_string()
-    })
 }
 
 /// True for whisper-cli's routine chatter — the load banner, VAD/timing tables, and the
@@ -1371,24 +1352,6 @@ mod tests {
             parse_whisper_segment_line("[1000000000000000:00:00.000 --> 00:00:01.000] hi"),
             None
         );
-    }
-
-    #[test]
-    fn drain_lines_survives_invalid_utf8_instead_of_stopping() {
-        // A single bad byte used to end the whole iterator. On the stdout drain that
-        // silently truncates the stream and wedges the run, so decoding is lossy and the
-        // later lines must still arrive.
-        let raw: &[u8] = b"[00:00:00.000 --> 00:00:01.000]  first\n\xff\xfe bad\n[00:00:01.000 --> 00:00:02.000]  third\n";
-        let lines = drain_lines(raw).collect::<Vec<_>>();
-        assert_eq!(lines.len(), 3, "every line should survive, got {lines:?}");
-        assert_eq!(lines[0], "[00:00:00.000 --> 00:00:01.000]  first");
-        assert_eq!(lines[2], "[00:00:01.000 --> 00:00:02.000]  third");
-    }
-
-    #[test]
-    fn drain_lines_strips_carriage_returns() {
-        let raw: &[u8] = b"one\r\ntwo\r\n";
-        assert_eq!(drain_lines(raw).collect::<Vec<_>>(), vec!["one", "two"]);
     }
 
     #[test]

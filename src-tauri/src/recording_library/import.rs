@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -19,6 +18,7 @@ use tauri::{AppHandle, Emitter, EventId, Listener, Manager, Runtime};
 use crate::{
     app_runtime::{build_app_bootstrap, ensure_directory_exists, log_event, now_ms, update_shell_snapshot},
     app_state::sanitize_recording_name,
+    child_io::drain_lines,
     app_types::{
         AppSettings, RecentRecording, RecordingActionItem, RecordingBatchResult,
         SharedPersistedState,
@@ -1016,8 +1016,7 @@ fn parse_ytdlp_progress_line(line: &str) -> Option<f64> {
 ///
 /// The `--progress-template` emits an explicit `YTDLP_PCT` marker and, crucially,
 /// ends in a literal `\n` so each progress render is its own line — that is what
-/// lets a plain `BufReader::lines()` yield one update per line without passing
-/// `--newline` (the same mechanism vibe's proven downloader relies on).
+/// lets the stdout drain yield one update per line without passing `--newline`.
 ///
 /// Hardening: `--ignore-config`/`--no-config-locations` lead so a stray
 /// `yt-dlp.conf` (beside the binary or in the user config path) can never merge
@@ -1146,12 +1145,12 @@ fn fetch_youtube_audio<R: Runtime>(
     let stderr_buffer: Arc<Mutex<StderrTail>> = Arc::new(Mutex::new(StderrTail::default()));
     let stderr_sink = Arc::clone(&stderr_buffer);
     let stderr_thread = thread::spawn(move || {
-        // `filter_map`, never `map_while`: a line that is not valid UTF-8 must skip
-        // that line, not END the drain. yt-dlp is frozen Python whose stdio encoding
-        // follows the console codepage (it reports `out cp1252` on this machine), so a
-        // non-ASCII video title is enough to produce one — and ending the drain here
-        // would silently stop collecting the very output a failure is explained from.
-        for line in BufReader::new(stderr).lines().filter_map(Result::ok) {
+        // Through `drain_lines`, because a bad byte must not end this drain: yt-dlp is
+        // frozen Python whose stdio encoding follows the console codepage (it reports
+        // `out cp1252` on this machine), so a non-ASCII video title is enough to produce
+        // one — and stopping here would stop collecting the very output a failure is
+        // explained from.
+        for line in drain_lines(stderr) {
             if let Ok(mut sink) = stderr_sink.lock() {
                 sink.push(line);
             }
@@ -1169,12 +1168,13 @@ fn fetch_youtube_audio<R: Runtime>(
     let announced_sink = Arc::clone(&announced_entries);
     let stdout_thread = thread::spawn(move || {
         let _done_sender = done_sender;
-        // As with stderr: skip an undecodable line rather than ending the drain. On
-        // stdout ending it is worse than losing text — the sender drops, the wait loop
-        // below breaks on `Disconnected` and stops polling the cancel flag, and the
-        // import blocks in `wait()` on a child that is still downloading and can no
-        // longer be cancelled.
-        for line in BufReader::new(stdout).lines().filter_map(Result::ok) {
+        // Ending this drain early is worse than losing text: this thread owns the EOF
+        // signal, so the sender drops, the wait loop below breaks on `Disconnected` and
+        // stops polling the cancel flag, and the import blocks in `wait()` on a child
+        // that is still downloading and can no longer be cancelled.
+        for line in drain_lines(stdout) {
+            // Every `\r`, not just a trailing one: a stalled render can pack several
+            // progress updates into one line, and the parser reads from the start.
             let line = line.replace('\r', "");
             let line = line.trim();
             if let Some(percent) = parse_ytdlp_progress_line(line) {
