@@ -22,12 +22,25 @@ type UseRecordingLibraryOptions = {
 
 const RECORDINGS_PER_PAGE = 8;
 
+// Keeps the saved deck and note type selectable while Anki has not answered, so a
+// closed Anki never reads as "you configured nothing".
+//
+// The saved FIELD names are deliberately not merged in. Each of the twelve field rows
+// reads this one list, so merging them put every row's saved name into every other
+// row's dropdown: pick a note type with different fields and each dropdown still
+// offered the previous note type's names, and choosing one produced a mapping Anki has
+// no field for — which AnkiConnect discards without a word. Preserving the current
+// selection is a per-row job and `AnkiFieldSelect` already does it, offering
+// `currentValue` when the live list lacks it.
+//
+// The deck and note-type merges below are the same idea done safely: one value each,
+// which is the one that select is showing, and both of those selects carry the same
+// per-value fallback. Kept because they are the value the user chose, not a pool of
+// names borrowed from elsewhere.
 function mergeSavedAnkiSettingsIntoCatalog(
   catalog: AnkiCatalog,
   ankiSettings: AnkiSettings,
 ): AnkiCatalog {
-  const savedFields = Object.values(ankiSettings.fields).filter(Boolean);
-
   return {
     ...catalog,
     decks: Array.from(
@@ -42,7 +55,7 @@ function mergeSavedAnkiSettingsIntoCatalog(
         ...catalog.noteTypes,
       ]),
     ),
-    fields: Array.from(new Set([...savedFields, ...catalog.fields])),
+    fields: catalog.fields,
     message:
       catalog.status === "idle" && (ankiSettings.deckName || ankiSettings.noteType)
         ? "Using your saved Anki mapping. Refresh only if you changed decks, note types, or fields in Anki."
