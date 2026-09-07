@@ -5,7 +5,10 @@ use tauri::{
     WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
-use crate::{app_state::normalize_indicator_position, app_types::SharedPersistedState};
+use crate::{
+    app_runtime::log_event, app_state::normalize_indicator_position,
+    app_types::SharedPersistedState,
+};
 
 /// Overlay window label and the event it listens for. Kept next to each other so
 /// the backend show/emit and the tiny overlay bundle cannot drift apart.
@@ -92,19 +95,50 @@ fn build_indicator_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> 
         .set_ignore_cursor_events(true)
         .map_err(|error| format!("Could not make the recording indicator click-through: {error}"))?;
 
-    position_indicator_window(app, &window);
+    let placement = position_indicator_window(app, &window);
+    log_event(
+        app,
+        "INFO",
+        "indicator.built",
+        serde_json::json!({
+            "anchor": placement.as_ref().map(|placement| placement.anchor.clone()),
+            "x": placement.as_ref().map(|placement| placement.x),
+            "y": placement.as_ref().map(|placement| placement.y),
+            "monitorWidth": placement.as_ref().map(|placement| placement.monitor_width),
+            "monitorHeight": placement.as_ref().map(|placement| placement.monitor_height),
+            "positionError": placement.as_ref().and_then(|placement| placement.error.clone())
+        }),
+    );
 
     Ok(())
+}
+
+/// Where a toast was anchored, and what refused it if anything.
+///
+/// Returned rather than logged in place so one toast produces one log line: an
+/// anchor that lands off-screen and a toast that never fired look identical from
+/// outside the app, and telling them apart is the whole reason any of this is
+/// recorded. `None` means no monitor was reported, so nothing was moved.
+struct IndicatorPlacement {
+    anchor: String,
+    x: i32,
+    y: i32,
+    monitor_width: u32,
+    monitor_height: u32,
+    error: Option<String>,
 }
 
 /// Parks the toast at the user's chosen anchor within the primary monitor's work
 /// area (default top-center — the spot the eye lands on and clear of the video
 /// controls along the bottom). If no monitor is reported we leave the window
 /// where it landed rather than guess a position that could push it off-screen.
-fn position_indicator_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) {
+fn position_indicator_window<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Option<IndicatorPlacement> {
     let monitor = match app.primary_monitor() {
         Ok(Some(monitor)) => monitor,
-        _ => return,
+        _ => return None,
     };
 
     let position = indicator_position_setting(app);
@@ -136,7 +170,17 @@ fn position_indicator_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWin
         _ => top + margin,
     };
 
-    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    let placed = PhysicalPosition::new(x.round() as i32, y.round() as i32);
+    let error = window.set_position(placed).err().map(|error| error.to_string());
+
+    Some(IndicatorPlacement {
+        anchor: position,
+        x: placed.x,
+        y: placed.y,
+        monitor_width: work_area.size.width,
+        monitor_height: work_area.size.height,
+        error,
+    })
 }
 
 /// The user's chosen toast anchor, normalized to one of the six known values so
@@ -166,7 +210,18 @@ fn indicator_position_setting<R: Runtime>(app: &AppHandle<R>) -> String {
 pub(crate) fn signal_recording_indicator<R: Runtime>(app: &AppHandle<R>, signal: IndicatorSignal) {
     let state = match app.try_state::<RecordingIndicatorState<R>>() {
         Some(state) => state,
-        None => return,
+        // Setup failed, so there is no tray handle and no overlay. The reason was
+        // reported once at startup; without this the toast simply never appears and
+        // nothing says why.
+        None => {
+            log_event(
+                app,
+                "WARN",
+                "indicator.not_configured",
+                serde_json::json!({}),
+            );
+            return;
+        }
     };
 
     {
@@ -195,15 +250,51 @@ pub(crate) fn signal_recording_indicator<R: Runtime>(app: &AppHandle<R>, signal:
         IndicatorSignal::Failed => ("failed", "Recording failed"),
     };
 
-    if let Some(window) = app.get_webview_window(INDICATOR_WINDOW_LABEL) {
-        // Re-anchor on every appearance so a changed position setting takes
-        // effect on the next toast without an app restart.
-        position_indicator_window(app, &window);
-        let _ = window.show();
-    }
-    let _ = app.emit_to(
+    let window = app.get_webview_window(INDICATOR_WINDOW_LABEL);
+    let mut placement = None;
+    let shown = match &window {
+        Some(window) => {
+            // Re-anchor on every appearance so a changed position setting takes
+            // effect on the next toast without an app restart.
+            placement = position_indicator_window(app, window);
+            window.show().map(|()| true).map_err(|error| error.to_string())
+        }
+        None => Ok(false),
+    };
+    let emitted = app.emit_to(
         INDICATOR_WINDOW_LABEL,
         INDICATOR_EVENT,
         serde_json::json!({ "state": indicator_state, "label": label }),
+    );
+
+    // Most reasons the toast fails to appear are silent otherwise: the managed state
+    // missing, the window never built, `show` refused, or the anchor landing off the
+    // screen. Each is a different fix and none could be told apart from outside.
+    //
+    // What this CANNOT tell you: `emit_to` reports that the event was dispatched, not
+    // that anything was listening for it. A webview that failed to load its script
+    // answers exactly like one that painted the card, so an INFO here means every
+    // step the backend owns succeeded — not that anyone saw a toast.
+    log_event(
+        app,
+        if shown.as_ref().is_ok_and(|shown| *shown) && emitted.is_ok() {
+            "INFO"
+        } else {
+            "WARN"
+        },
+        "indicator.signalled",
+        serde_json::json!({
+            "state": indicator_state,
+            "windowFound": window.is_some(),
+            "shown": shown.as_ref().ok().copied().unwrap_or(false),
+            "showError": shown.err(),
+            "emitError": emitted.err().map(|error| error.to_string()),
+            "anchor": placement.as_ref().map(|placement| placement.anchor.clone()),
+            "x": placement.as_ref().map(|placement| placement.x),
+            "y": placement.as_ref().map(|placement| placement.y),
+            "monitorWidth": placement.as_ref().map(|placement| placement.monitor_width),
+            "monitorHeight": placement.as_ref().map(|placement| placement.monitor_height),
+            "positionError": placement.as_ref().and_then(|placement| placement.error.clone())
+        }),
     );
 }
