@@ -17,6 +17,8 @@ import {
   installedDictionaries,
   missingDictionaryIds,
 } from "../../lib/dictionaryChoice";
+import { readyCatalogFields } from "../../lib/ankiCatalog";
+import { ankiFieldCoverage } from "../../lib/ankiFieldCoverage";
 import { invoke } from "@tauri-apps/api/core";
 
 export function AnkiMappingSettingsPage({
@@ -126,6 +128,14 @@ export function AnkiMappingSettingsPage({
   // updating a dictionary gives it a new id, so silently discarding these would mean
   // card meanings quietly stopping the day a dictionary is updated.
   const missingIds = missingDictionaryIds(installed, chosenIds);
+
+  // How the saved mapping lines up with the note type it points at. Null while the
+  // note type's real fields are unknown, so a closed Anki never accuses the user of
+  // mapping to fields that do not exist.
+  const fieldCoverage = ankiFieldCoverage(
+    readyCatalogFields(displayedAnkiCatalog),
+    settingsDraft.anki.fields,
+  );
 
   const handleCreateNoteType = async () => {
     try {
@@ -427,6 +437,33 @@ export function AnkiMappingSettingsPage({
           fieldOptions={displayedAnkiCatalog.fields}
           onChange={onUpdateAnkiField}
         />
+
+        {/* A mapped name the note type does not have is the one failure Anki will
+            not report: AnkiConnect drops the write and the card arrives missing that
+            content. Said here, before a push, because afterwards there is nothing to
+            see. */}
+        {fieldCoverage && fieldCoverage.missing.length > 0 ? (
+          <p className="microcopy field-warning">
+            {fieldCoverage.missing.length === 1
+              ? "This field is not on "
+              : "These fields are not on "}
+            {settingsDraft.anki.noteType}, so anything written to{" "}
+            {fieldCoverage.missing.length === 1 ? "it" : "them"} is discarded:{" "}
+            {fieldCoverage.missing.join(", ")}. Choose a field that exists, or
+            unmap {fieldCoverage.missing.length === 1 ? "it" : "them"}.
+          </p>
+        ) : null}
+
+        {/* Not a fault, just the gap made visible: this app fills twelve kinds of
+            content and a note type built for reading can carry twice that. */}
+        {fieldCoverage && fieldCoverage.unfilled.length > 0 ? (
+          <p className="microcopy">
+            Nothing is written to {fieldCoverage.unfilled.length}{" "}
+            {fieldCoverage.unfilled.length === 1 ? "field" : "fields"} on{" "}
+            {settingsDraft.anki.noteType}: {fieldCoverage.unfilled.join(", ")}.
+            Cards keep whatever Anki puts there.
+          </p>
+        ) : null}
       </div>
 
       <div className="info-note">
