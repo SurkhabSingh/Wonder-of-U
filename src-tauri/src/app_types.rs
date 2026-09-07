@@ -1075,7 +1075,19 @@ pub(crate) struct AnkiCatalog {
     pub(crate) version: Option<i64>,
     pub(crate) decks: Vec<String>,
     pub(crate) note_types: Vec<String>,
-    pub(crate) fields: Vec<String>,
+    /// The note type `fields` was read for, echoed back from the request.
+    ///
+    /// Without it, a caller holding a catalog cannot tell whether the fields belong to
+    /// the note type it is showing or to the one before it. A refresh leaves the previous
+    /// catalog in place while it runs, so between choosing a note type and the answer
+    /// arriving, every name in `fields` belongs to the previous note type.
+    pub(crate) note_type: String,
+    /// The fields of `note_type`, or `None` when Anki has no note type by that name.
+    ///
+    /// One empty list used to carry both answers, and they call for opposite responses: a
+    /// note type whose fields do not match the mapping is a mapping to fix, whereas a note
+    /// type that is gone is a note type to re-choose.
+    pub(crate) fields: Option<Vec<String>>,
 }
 
 /// Sentences already present in the Anki mining destination, so the transcript viewer

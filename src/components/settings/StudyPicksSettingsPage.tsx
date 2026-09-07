@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { readyCatalogFields } from "../../lib/ankiCatalog";
+import {
+  fieldsForNoteType,
+  noteTypeMissingFromAnki,
+} from "../../lib/ankiCatalog";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
@@ -116,13 +119,18 @@ export function StudyPicksSettingsPage({
         // mounted, and opening Anki changed nothing until it was left and
         // re-entered. The empty dropdown itself was not the damage: it is empty
         // either way while Anki is down. Losing the retry was.
-        const fields = readyCatalogFields(catalog);
-        if (fields === null) {
+        const fields = fieldsForNoteType(catalog, noteType);
+        // Anki answered, and has no note type by this name. That is a real answer, so
+        // it is cached like any other: the gate below is "have we asked", and asking
+        // again cannot produce a different one while the note type stays deleted.
+        const answered =
+          fields ?? (noteTypeMissingFromAnki(catalog, noteType) ? [] : null);
+        if (answered === null) {
           return;
         }
         setFieldsByNoteType((current) => ({
           ...current,
-          [noteType]: fields,
+          [noteType]: answered,
         }));
       } catch {
         // The catalog REJECTED rather than resolving — Anki answered its health
@@ -316,7 +324,11 @@ export function StudyPicksSettingsPage({
             {scan.suggestions.map((suggestion) => (
               <div
                 className="suggestion-row"
-                key={`${suggestion.noteType} ${suggestion.field}`}
+                // Separated by a character no Anki note type or field name can
+                // contain, so two suggestions cannot collide on one key. Written
+                // as an escape rather than typed: a raw NUL in the source makes
+                // the whole file binary to grep and every other text tool.
+                key={`${suggestion.noteType}\u0000${suggestion.field}`}
               >
                 <div className="suggestion-detail">
                   <strong>

@@ -17,7 +17,10 @@ import {
   installedDictionaries,
   missingDictionaryIds,
 } from "../../lib/dictionaryChoice";
-import { readyCatalogFields } from "../../lib/ankiCatalog";
+import {
+  fieldsForNoteType,
+  noteTypeMissingFromAnki,
+} from "../../lib/ankiCatalog";
 import { ankiFieldCoverage } from "../../lib/ankiFieldCoverage";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -129,12 +132,24 @@ export function AnkiMappingSettingsPage({
   // card meanings quietly stopping the day a dictionary is updated.
   const missingIds = missingDictionaryIds(installed, chosenIds);
 
-  // How the saved mapping lines up with the note type it points at. Null while the
-  // note type's real fields are unknown, so a closed Anki never accuses the user of
-  // mapping to fields that do not exist.
+  // The fields of the note type this page is SHOWING, which is not always the note
+  // type the catalog describes. Every sentence below names `settingsDraft.anki.noteType`,
+  // so reading the fields off anything else produces a confident description of a
+  // different note type — the exact mistake these warnings exist to catch.
+  const noteTypeFields = fieldsForNoteType(
+    displayedAnkiCatalog,
+    settingsDraft.anki.noteType,
+  );
+  // How the saved mapping lines up with that note type. Null while its real fields are
+  // unknown, so neither a closed Anki nor a refresh still in flight can accuse the user
+  // of mapping to fields that do not exist.
   const fieldCoverage = ankiFieldCoverage(
-    readyCatalogFields(displayedAnkiCatalog),
+    noteTypeFields,
     settingsDraft.anki.fields,
+  );
+  const noteTypeIsGone = noteTypeMissingFromAnki(
+    displayedAnkiCatalog,
+    settingsDraft.anki.noteType,
   );
 
   const handleCreateNoteType = async () => {
@@ -346,7 +361,7 @@ export function AnkiMappingSettingsPage({
           label="Sentence / transcript field"
           description="Receives the transcript during push; it renders on the BACK of the listening card. When furigana is enabled or added later, this same field is replaced with ruby HTML, like a Yomitan expression field."
           currentValue={settingsDraft.anki.fields.transcription}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -354,7 +369,7 @@ export function AnkiMappingSettingsPage({
           label="Replay audio field"
           description="Receives the [sound:...] tag. The replay icon only appears on card sides that render this field. If it disappears after revealing the answer, the Back template must include the front side or this audio field."
           currentValue={settingsDraft.anki.fields.audio}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -362,7 +377,7 @@ export function AnkiMappingSettingsPage({
           label="Translation field"
           description="Optional translated text. Leave unmapped if you do not want translations written to Anki."
           currentValue={settingsDraft.anki.fields.translation}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -370,7 +385,7 @@ export function AnkiMappingSettingsPage({
           label="Source path field"
           description="Optional local audio path for your own tracking. This is not required for playback after Anki copies the media."
           currentValue={settingsDraft.anki.fields.sourcePath}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -378,7 +393,7 @@ export function AnkiMappingSettingsPage({
           label="Created-at field"
           description="Optional recording timestamp in milliseconds. Leave unmapped unless your note type has a tracking field for it."
           currentValue={settingsDraft.anki.fields.createdAt}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -386,7 +401,7 @@ export function AnkiMappingSettingsPage({
           label="Source link field"
           description="Optional clickable link back to the source. YouTube imports deep-link to the sentence's exact moment; other URLs link plainly; a local recording with no URL is skipped."
           currentValue={settingsDraft.anki.fields.sourceUrl}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -394,7 +409,7 @@ export function AnkiMappingSettingsPage({
           label="Recording title field"
           description="Optional display title of the recording (an imported file's original name, or the file stem for mic recordings)."
           currentValue={settingsDraft.anki.fields.title}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -402,7 +417,7 @@ export function AnkiMappingSettingsPage({
           label="Screenshot field"
           description="Optional still from the video at the mined line's moment. Only lines mined while watching a video get one — a mic recording or an audio file is mined without a picture, and so is a video you have since moved."
           currentValue={settingsDraft.anki.fields.image}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -410,7 +425,7 @@ export function AnkiMappingSettingsPage({
           label="Video clip field"
           description="Optional short video of the mined line, cut to the same window as the audio. Like the screenshot, only lines mined while watching a video get one. Leave unmapped to skip it — clips are far larger than stills and sync to AnkiWeb with everything else."
           currentValue={settingsDraft.anki.fields.video}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -418,7 +433,7 @@ export function AnkiMappingSettingsPage({
           label="Mined word field"
           description="Receives the single word when you mine one from the dictionary popup, rather than mining a whole line. Left empty on every card made by mining a line, which is what tells the two kinds apart on the card."
           currentValue={settingsDraft.anki.fields.word}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -426,7 +441,7 @@ export function AnkiMappingSettingsPage({
           label="Definitions field"
           description="Optional dictionary meanings of the words in the line you don't know yet. Only filled when the setting below is on, and only for words the app can see are new to you."
           currentValue={settingsDraft.anki.fields.definition}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
         <AnkiFieldSelect
@@ -434,9 +449,20 @@ export function AnkiMappingSettingsPage({
           label="Timestamp field"
           description="Optional timestamp of the sentence within the recording (H:MM:SS)."
           currentValue={settingsDraft.anki.fields.position}
-          fieldOptions={displayedAnkiCatalog.fields}
+          fieldOptions={noteTypeFields ?? []}
           onChange={onUpdateAnkiField}
         />
+
+        {/* Anki has no note type by this name — renamed or deleted since it was
+            chosen. Every field row above is empty because of that, and nothing else
+            on the page says so: the picker keeps offering the saved name, so the one
+            control that could fix this looks like it is already correct. */}
+        {noteTypeIsGone ? (
+          <p className="microcopy field-warning">
+            Anki has no note type called {settingsDraft.anki.noteType} any more, so
+            there are no fields to map. Choose the note type it was renamed to.
+          </p>
+        ) : null}
 
         {/* Nothing mapped to the first field means every push fails, so this is
             said above the rest and worded as the blocker it is. Anki reports it as

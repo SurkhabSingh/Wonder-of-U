@@ -565,7 +565,14 @@ export type AnkiCatalog = {
   version: number | null;
   decks: string[];
   noteTypes: string[];
-  fields: string[];
+  // The note type `fields` was read for. Not always the note type on screen: a refresh
+  // leaves the previous catalog in place while it runs, so anything reading `fields`
+  // has to check this first or it will describe the note type before last.
+  noteType: string;
+  // The fields of `noteType`, or null when Anki has no note type by that name. Null and
+  // an empty list are different answers, and `fieldsForNoteType` is where they are told
+  // apart — read them through it rather than here.
+  fields: string[] | null;
 };
 
 // Sentences already mined into the configured Anki deck + note type. `status` is

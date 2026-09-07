@@ -459,5 +459,6 @@ export const DEFAULT_ANKI_CATALOG: AnkiCatalog = {
   version: null,
   decks: [],
   noteTypes: [],
-  fields: [],
+  noteType: "",
+  fields: null,
 };
