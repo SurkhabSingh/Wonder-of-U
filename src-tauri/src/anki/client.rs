@@ -101,7 +101,7 @@ fn note_snapshot_from_result(
     field_name: Option<&str>,
 ) -> Result<AnkiNoteSnapshot, String> {
     let Some(notes) = result.as_array() else {
-        return Err("Anki's note list could not be read — its API may have changed.".to_string());
+        return Err(unreadable_list("note list"));
     };
 
     let Some(note) = notes.iter().find(|note| {
@@ -150,7 +150,10 @@ pub(super) fn anki_note_field_value(
 /// What to say when a reply is not the list it was supposed to be. `what` names the
 /// thing that was asked for, so the message says which read failed rather than that
 /// something, somewhere, did.
-fn unreadable_list(what: &str) -> String {
+///
+/// Shared rather than repeated: three places had this sentence written out by hand, and
+/// a sentence kept in three places is one that stops matching itself.
+pub(super) fn unreadable_list(what: &str) -> String {
     format!("Anki's {what} could not be read — its API may have changed.")
 }
 
@@ -219,7 +222,29 @@ fn json_i64_array(value: serde_json::Value, what: &str) -> Result<Vec<i64>, Stri
 mod tests {
     use super::{
         check_anki_connect_error, json_i64_array, json_string_array, note_snapshot_from_result,
+        unreadable_list,
     };
+
+    #[test]
+    fn every_unreadable_list_says_it_the_same_way() {
+        // Pinned by construction rather than by a copy of the sentence. Three callers used
+        // to spell this out by hand; a test that spelled it out a fourth time would go on
+        // passing after one of them drifted.
+        assert_eq!(
+            note_snapshot_from_result(&serde_json::Value::Null, 1, None)
+                .err()
+                .expect("an unreadable reply must not resolve to a snapshot"),
+            unreadable_list("note list")
+        );
+        assert_eq!(
+            json_string_array(serde_json::Value::Null, "deck list"),
+            Err(unreadable_list("deck list"))
+        );
+        assert_eq!(
+            json_i64_array(serde_json::Value::Null, "note id list"),
+            Err(unreadable_list("note id list"))
+        );
+    }
 
     #[test]
     fn a_reply_that_is_not_a_list_is_an_error_not_an_empty_one() {

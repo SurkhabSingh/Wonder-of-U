@@ -2,7 +2,9 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::app_types::{MinedSentences, SharedPersistedState};
 
-use super::client::{anki_connect_health_check, anki_connect_request, anki_offline_message};
+use super::client::{
+    anki_connect_health_check, anki_connect_request, anki_offline_message, unreadable_list,
+};
 
 /// How many notes to ask `notesInfo` about at a time. See `collect_mined_sentences`.
 const NOTES_INFO_BATCH: usize = 500;
@@ -293,9 +295,7 @@ fn collect_mined_sentences(deck: &str, note_type: &str, field: &str) -> Result<V
         // come back unmarked, and the count would still be reported as a fact. Same shape as
         // the Jimaku `unwrap_or_default` — a failure wearing an empty result's clothes.
         let Some(notes) = notes.as_array() else {
-            return Err(
-                "Anki's note list could not be read — its API may have changed.".to_string(),
-            );
+            return Err(unreadable_list("note list"));
         };
         for note in notes {
             let value = note
