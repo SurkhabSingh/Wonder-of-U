@@ -365,10 +365,10 @@ pub(crate) fn scan_vocabulary_sources_inner<R: Runtime>(
         .map(|source| (source.note_type, source.field))
         .collect();
 
-    let note_types = json_string_array(anki_connect_request(
-        "modelNames",
-        serde_json::json!({}),
-    )?);
+    let note_types = json_string_array(
+        anki_connect_request("modelNames", serde_json::json!({}))?,
+        "note type list",
+    )?;
     let examined = note_types.len();
 
     let mut suggestions: Vec<VocabularySuggestion> = note_types
@@ -593,7 +593,9 @@ mod tests {
         let note_types = json_string_array(
             super::anki_connect_request("modelNames", serde_json::json!({}))
                 .expect("Anki must be running with AnkiConnect"),
-        );
+            "note type list",
+        )
+        .expect("Anki's note type list should be a list of strings");
 
         let empty = HashSet::new();
         for note_type in &note_types {

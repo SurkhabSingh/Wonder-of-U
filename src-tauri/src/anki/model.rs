@@ -352,10 +352,13 @@ fn update_existing_note_type() -> Result<(), String> {
     //
     // Fields are appended rather than reordered. `Sentence` must stay first (Anki keys
     // duplicate detection on the first field), and appending cannot disturb that.
-    let existing_fields = json_string_array(anki_connect_request(
-        "modelFieldNames",
-        serde_json::json!({ "modelName": NOTE_TYPE_NAME }),
-    )?);
+    let existing_fields = json_string_array(
+        anki_connect_request(
+            "modelFieldNames",
+            serde_json::json!({ "modelName": NOTE_TYPE_NAME }),
+        )?,
+        "field list",
+    )?;
     let mut next_index = existing_fields.len();
     for field_name in FIELD_NAMES {
         if existing_fields.iter().any(|existing| existing == field_name) {
@@ -454,7 +457,10 @@ fn update_existing_note_type() -> Result<(), String> {
 pub(crate) fn create_recommended_note_type_inner() -> Result<String, String> {
     anki_connect_health_check().map_err(|error| anki_offline_message(&error))?;
 
-    let existing = json_string_array(anki_connect_request("modelNames", serde_json::json!({}))?);
+    let existing = json_string_array(
+        anki_connect_request("modelNames", serde_json::json!({}))?,
+        "note type list",
+    )?;
     if existing.iter().any(|name| name == NOTE_TYPE_NAME) {
         // The note type predates the furigana change, so bring it up to date rather than
         // leaving the user with `漢字[かんじ]` rendered as literal text.
