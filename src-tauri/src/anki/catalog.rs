@@ -49,9 +49,14 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
         );
     }
 
-    let mut decks = json_string_array(anki_connect_request("deckNames", serde_json::json!({}))?);
-    let mut note_types =
-        json_string_array(anki_connect_request("modelNames", serde_json::json!({}))?);
+    let mut decks = json_string_array(
+        anki_connect_request("deckNames", serde_json::json!({}))?,
+        "deck list",
+    )?;
+    let mut note_types = json_string_array(
+        anki_connect_request("modelNames", serde_json::json!({}))?,
+        "note type list",
+    )?;
     decks.sort();
     note_types.sort();
 
@@ -66,10 +71,13 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
     // Checked against the list rather than wrapped in a fallback: a lookup that cannot be
     // asked for a name that does not exist has no failure to handle.
     let fields = if note_types.iter().any(|name| name == &selected_note_type) {
-        json_string_array(anki_connect_request(
-            "modelFieldNames",
-            serde_json::json!({ "modelName": selected_note_type }),
-        )?)
+        json_string_array(
+            anki_connect_request(
+                "modelFieldNames",
+                serde_json::json!({ "modelName": selected_note_type }),
+            )?,
+            "field list",
+        )?
     } else {
         Vec::new()
     };
