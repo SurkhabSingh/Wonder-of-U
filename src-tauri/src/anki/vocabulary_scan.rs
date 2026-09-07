@@ -28,7 +28,7 @@ use crate::{
 use super::{
     client::{
         anki_connect_health_check, anki_connect_request, anki_find_notes, anki_notes_info,
-        anki_offline_message, json_string_array,
+        anki_offline_message, json_array, json_string_array,
     },
     known_words::normalize_expression,
 };
@@ -159,29 +159,30 @@ fn field_name_is_a_hint(field_name: &str) -> bool {
 /// furigana'd or ruby-wrapped field has to be judged on the word it carries, not on
 /// the markup around it, or every such field scores as a long non-word and the
 /// decks most worth finding are the ones missed.
-fn sampled_field_values(notes: &serde_json::Value, field_name: &str) -> Vec<String> {
+/// Takes the notes rather than the reply they arrived in, so a reply that is not a list
+/// cannot be read here as a sample of no notes — which scored every field as unfilled and
+/// dropped the note type out of the suggestions without a word. The shape is checked once,
+/// where the reply arrives.
+fn sampled_field_values(notes: &[serde_json::Value], field_name: &str) -> Vec<String> {
     notes
-        .as_array()
-        .map(|notes| {
-            notes
-                .iter()
-                .map(|note| {
-                    note.get("fields")
-                        .and_then(|fields| fields.get(field_name))
-                        .and_then(|field| field.get("value"))
-                        .and_then(|value| value.as_str())
-                        .map(normalize_expression)
-                        .unwrap_or_default()
-                })
-                .collect()
+        .iter()
+        .map(|note| {
+            note.get("fields")
+                .and_then(|fields| fields.get(field_name))
+                .and_then(|field| field.get("value"))
+                .and_then(|value| value.as_str())
+                .map(normalize_expression)
+                .unwrap_or_default()
         })
-        .unwrap_or_default()
+        .collect()
 }
 
-fn field_names(notes: &serde_json::Value) -> Vec<String> {
+/// The field names on the first sampled note. Empty for an empty sample, or for a note
+/// that arrived without a fields object — both of which are about the notes themselves,
+/// not about whether the reply could be read.
+fn field_names(notes: &[serde_json::Value]) -> Vec<String> {
     notes
-        .as_array()
-        .and_then(|notes| notes.first())
+        .first()
         .and_then(|note| note.get("fields"))
         .and_then(|fields| fields.as_object())
         .map(|fields| fields.keys().cloned().collect())
@@ -197,7 +198,7 @@ struct FieldScore {
 }
 
 fn score_field(
-    notes: &serde_json::Value,
+    notes: &[serde_json::Value],
     field_name: &str,
     dictionary_path: &Path,
 ) -> Option<FieldScore> {
@@ -286,17 +287,17 @@ fn examine_note_type(
     }
 
     let sample = spread_sample(mature.clone());
-    let notes =
-        anki_notes_info(&sample).map_err(|error| format!("notesInfo: {error}"))?;
+    let reply = anki_notes_info(&sample).map_err(|error| format!("notesInfo: {error}"))?;
+    let notes = json_array(&reply, "note list")?;
 
     // Best single-token rate wins. The name is a tie-break only, and the field's own
     // order breaks a remaining tie so the answer is stable across runs rather than
     // following whatever order the fields came back in.
-    let best = field_names(&notes)
+    let best = field_names(notes)
         .into_iter()
         .enumerate()
         .filter_map(|(index, field)| {
-            score_field(&notes, &field, dictionary_path).map(|score| (index, score))
+            score_field(notes, &field, dictionary_path).map(|score| (index, score))
         })
         .max_by_key(|(index, score)| {
             (
@@ -492,13 +493,13 @@ mod tests {
         assert!(spread_sample(Vec::new()).is_empty());
     }
 
-    fn notes_json() -> serde_json::Value {
-        serde_json::json!([
-            { "fields": { "Word": { "value": "見[み]る", "order": 0 },
-                          "Sentence": { "value": "本を読む。", "order": 1 } } },
-            { "fields": { "Word": { "value": "<b>食べる</b>", "order": 0 },
-                          "Sentence": { "value": "", "order": 1 } } },
-        ])
+    fn notes_json() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({ "fields": { "Word": { "value": "見[み]る", "order": 0 },
+                                            "Sentence": { "value": "本を読む。", "order": 1 } } }),
+            serde_json::json!({ "fields": { "Word": { "value": "<b>食べる</b>", "order": 0 },
+                                            "Sentence": { "value": "", "order": 1 } } }),
+        ]
     }
 
     #[test]
@@ -530,7 +531,7 @@ mod tests {
         let mut names = field_names(&notes_json());
         names.sort();
         assert_eq!(names, vec!["Sentence".to_string(), "Word".to_string()]);
-        assert!(field_names(&serde_json::json!([])).is_empty());
+        assert!(field_names(&[]).is_empty());
     }
 
     /// Prints how IPADIC analyses specific values.

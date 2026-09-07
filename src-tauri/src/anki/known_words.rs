@@ -19,7 +19,10 @@ use crate::{
 };
 
 use super::{
-    client::{anki_connect_health_check, anki_find_notes, anki_notes_info, anki_offline_message},
+    client::{
+        anki_connect_health_check, anki_find_notes, anki_notes_info, anki_offline_message,
+        json_array,
+    },
     known_words_store::{persist_index, remove_known_words_file},
 };
 
@@ -251,17 +254,17 @@ fn note_expression(note: &serde_json::Value, field_name: &str) -> Option<String>
     (!expression.is_empty()).then_some(expression)
 }
 
-/// Collects the known expressions out of one `notesInfo` response.
-fn known_words_from_notes(notes: &serde_json::Value, field_name: &str) -> HashSet<String> {
+/// Collects the known expressions out of one batch of notes.
+///
+/// Takes the notes themselves rather than the reply they arrived in, so there is no shape
+/// left to get wrong here. Reading the array inside this function meant an unreadable reply
+/// became an empty set, and an empty set folded into the index means the words on those
+/// cards are treated as words the user has never seen.
+fn known_words_from_notes(notes: &[serde_json::Value], field_name: &str) -> HashSet<String> {
     notes
-        .as_array()
-        .map(|notes| {
-            notes
-                .iter()
-                .filter_map(|note| note_expression(note, field_name))
-                .collect()
-        })
-        .unwrap_or_default()
+        .iter()
+        .filter_map(|note| note_expression(note, field_name))
+        .collect()
 }
 
 /// Walks one note type over AnkiConnect and folds its words into `words`. Takes no
@@ -274,7 +277,11 @@ fn collect_source_words(
 ) -> Result<(), String> {
     let note_ids = anki_find_notes(&note_type_query(&source.note_type, mature_after_days))?;
     for batch in note_ids.chunks(NOTES_INFO_BATCH_SIZE) {
-        words.extend(known_words_from_notes(&anki_notes_info(batch)?, &source.field));
+        let reply = anki_notes_info(batch)?;
+        words.extend(known_words_from_notes(
+            json_array(&reply, "note list")?,
+            &source.field,
+        ));
     }
     Ok(())
 }
@@ -595,11 +602,11 @@ mod tests {
 
     #[test]
     fn notes_are_read_into_a_deduplicated_index() {
-        let notes = serde_json::json!([
+        let notes = vec![
             note("Expression", "見[み]る"),
             note("Expression", "<ruby>見<rt>み</rt></ruby>る"),
             note("Expression", "食べる"),
-        ]);
+        ];
         let words = known_words_from_notes(&notes, "Expression");
 
         // The first two are the same word wearing different markup. An index that
@@ -611,14 +618,14 @@ mod tests {
 
     #[test]
     fn notes_missing_or_empty_in_the_chosen_field_are_skipped() {
-        let notes = serde_json::json!([
+        let notes = vec![
             note("Expression", "見る"),
             note("Expression", ""),
             note("Expression", "[sound:a.mp3]"),
             note("Expression", "<div><br></div>"),
             // A note of another shape entirely: the field simply is not there.
             note("Word", "食べる"),
-        ]);
+        ];
         let words = known_words_from_notes(&notes, "Expression");
 
         assert_eq!(words.len(), 1);
@@ -626,9 +633,13 @@ mod tests {
     }
 
     #[test]
-    fn a_response_that_is_not_a_note_array_yields_no_words() {
-        assert!(known_words_from_notes(&serde_json::Value::Null, "Expression").is_empty());
-        assert!(known_words_from_notes(&serde_json::json!([]), "Expression").is_empty());
-        assert!(known_words_from_notes(&serde_json::json!([{}]), "Expression").is_empty());
+    fn an_empty_batch_yields_no_words_and_says_nothing_about_the_reply() {
+        // The case this replaces asserted that a reply which was not an array yielded no
+        // words, which is the bug written down as a requirement: an unreadable reply and a
+        // deck of unknown words became the same answer, and the index recorded the second.
+        // That case cannot be expressed here any more — the reply is checked where it
+        // arrives, and this function is handed notes.
+        assert!(known_words_from_notes(&[], "Expression").is_empty());
+        assert!(known_words_from_notes(&[serde_json::json!({})], "Expression").is_empty());
     }
 }
