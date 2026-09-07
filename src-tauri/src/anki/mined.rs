@@ -3,7 +3,8 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::app_types::{MinedSentences, SharedPersistedState};
 
 use super::client::{
-    anki_connect_health_check, anki_connect_request, anki_offline_message, unreadable_list,
+    anki_connect_health_check, anki_connect_request, anki_offline_message, json_array,
+    json_i64_array, json_string_array,
 };
 
 /// How many notes to ask `notesInfo` about at a time. See `collect_mined_sentences`.
@@ -274,11 +275,10 @@ fn collect_mined_sentences(deck: &str, note_type: &str, field: &str) -> Result<V
         escape_anki_search(note_type),
         escape_anki_search(deck)
     );
-    let note_ids = anki_connect_request("findNotes", serde_json::json!({ "query": query }))?;
-    let note_ids = note_ids
-        .as_array()
-        .map(|ids| ids.iter().filter_map(serde_json::Value::as_i64).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let note_ids = json_i64_array(
+        anki_connect_request("findNotes", serde_json::json!({ "query": query }))?,
+        "note id list",
+    )?;
     if note_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -289,15 +289,12 @@ fn collect_mined_sentences(deck: &str, note_type: &str, field: &str) -> Result<V
     // Chunking bounds both, and makes the timeout a per-batch budget.
     let mut sentences = Vec::with_capacity(note_ids.len());
     for batch in note_ids.chunks(NOTES_INFO_BATCH) {
-        let notes = anki_connect_request("notesInfo", serde_json::json!({ "notes": batch }))?;
+        let reply = anki_connect_request("notesInfo", serde_json::json!({ "notes": batch }))?;
         // A batch that does not come back as an array is a read that did not happen, and
         // skipping it would quietly shrink the answer: sentences genuinely in the deck would
         // come back unmarked, and the count would still be reported as a fact. Same shape as
         // the Jimaku `unwrap_or_default` — a failure wearing an empty result's clothes.
-        let Some(notes) = notes.as_array() else {
-            return Err(unreadable_list("note list"));
-        };
-        for note in notes {
+        for note in json_array(&reply, "note list")? {
             let value = note
                 .get("fields")
                 .and_then(|fields| fields.as_object())
@@ -366,26 +363,29 @@ pub(crate) fn load_mined_sentences_inner<R: Runtime>(
         "modelFieldNames",
         serde_json::json!({ "modelName": note_type }),
     ) {
-        Ok(value) => {
-            let known = value
-                .as_array()
-                .map(|names| {
-                    names
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .any(|name| name == field)
-                })
-                .unwrap_or(false);
-            if !known {
+        // Read strictly, and reported as its own outcome. `unwrap_or(false)` treated a
+        // reply this app could not parse as proof the field was gone — the same confident
+        // wrong answer the check itself exists to prevent, one level up.
+        Ok(value) => match json_string_array(value, "field list") {
+            Err(error) => {
                 return Ok(MinedSentences {
                     status: "stale".into(),
-                    message: format!(
-                        "The note type \"{note_type}\" has no field called \"{field}\" any more,                          so mined sentences cannot be matched. Re-map the sentence field in Settings."
-                    ),
+                    message: format!("Mined sentences cannot be matched right now. {error}"),
                     sentences: Vec::new(),
                 });
             }
-        }
+            Ok(names) => {
+                if !names.iter().any(|name| name.as_str() == field) {
+                    return Ok(MinedSentences {
+                        status: "stale".into(),
+                        message: format!(
+                            "The note type \"{note_type}\" has no field called \"{field}\" any more,                          so mined sentences cannot be matched. Re-map the sentence field in Settings."
+                        ),
+                        sentences: Vec::new(),
+                    });
+                }
+            }
+        },
         Err(error) => {
             return Ok(MinedSentences {
                 status: "stale".into(),

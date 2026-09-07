@@ -1,5 +1,6 @@
 use super::client::{
     anki_connect_health_check, anki_connect_request, anki_offline_message, json_string_array,
+    unreadable,
 };
 
 /// The app's OWN note type — a listening card, deliberately distinct from the Anki
@@ -421,10 +422,15 @@ fn update_existing_note_type() -> Result<(), String> {
         "modelStyling",
         serde_json::json!({ "modelName": NOTE_TYPE_NAME }),
     )?;
+    // Read strictly, because what follows a lenient read here is not a missing warning
+    // but a deleted stylesheet. `unwrap_or_default` made an unreadable reply look like a
+    // note type carrying no CSS, and the merge below would then write this app's blocks
+    // over whatever the user had — defeating, in the one case it mattered, the rule
+    // stated immediately beneath it.
     let current_css = styling
         .get("css")
         .and_then(|value| value.as_str())
-        .unwrap_or_default();
+        .ok_or_else(|| unreadable("card styling"))?;
     // Appended, never overwritten: `updateModelStyling` replaces the whole stylesheet, so
     // writing `CARD_CSS` over a note type the user has customised would discard their work.
     // Accumulated rather than written one block at a time, so adding a third later cannot

@@ -100,9 +100,7 @@ fn note_snapshot_from_result(
     note_id: i64,
     field_name: Option<&str>,
 ) -> Result<AnkiNoteSnapshot, String> {
-    let Some(notes) = result.as_array() else {
-        return Err(unreadable_list("note list"));
-    };
+    let notes = json_array(result, "note list")?;
 
     let Some(note) = notes.iter().find(|note| {
         note.get("noteId")
@@ -147,14 +145,29 @@ pub(super) fn anki_note_field_value(
     Ok(anki_note_snapshot(note_id, Some(field_name))?.field_value)
 }
 
-/// What to say when a reply is not the list it was supposed to be. `what` names the
+/// What to say when a reply is not the shape it was supposed to be. `what` names the
 /// thing that was asked for, so the message says which read failed rather than that
 /// something, somewhere, did.
 ///
 /// Shared rather than repeated: three places had this sentence written out by hand, and
 /// a sentence kept in three places is one that stops matching itself.
-pub(super) fn unreadable_list(what: &str) -> String {
+pub(super) fn unreadable(what: &str) -> String {
     format!("Anki's {what} could not be read — its API may have changed.")
+}
+
+/// The items of an AnkiConnect array reply, or an error naming what could not be read.
+///
+/// The one door every "this should be a list" read goes through. `as_array` answers
+/// `None` for a reply of the wrong shape, and the `unwrap_or_default` that reads so
+/// naturally after it turns that into an empty list — an answer no caller can tell from
+/// "there are none". That mistake was made independently in five places in this module,
+/// which is what a missing name looks like: give the operation one, and the lenient
+/// spelling has nowhere left to hide.
+pub(super) fn json_array<'a>(
+    value: &'a serde_json::Value,
+    what: &str,
+) -> Result<&'a Vec<serde_json::Value>, String> {
+    value.as_array().ok_or_else(|| unreadable(what))
 }
 
 /// The strings in an AnkiConnect array reply.
@@ -174,16 +187,9 @@ pub(super) fn json_string_array(
     value: serde_json::Value,
     what: &str,
 ) -> Result<Vec<String>, String> {
-    let Some(items) = value.as_array() else {
-        return Err(unreadable_list(what));
-    };
-    items
+    json_array(&value, what)?
         .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::to_string)
-                .ok_or_else(|| unreadable_list(what))
-        })
+        .map(|item| item.as_str().map(str::to_string).ok_or_else(|| unreadable(what)))
         .collect()
 }
 
@@ -208,13 +214,10 @@ pub(super) fn anki_notes_info(note_ids: &[i64]) -> Result<serde_json::Value, Str
 /// The ids in an AnkiConnect array reply. Strict for the same reason as
 /// `json_string_array`: an unreadable search answer became "no notes matched", and
 /// the known-words build treats that as "the user knows none of these words".
-fn json_i64_array(value: serde_json::Value, what: &str) -> Result<Vec<i64>, String> {
-    let Some(items) = value.as_array() else {
-        return Err(unreadable_list(what));
-    };
-    items
+pub(super) fn json_i64_array(value: serde_json::Value, what: &str) -> Result<Vec<i64>, String> {
+    json_array(&value, what)?
         .iter()
-        .map(|item| item.as_i64().ok_or_else(|| unreadable_list(what)))
+        .map(|item| item.as_i64().ok_or_else(|| unreadable(what)))
         .collect()
 }
 
@@ -222,11 +225,11 @@ fn json_i64_array(value: serde_json::Value, what: &str) -> Result<Vec<i64>, Stri
 mod tests {
     use super::{
         check_anki_connect_error, json_i64_array, json_string_array, note_snapshot_from_result,
-        unreadable_list,
+        unreadable,
     };
 
     #[test]
-    fn every_unreadable_list_says_it_the_same_way() {
+    fn every_unreadable_reply_says_it_the_same_way() {
         // Pinned by construction rather than by a copy of the sentence. Three callers used
         // to spell this out by hand; a test that spelled it out a fourth time would go on
         // passing after one of them drifted.
@@ -234,15 +237,15 @@ mod tests {
             note_snapshot_from_result(&serde_json::Value::Null, 1, None)
                 .err()
                 .expect("an unreadable reply must not resolve to a snapshot"),
-            unreadable_list("note list")
+            unreadable("note list")
         );
         assert_eq!(
             json_string_array(serde_json::Value::Null, "deck list"),
-            Err(unreadable_list("deck list"))
+            Err(unreadable("deck list"))
         );
         assert_eq!(
             json_i64_array(serde_json::Value::Null, "note id list"),
-            Err(unreadable_list("note id list"))
+            Err(unreadable("note id list"))
         );
     }
 
