@@ -111,8 +111,8 @@ pub(super) fn user_friendly_anki_error(error: &str, settings: &AnkiSettings) -> 
         );
     }
 
-    // Anki refuses a note whose FIRST field is blank, and that one rule covers every
-    // way this error arrives. Two of them reach it:
+    // Anki refuses a note whose FIRST field is blank, and that one rule covers every way
+    // this error arrives. Three routes reach it:
     //
     //   * nothing is mapped to the first field. Our own note type puts the transcript
     //     there, so this never happens on it — but on a note type built for reading,
@@ -120,14 +120,19 @@ pub(super) fn user_friendly_anki_error(error: &str, settings: &AnkiSettings) -> 
     //   * the mapped names are not on the note type. AnkiConnect drops a write to a
     //     name it does not know without a word, so the first field ends up blank
     //     along with the rest.
+    //   * something IS mapped to the first field and this card had nothing to put in
+    //     it — a recording that transcribed to silence, pushed with the transcript
+    //     mapped first, which is where our own note type puts it.
     //
-    // Confirmed against a real collection: writing ONLY the 8th field of a note type
-    // is refused, writing only the 1st is accepted. The message used to name the
-    // transcript field and say it was missing, which is wrong in the first case and
-    // sends the user looking for a field that is right there.
+    // Confirmed against a real collection: writing ONLY the 8th field of a note type is
+    // refused, writing only the 1st is accepted. The message used to name the transcript
+    // field and say it was missing, which is wrong on the first route and sends the user
+    // looking for a field that is right there. Telling them to map something to the first
+    // field is wrong on the third for the same reason, so the sentence offers the two
+    // settings to check and then says what it means if both are already right.
     if normalized.contains("empty") {
         return format!(
-            "Anki rejected the card because the first field on '{}' was left blank, and Anki refuses any note that starts empty. Map something to that field, or check Settings for mapped fields the note type no longer has.",
+            "Anki rejected the card because the first field on '{}' was blank, and Anki refuses any note that starts empty. Check in Settings that something is mapped to that field and that the name still exists on the note type; if both are right, this card had nothing to put there.",
             settings.note_type
         );
     }
@@ -261,6 +266,24 @@ mod tests {
         assert!(
             !message.contains("'Sentence'"),
             "the transcript field is not the cause and must not be accused: {message}"
+        );
+    }
+
+    #[test]
+    fn the_empty_card_error_does_not_prescribe_a_fix_that_is_already_done() {
+        // Three routes end in this error and one of them is a card that simply had
+        // nothing to put in a field that IS mapped — a recording transcribed from
+        // silence. An instruction to map something to the first field is advice to do
+        // what has already been done, so the sentence has to offer the settings as
+        // something to CHECK and then account for both of them being right.
+        let message = user_friendly_anki_error(
+            "cannot create note because it is empty",
+            &settings_for("Wonder of U Listening", "Sentence"),
+        );
+        assert!(message.contains("Check in Settings"), "{message}");
+        assert!(
+            message.contains("nothing to put there"),
+            "the card-had-no-content route must be accounted for: {message}"
         );
     }
 
