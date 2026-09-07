@@ -15,6 +15,16 @@ export type AnkiFieldCoverage = {
   /// type built for reading can carry twenty or more. Listed so the gap is visible
   /// rather than guessed at, because nothing else on the page names it.
   unfilled: string[];
+  /// The note type's FIRST field, when nothing writes to it.
+  ///
+  /// Not a gap in coverage — a push that cannot happen at all. Anki refuses any note
+  /// whose first field is blank, so every card fails while this is set, and the error
+  /// it fails with says the card was "empty" without saying which field it means.
+  ///
+  /// Our own note type puts the transcript first, so it never trips. A note type
+  /// built for reading usually starts with the word being studied, which nothing here
+  /// writes — which is exactly how choosing one silently guarantees failure.
+  emptyFirstField: string | null;
 };
 
 /// Compares the saved mapping against the fields the note type actually has.
@@ -34,10 +44,13 @@ export function ankiFieldCoverage(
   const available = new Set(fields);
   const mapped = new Set(Object.values(mapping).filter((name) => name !== ""));
 
+  const [first] = fields;
+
   return {
     missing: [...mapped].filter((name) => !available.has(name)),
     // Kept in the note type's own order, which is the order Anki shows them in, so
     // the list reads against what the user sees in the card editor.
     unfilled: fields.filter((name) => !mapped.has(name)),
+    emptyFirstField: first !== undefined && !mapped.has(first) ? first : null,
   };
 }

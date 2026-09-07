@@ -438,6 +438,18 @@ export function AnkiMappingSettingsPage({
           onChange={onUpdateAnkiField}
         />
 
+        {/* Nothing mapped to the first field means every push fails, so this is
+            said above the rest and worded as the blocker it is. Anki reports it as
+            an "empty" card without naming the field, which is why it has to be
+            caught here instead. */}
+        {fieldCoverage?.emptyFirstField ? (
+          <p className="microcopy field-warning">
+            Nothing is mapped to {fieldCoverage.emptyFirstField}, the first field on{" "}
+            {settingsDraft.anki.noteType}. Anki refuses any note that starts empty, so
+            no card can be created until something is mapped to it.
+          </p>
+        ) : null}
+
         {/* A mapped name the note type does not have is the one failure Anki will
             not report: AnkiConnect drops the write and the card arrives missing that
             content. Said here, before a push, because afterwards there is nothing to

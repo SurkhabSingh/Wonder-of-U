@@ -111,15 +111,24 @@ pub(super) fn user_friendly_anki_error(error: &str, settings: &AnkiSettings) -> 
         );
     }
 
-    // "cannot create note because it is empty" means every field the app wrote was
-    // discarded, and there is only one way that happens: the names it wrote to are not on
-    // the note type. AnkiConnect drops unknown keys without a word, so the note arrives with
-    // nothing in it and Anki refuses it — an error about emptiness for a card the app filled
-    // in. Renaming the sentence field in Anki is all it takes.
+    // Anki refuses a note whose FIRST field is blank, and that one rule covers every
+    // way this error arrives. Two of them reach it:
+    //
+    //   * nothing is mapped to the first field. Our own note type puts the transcript
+    //     there, so this never happens on it — but on a note type built for reading,
+    //     the first field is usually the word, which nothing here writes.
+    //   * the mapped names are not on the note type. AnkiConnect drops a write to a
+    //     name it does not know without a word, so the first field ends up blank
+    //     along with the rest.
+    //
+    // Confirmed against a real collection: writing ONLY the 8th field of a note type
+    // is refused, writing only the 1st is accepted. The message used to name the
+    // transcript field and say it was missing, which is wrong in the first case and
+    // sends the user looking for a field that is right there.
     if normalized.contains("empty") {
         return format!(
-            "Anki rejected the card as empty, which means the '{}' field is not on the '{}' note type any more — everything written to it was discarded. Re-map the fields in Settings.",
-            settings.fields.transcription, settings.note_type
+            "Anki rejected the card because the first field on '{}' was left blank, and Anki refuses any note that starts empty. Map something to that field, or check Settings for mapped fields the note type no longer has.",
+            settings.note_type
         );
     }
 
@@ -223,6 +232,51 @@ pub(crate) fn recording_pushed_to_anki_target(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn settings_for(note_type: &str, transcription: &str) -> AnkiSettings {
+        AnkiSettings {
+            note_type: note_type.to_string(),
+            deck_name: "wonder of u".to_string(),
+            fields: crate::app_types::AnkiFieldMapping {
+                transcription: transcription.to_string(),
+                ..Default::default()
+            },
+            ..AnkiSettings::default()
+        }
+    }
+
+    #[test]
+    fn the_empty_card_error_blames_the_first_field_not_the_transcript_field() {
+        // Anki refuses a note whose FIRST field is blank. Proven against a real
+        // collection: writing only Lapis's 8th field is refused, writing only its 1st
+        // is accepted. The message used to say the transcript field was no longer on
+        // the note type — false whenever that field exists and simply is not first,
+        // and it sent the user hunting for a field sitting in front of them.
+        let message = user_friendly_anki_error(
+            "cannot create note because it is empty",
+            &settings_for("Lapis", "Sentence"),
+        );
+        assert!(message.contains("first field"), "{message}");
+        assert!(message.contains("Lapis"), "{message}");
+        assert!(
+            !message.contains("'Sentence'"),
+            "the transcript field is not the cause and must not be accused: {message}"
+        );
+    }
+
+    #[test]
+    fn the_other_anki_errors_still_name_what_they_are_about() {
+        let settings = settings_for("Lapis", "Sentence");
+        assert!(user_friendly_anki_error("duplicate", &settings).contains("wonder of u"));
+        assert!(
+            user_friendly_anki_error("model was not found", &settings).contains("Lapis")
+        );
+        assert!(
+            user_friendly_anki_error("deck was not found", &settings).contains("wonder of u")
+        );
+        // Anything unrecognised still carries Anki's own words rather than a guess.
+        assert!(user_friendly_anki_error("kaboom", &settings).contains("kaboom"));
+    }
 
     const SEG: MediaPart = MediaPart::Line {
         label: "seg",
