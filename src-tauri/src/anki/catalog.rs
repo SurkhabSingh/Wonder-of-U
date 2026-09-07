@@ -35,7 +35,8 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
                 version: None,
                 decks: Vec::new(),
                 note_types: Vec::new(),
-                fields: Vec::new(),
+                note_type: selected_note_type,
+                fields: None,
             });
         }
     };
@@ -70,16 +71,21 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
     //
     // Checked against the list rather than wrapped in a fallback: a lookup that cannot be
     // asked for a name that does not exist has no failure to handle.
+    //
+    // Answered as `None` rather than an empty list. An empty list is what a note type with
+    // no matching fields looks like, and the page's response to that is to name the mapped
+    // fields it could not find — advice that reads as nonsense when the note type itself is
+    // the thing that is gone.
     let fields = if note_types.iter().any(|name| name == &selected_note_type) {
-        json_string_array(
+        Some(json_string_array(
             anki_connect_request(
                 "modelFieldNames",
-                serde_json::json!({ "modelName": selected_note_type }),
+                serde_json::json!({ "modelName": &selected_note_type }),
             )?,
             "field list",
-        )?
+        )?)
     } else {
-        Vec::new()
+        None
     };
 
     Ok(AnkiCatalog {
@@ -88,6 +94,7 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
         version,
         decks,
         note_types,
+        note_type: selected_note_type,
         fields,
     })
 }
