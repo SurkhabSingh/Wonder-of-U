@@ -98,3 +98,51 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
         fields,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::app_types::AnkiCatalog;
+
+    fn catalog(note_type: &str, fields: Option<Vec<String>>) -> serde_json::Value {
+        serde_json::to_value(AnkiCatalog {
+            status: "ready".into(),
+            message: "AnkiConnect is ready.".into(),
+            version: Some(6),
+            decks: vec!["wonder of u".into()],
+            note_types: vec!["Wonder of U Listening".into(), "Lapis".into()],
+            note_type: note_type.into(),
+            fields,
+        })
+        .expect("the catalog must serialize")
+    }
+
+    /// The catalog crosses into TypeScript, and `noteType` is what stops a warning
+    /// describing a note type other than the one it names. A rename on this side is silent
+    /// on the other: the frontend reads `undefined`, every comparison against it fails, and
+    /// the warnings just stop appearing — which looks exactly like nothing being wrong.
+    #[test]
+    fn the_catalog_reaches_the_frontend_under_the_names_it_is_read_by() {
+        let ready = catalog("Lapis", Some(vec!["Expression".into(), "Sentence".into()]));
+        assert_eq!(ready["noteType"], serde_json::json!("Lapis"));
+        assert_eq!(ready["fields"], serde_json::json!(["Expression", "Sentence"]));
+        assert_eq!(
+            ready["noteTypes"],
+            serde_json::json!(["Wonder of U Listening", "Lapis"])
+        );
+    }
+
+    /// A note type Anki does not have must arrive as null rather than an empty list. The
+    /// empty list is what a note type whose fields do not match the mapping looks like, and
+    /// the two ask the user for opposite things: re-choose the note type, or fix the fields.
+    #[test]
+    fn a_note_type_anki_does_not_have_arrives_as_null() {
+        assert_eq!(
+            catalog("Wonder of U Listening", None)["fields"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            catalog("Wonder of U Listening", Some(Vec::new()))["fields"],
+            serde_json::json!([])
+        );
+    }
+}
