@@ -221,6 +221,22 @@ export function StudyPicksSettingsPage({
     );
   };
 
+  // The one source the scan can never propose. It judges a field by how consistently
+  // it is filled, and the mined word field is empty on every card mined from a row
+  // rather than from the lookup popup — so any mixed collection scores it under the
+  // fill threshold and it is dropped before it reaches the suggestions. That test is
+  // right for someone else's deck and wrong for this one, where the mapping is not a
+  // guess: it is the setting the cards were pushed with, so it is offered outright.
+  const minedNoteType = settingsDraft.anki.noteType;
+  const minedWordField = settingsDraft.anki.fields.word;
+  const minedWordsAreUncounted =
+    minedNoteType !== "" &&
+    minedWordField !== "" &&
+    !sources.some(
+      (source) =>
+        source.noteType === minedNoteType && source.field === minedWordField,
+    );
+
   return (
     <>
       <header className="panel-header">
@@ -349,6 +365,33 @@ export function StudyPicksSettingsPage({
                 </button>
               </div>
             ))}
+          </div>
+        ) : null}
+
+        {minedWordsAreUncounted ? (
+          <div className="suggestion-row">
+            <div className="suggestion-detail">
+              <strong>
+                {minedNoteType} &rarr; {minedWordField}
+              </strong>
+              <p className="microcopy">
+                The words you mine here are written to this field, and it is not one
+                of the sources below &mdash; so however well you learn them, they are
+                not counted among the words you know.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                updateSources([
+                  ...sources,
+                  { noteType: minedNoteType, field: minedWordField },
+                ])
+              }
+            >
+              Use this
+            </button>
           </div>
         ) : null}
 
