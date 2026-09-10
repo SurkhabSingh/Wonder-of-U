@@ -178,7 +178,13 @@ pub(crate) fn load(path: &Path) -> Loaded {
             continue;
         }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            // Counted AND kept. A row this build cannot read is not a row it may delete:
+            // every write rebuilds the file from what was parsed, so dropping it here is
+            // what erases it, permanently, on the very next reading taken. Unreadable is
+            // not the same as worthless — a later build, or a person with a text editor,
+            // can still make something of it, and neither can if it is gone.
             store.damaged += 1;
+            store.passthrough.push(line.to_string());
             continue;
         };
         let version = value.get("v").and_then(serde_json::Value::as_u64);
@@ -194,7 +200,13 @@ pub(crate) fn load(path: &Path) -> Loaded {
             Some(KIND_SAMPLE) => match serde_json::from_value::<Sample>(value) {
                 Ok(sample) => store.samples.push(sample),
                 Err(_) => {
+                    // Kept for the same reason, and this is the branch that matters most:
+                    // a reading well-formed enough to claim this version and this kind, yet
+                    // refused by the model, is what a change to `Sample` looks like from
+                    // here. Dropping these would let one such change quietly take the whole
+                    // history with it.
                     store.damaged += 1;
+                    store.passthrough.push(line.to_string());
                 }
             },
             // This version, a kind this build does not handle. Not damage, so it survives.
@@ -412,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn a_torn_row_is_counted_and_dropped_while_the_rest_is_kept() {
+    fn a_torn_row_is_counted_and_kept_while_the_rest_is_read() {
         let dir = temp_dir("damaged");
         let path = dir.join("progress.jsonl");
         ensure(&path, key("2026-09-01"), 1000).expect("create");
@@ -428,6 +440,61 @@ mod tests {
             }
             other => panic!("expected a present store, got {other:?}"),
         }
+
+        // The half that matters. Every write rebuilds the file from what was parsed, so a
+        // damaged row left out of the model is not merely skipped — it is erased by the
+        // next reading the user takes, which is the most ordinary thing that can happen.
+        append_sample(&path, sample(2, "build-a")).expect("append after the tear");
+        let after = fs::read_to_string(&path).expect("read back");
+        assert!(
+            after.contains("\"kind\":\"sam"),
+            "the torn row was deleted by the next write:
+{after}"
+        );
+
+        match load(&path) {
+            Loaded::Present { store, .. } => {
+                assert_eq!(store.damaged, 1, "still counted, not quietly forgotten");
+                assert_eq!(store.samples.len(), 2, "and the new reading was stored");
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
+    }
+
+    /// The branch a change to `Sample` would land on, and the one that could take a whole
+    /// history with it.
+    ///
+    /// A row claiming this version and this kind, well-formed JSON, and still refused by
+    /// the model is what removing a field or tightening a type looks like from here. It is
+    /// counted and kept, so the mistake costs a reading rather than every reading.
+    #[test]
+    fn a_reading_this_build_cannot_model_is_kept_rather_than_rewritten_away() {
+        let dir = temp_dir("unmodellable");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-01"), 1000).expect("create");
+        append_sample(&path, sample(1, "build-a")).expect("append");
+
+        // Valid JSON, this version, this kind — and missing everything a Sample needs.
+        let existing = fs::read_to_string(&path).expect("read back");
+        let orphan = format!("{{\"v\":{RECORD_VERSION},\"kind\":\"{KIND_SAMPLE}\",\"takenAtMs\":7}}");
+        fs::write(&path, format!("{existing}{orphan}
+")).expect("write the orphan");
+
+        match load(&path) {
+            Loaded::Present { store, .. } => {
+                assert_eq!(store.damaged, 1, "it has to be noticed");
+                assert_eq!(store.samples.len(), 1, "and not mistaken for a reading");
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
+
+        append_sample(&path, sample(2, "build-a")).expect("append after the orphan");
+        let after = fs::read_to_string(&path).expect("read back");
+        assert!(
+            after.contains(&orphan),
+            "the unreadable reading was rewritten away:
+{after}"
+        );
     }
 
     #[test]

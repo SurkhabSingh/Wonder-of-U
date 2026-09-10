@@ -187,6 +187,24 @@ export function ProgressPage({
               report.activity.itemsWithoutADay > 0
                 ? `${formatCount(report.activity.itemsWithoutADay)} on no known day`
                 : null,
+              // Said out loud rather than counted and discarded. Both are readings this
+              // build did not fold into the numbers above, and both are kept in the file
+              // exactly as they were — so the sentence has to carry that second half, or
+              // it reports a loss that did not happen.
+              report.damagedRows > 0
+                ? `${formatCount(report.damagedRows)} earlier reading${
+                    report.damagedRows === 1 ? "" : "s"
+                  } could not be read, and ${
+                    report.damagedRows === 1 ? "is" : "are"
+                  } kept as ${report.damagedRows === 1 ? "it is" : "they are"}`
+                : null,
+              report.newerRows > 0
+                ? `${formatCount(report.newerRows)} reading${
+                    report.newerRows === 1 ? "" : "s"
+                  } came from a newer version of the app, and ${
+                    report.newerRows === 1 ? "is" : "are"
+                  } kept as ${report.newerRows === 1 ? "it is" : "they are"}`
+                : null,
               minedCards?.reason ?? null,
             ]
               .filter(Boolean)
