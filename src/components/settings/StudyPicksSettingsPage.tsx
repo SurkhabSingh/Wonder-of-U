@@ -229,6 +229,15 @@ export function StudyPicksSettingsPage({
         .map((source) => source.field),
     );
 
+  // A row that has not been finished yet. An unfinished source is not broken — it is
+  // dropped before any query is built, so it costs nothing but the space it takes — and
+  // one is the ordinary state of a row being filled in. Several are not: the button that
+  // makes them asks nothing and reports nothing, so pressing it repeatedly used to leave a
+  // stack of identical empty rows with no way to tell which was being worked on.
+  const lastSource = sources[sources.length - 1];
+  const lastSourceUnfinished =
+    lastSource !== undefined && (!lastSource.noteType || !lastSource.field);
+
   const updateSourceAt = (index: number, change: Partial<VocabularySource>) => {
     updateSources(
       sources.map((source, position) =>
@@ -495,6 +504,12 @@ export function StudyPicksSettingsPage({
             type="button"
             className="secondary"
             onClick={() => updateSources([...sources, { noteType: "", field: "" }])}
+            disabled={lastSourceUnfinished}
+            title={
+              lastSourceUnfinished
+                ? "Finish the source above first — it still needs a note type and a field."
+                : undefined
+            }
           >
             Add a vocabulary source
           </button>
