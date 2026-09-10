@@ -392,7 +392,14 @@ fn restore_trailing_order(html: &str) -> String {
                 html.replace_range(at..at + block.len(), "");
                 // Recomputed rather than reused: removing the block above moved every
                 // position after it, and the old one now points somewhere else.
-                let target = first_later_block(&html, index).unwrap_or(html.len());
+                //
+                // Falling back to where it came from, not to the end of the string: the
+                // block was taken out of a wrapper, and putting it back at `html.len()`
+                // would leave it outside one — the single thing every other insertion here
+                // is careful to avoid. Nothing removed above can remove the block being
+                // looked for, so this cannot fire today; it is written so that the day it
+                // does, the template is unchanged rather than broken.
+                let target = first_later_block(&html, index).unwrap_or(at);
                 html.insert_str(target, block);
             }
         }
@@ -670,7 +677,6 @@ mod tests {
         // And still inside the card's own wrapper.
         assert!(updated.trim_end().ends_with("</div>"), "{updated}");
     }
-
 
     /// The word introduces the meanings; it does not trail them.
     ///
