@@ -262,6 +262,9 @@ const LEADING_BACK_BLOCKS: [(&str, &str); 2] = [
     ),
 ];
 
+/// The foot of the card. Nothing the answer is made of belongs under it.
+const META_BLOCK_OPEN: &str = "<div class=\"wu-meta\">";
+
 /// Blocks that follow the answer. The word a card was mined for, and the meanings
 /// that explain it, belong after the sentence — led with, they would sit above the
 /// line they are about, and the word alone would give the answer away.
@@ -320,10 +323,7 @@ fn ensure_template_blocks(template_html: &str, is_answer_side: bool) -> String {
         if !is_answer_side || html.contains(reference) {
             continue;
         }
-        // Before the wrapper's own closing tag, for the same reason the leading
-        // blocks go after its opening one: outside it the block escapes whatever
-        // layout and styling the card's container provides.
-        match html.rfind("</") {
+        match trailing_insert_at(&html) {
             Some(position) => html.insert_str(position, block),
             None => {
                 html.push('\n');
@@ -332,6 +332,71 @@ fn ensure_template_blocks(template_html: &str, is_answer_side: bool) -> String {
         }
     }
 
+    if is_answer_side {
+        html = restore_trailing_order(&html);
+    }
+
+    html
+}
+
+/// Where a trailing block goes in a template that does not have it yet.
+///
+/// Above the meta row: that row is the foot of the card, and a block under it reads as an
+/// afterthought rather than as part of the answer. Putting these in the right order
+/// relative to EACH OTHER is not decided here — `restore_trailing_order` has to do that
+/// anyway for templates that are already wrong, and one job wants one owner.
+///
+/// `None` only when there is no wrapper to sit inside, and the caller appends.
+fn trailing_insert_at(html: &str) -> Option<usize> {
+    html.find(META_BLOCK_OPEN)
+        // Before the wrapper's own closing tag, for the same reason the leading blocks go
+        // after its opening one: outside it the block escapes whatever layout and styling
+        // the card's container provides.
+        .or_else(|| html.rfind("</"))
+}
+
+/// The start of the earliest block listed after `index` that this template already has.
+fn first_later_block(html: &str, index: usize) -> Option<usize> {
+    TRAILING_BACK_BLOCKS
+        .iter()
+        .skip(index + 1)
+        .filter_map(|(reference, _)| block_start(html, reference))
+        .min()
+}
+
+/// Where a field's block STARTS: its guard when it has one, and the bare reference when
+/// the template renders the field unguarded.
+///
+/// The guard is what has to be found. The bare reference sits INSIDE the block, so a
+/// sibling inserted at it would be spliced into the middle of one.
+fn block_start(html: &str, reference: &str) -> Option<usize> {
+    html.find(&reference.replace("{{", "{{#"))
+        .or_else(|| html.find(reference))
+}
+
+/// Moves a block this app wrote back in front of the ones it is meant to precede.
+///
+/// A template that already went wrong cannot be put right by inserting more carefully,
+/// because the block is present and nothing inserts it again. This repairs those, and only
+/// those: it moves text byte-identical to what this file inserts, so a template someone
+/// has arranged by hand is left exactly as they arranged it. The block being verbatim is
+/// the evidence that nobody has touched it.
+fn restore_trailing_order(html: &str) -> String {
+    let mut html = html.to_string();
+    for (index, (_, block)) in TRAILING_BACK_BLOCKS.iter().enumerate() {
+        let Some(at) = html.find(block) else {
+            continue;
+        };
+        if let Some(target) = first_later_block(&html, index) {
+            if target < at {
+                html.replace_range(at..at + block.len(), "");
+                // Recomputed rather than reused: removing the block above moved every
+                // position after it, and the old one now points somewhere else.
+                let target = first_later_block(&html, index).unwrap_or(html.len());
+                html.insert_str(target, block);
+            }
+        }
+    }
     html
 }
 
@@ -604,6 +669,96 @@ mod tests {
         );
         // And still inside the card's own wrapper.
         assert!(updated.trim_end().ends_with("</div>"), "{updated}");
+    }
+
+
+    /// The word introduces the meanings; it does not trail them.
+    ///
+    /// A note type that gained `Definition` before `Word` existed already had the
+    /// definitions in place, and a block appended at the end landed after them — and
+    /// after the meta row, so the answer's own heading rendered below the source line at
+    /// the foot of the card.
+    #[test]
+    fn a_template_that_already_had_the_definitions_gains_the_word_above_them() {
+        let old = "<div class=\"wu-card wu-back\">
+  {{Sentence}}
+  {{#Definition}}<div class=\"wu-definition-field\">{{Definition}}</div>{{/Definition}}
+  <div class=\"wu-meta\">
+    {{#Title}}<span class=\"wu-title\">{{Title}}</span>{{/Title}}
+  </div>
+</div>";
+        let updated = patch_back(old);
+        let word = updated.find("{{#Word}}").expect("the word block is missing");
+        let definition = updated
+            .find("{{#Definition}}")
+            .expect("the definitions block went missing");
+        let meta = updated.find("wu-meta").expect("the meta row went missing");
+        assert!(word < definition, "the word trails the meanings it introduces:
+{updated}");
+        assert!(definition < meta, "the answer sits under the source line:
+{updated}");
+    }
+
+    /// The blocks a template is missing arrive above the meta row, not under it.
+    #[test]
+    fn a_template_gains_its_blocks_above_the_foot_of_the_card() {
+        let old = "<div class=\"wu-card wu-back\">
+  {{Sentence}}
+  <div class=\"wu-meta\">
+    {{#Title}}<span class=\"wu-title\">{{Title}}</span>{{/Title}}
+  </div>
+</div>";
+        let updated = patch_back(old);
+        let meta = updated.find("wu-meta").expect("the meta row went missing");
+        for block in ["{{#Word}}", "{{#Definition}}"] {
+            let at = updated.find(block).unwrap_or_else(|| panic!("{block} is missing"));
+            assert!(at < meta, "{block} sits under the foot of the card:
+{updated}");
+        }
+        // And in the order they are listed, not the order they were inserted.
+        assert!(
+            updated.find("{{#Word}}") < updated.find("{{#Definition}}"),
+            "{updated}"
+        );
+    }
+
+    /// A card already carrying the word after the meanings is put right, because the
+    /// block is present and no amount of careful inserting would move it.
+    #[test]
+    fn a_word_left_trailing_by_an_earlier_version_is_moved_back_above_the_meanings() {
+        let wrong = "<div class=\"wu-card wu-back\">
+  {{Sentence}}
+  {{#Definition}}<div class=\"wu-definition-field\">{{Definition}}</div>{{/Definition}}
+  {{#Word}}<div class=\"wu-word\">{{Word}}</div>{{/Word}}
+</div>";
+        let updated = patch_back(wrong);
+        assert!(
+            updated.find("{{#Word}}") < updated.find("{{#Definition}}"),
+            "the word was left trailing:
+{updated}"
+        );
+        // Once each. A move that copied would render the word twice.
+        assert_eq!(updated.matches("{{#Word}}").count(), 1, "{updated}");
+        // And running again changes nothing.
+        assert_eq!(patch_back(&updated), updated);
+    }
+
+    /// A template someone has arranged themselves is theirs. Only text byte-identical to
+    /// what this file writes is ever moved, and a hand-written block is not that — so a
+    /// word deliberately placed last stays last, however much this file would prefer it
+    /// somewhere else.
+    #[test]
+    fn a_hand_arranged_word_block_is_left_where_it_was_put() {
+        let theirs = "<div class=\"wu-card wu-back\">
+  {{#Image}}<div class=\"wu-image\">{{Image}}</div>{{/Image}}
+  {{#Video}}<div class=\"wu-video\">{{Video}}</div>{{/Video}}
+  {{Sentence}}
+  {{#Definition}}<div class=\"wu-definition-field\">{{Definition}}</div>{{/Definition}}
+  <p class=\"mine\">{{#Word}}{{Word}}{{/Word}}</p>
+</div>";
+        // Nothing is missing, so nothing is added either — and the hand-written word
+        // block keeps the place it was given.
+        assert_eq!(patch_back(theirs), theirs);
     }
 
     /// The definitions ARE the answer. The first version of this patcher ran over
