@@ -11,6 +11,7 @@ mod desktop_shell;
 mod jimaku;
 mod logging;
 mod media_errors;
+mod progress;
 mod recording;
 mod recording_indicator;
 mod recording_library;

@@ -1176,6 +1176,10 @@ pub(crate) struct AppPathsState {
     /// persisted state: a large word list has no business making every settings write
     /// bigger, and a corrupt index must not be able to cost the recording library.
     pub(crate) known_words_file: PathBuf,
+    /// `progress.jsonl`, beside the two above, for the same two reasons. It grows a row a
+    /// day for years, so it must not ride along on every settings write; and losing it
+    /// must cost only the measurements that cannot be worked out again, never a recording.
+    pub(crate) progress_file: PathBuf,
 }
 
 pub(crate) struct SharedShellState(pub(crate) Mutex<ShellSnapshot>);

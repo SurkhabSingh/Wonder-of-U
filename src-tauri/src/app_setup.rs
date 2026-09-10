@@ -103,5 +103,21 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
     // be a reason the app opens complaining.
     restore_known_words_index(&app_handle);
 
+    // Beside the word list and for the same reason: never fatal. A statistics file that
+    // cannot be created must not be able to stop the app opening, so this reports through
+    // the log and returns nothing a caller could propagate with `?`.
+    if let Err(reason) = crate::progress::store::ensure(
+        &paths.progress_file,
+        crate::progress::day::today(),
+        crate::app_runtime::now_ms(),
+    ) {
+        crate::app_runtime::log_event(
+            &app_handle,
+            "WARN",
+            "progress.store_unavailable",
+            serde_json::json!({ "message": reason }),
+        );
+    }
+
     Ok(startup_warnings)
 }

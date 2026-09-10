@@ -33,6 +33,7 @@ pub(crate) fn build_app_paths<R: Runtime>(
     Ok(AppPathsState {
         state_file: data_dir.join("state.json"),
         known_words_file: data_dir.join("known_words.txt"),
+        progress_file: data_dir.join("progress.jsonl"),
         log_file: log_dir.join("wonder-of-u.log"),
         data_dir,
         assets_dir,
@@ -232,6 +233,7 @@ mod tests {
         AppPathsState {
             state_file: data_dir.join("state.json"),
             known_words_file: data_dir.join("known_words.txt"),
+            progress_file: data_dir.join("progress.jsonl"),
             log_file: data_dir.join("wonder-of-u.log"),
             data_dir: data_dir.to_path_buf(),
             assets_dir: data_dir.join("assets"),
