@@ -85,14 +85,17 @@ mod tests {
         assert_eq!(unique, kinds.len(), "two kinds share a tag");
     }
 
-    /// The tags have to reach Anki from here rather than from a literal at each call site.
-    /// A second copy is a second thing to update, and the copy that gets missed is
-    /// invisible until a count that should be thousands reads zero.
+    /// The tags have to reach Anki from here rather than from a literal at each call site,
+    /// on the way out AND on the way back. A second copy is a second thing to update, and
+    /// the copy that gets missed is invisible until a count that should be thousands reads
+    /// zero — which is the failure a card-counting query drifting from the writers makes,
+    /// and it looks exactly like an empty collection.
     #[test]
-    fn the_mining_paths_write_these_tags_rather_than_their_own() {
+    fn every_path_takes_its_tags_from_here_rather_than_its_own_literal() {
         for (name, source) in [
             ("anki/mine.rs", include_str!("mine.rs")),
             ("anki/push.rs", include_str!("push.rs")),
+            ("anki/mined_cards.rs", include_str!("mined_cards.rs")),
         ] {
             assert!(
                 // Any literal STARTING with the tag, not only the tag alone. A kind written
@@ -100,7 +103,7 @@ mod tests {
                 // tag followed by its closing quote, so it slipped past the narrower
                 // test while being exactly the drift that test exists to catch.
                 !source.contains(&format!("\"{MINED}")),
-                "{name} writes a tag as its own literal instead of using this module"
+                "{name} names a tag as its own literal instead of using this module"
             );
             assert!(
                 source.contains("tags::MINED"),

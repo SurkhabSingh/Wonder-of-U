@@ -1,9 +1,9 @@
 use crate::progress::measured::Measured;
 
-use super::client::{anki_connect_health_check, anki_connect_request, json_i64_array};
-
-/// The tag both mining paths write. Named here so the count and the writers cannot drift.
-const MINED_TAG: &str = "wonder-of-u";
+use super::{
+    client::{anki_connect_health_check, anki_connect_request, json_i64_array},
+    tags,
+};
 
 /// How many cards in the open collection came from this app.
 ///
@@ -25,7 +25,9 @@ pub(crate) fn count_mined_cards_inner(now_ms: u64) -> Measured<usize> {
         );
     }
 
-    let query = format!("tag:{MINED_TAG}");
+    // The identifying tag, not one of the kinds under it: this counts everything the app
+    // has made, whichever path made it. Every card carries this one alongside its kind.
+    let query = format!("tag:{}", tags::MINED);
     let reply = match anki_connect_request("findNotes", serde_json::json!({ "query": query })) {
         Ok(reply) => reply,
         Err(reason) => return Measured::unavailable(reason),
@@ -36,28 +38,5 @@ pub(crate) fn count_mined_cards_inner(now_ms: u64) -> Measured<usize> {
         // overstate a number the user can check against Anki's own browser in one click.
         Ok(ids) => Measured::known(ids.len(), now_ms),
         Err(reason) => Measured::unavailable(reason),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::MINED_TAG;
-
-    /// The tag is the identity of everything this app has ever made. If it drifts from what
-    /// the two mining paths write, the count silently becomes zero for a healthy collection
-    /// — which is a wrong answer wearing the clothes of an empty one.
-    #[test]
-    fn the_counted_tag_is_the_one_both_mining_paths_write() {
-        let mine = include_str!("mine.rs");
-        let push = include_str!("push.rs");
-        let written = format!("\"tags\": [\"{MINED_TAG}\"]");
-        assert!(
-            mine.contains(&written),
-            "anki/mine.rs must write {written}"
-        );
-        assert!(
-            push.contains(&written),
-            "anki/push.rs must write {written}"
-        );
     }
 }
