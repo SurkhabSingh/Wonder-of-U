@@ -21,6 +21,7 @@ use super::{
     },
     media_temp::{mining_temp_dir, TempMedia},
     screenshot::capture_screenshot,
+    tags,
 };
 use crate::{
     app_runtime::{build_app_bootstrap, log_event, update_shell_snapshot},
@@ -433,6 +434,11 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
         translation,
         target_word,
     } = *line;
+    // The word this card is being mined FOR, trimmed and proven non-empty once. Three
+    // things downstream turn on it — the Word field, which meanings are looked up, and
+    // the tag saying what kind of mine this was — and a separate copy of the test at each
+    // is a separate chance for them to disagree about the same card.
+    let mined_word = target_word.map(str::trim).filter(|word| !word.is_empty());
     let failed = |message: String| {
         (
             RecordingActionItem {
@@ -683,7 +689,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
     // The word the card was mined for, written whether or not its meaning could be
     // fetched: the word is what the user picked, and a card naming it with no gloss
     // is still the card they asked for.
-    if let Some(word) = target_word.map(str::trim).filter(|word| !word.is_empty()) {
+    if let Some(word) = mined_word {
         if !anki.fields.word.is_empty() {
             fields.insert(
                 anki.fields.word.clone(),
@@ -708,7 +714,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             definition_problem =
                 Some("definitions (no dictionaries are chosen for them)".to_string());
         } else {
-            let found = match target_word.map(str::trim).filter(|word| !word.is_empty()) {
+            let found = match mined_word {
                 Some(word) => definitions_for_word(app, word, &anki.definition_dictionary_ids),
                 None => definitions_for(app, trimmed_text, &anki.definition_dictionary_ids),
             };
@@ -753,6 +759,16 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
     }
 
     // 8. Create the note with the same dedup guard the push flow uses.
+    //
+    // Tagged with what made it as well as that this app made it. Both paths through here
+    // produce a card about a line; only one of them was aimed at a word, and nothing on
+    // the card itself says which — the Word field is empty for a line mine and also for a
+    // word mine whose field is unmapped.
+    let kind_tag = if mined_word.is_some() {
+        tags::MINED_WORD
+    } else {
+        tags::MINED_LINE
+    };
     let note_result = anki_connect_request(
         "addNote",
         serde_json::json!({
@@ -769,7 +785,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
                         "checkAllModels": false
                     }
                 },
-                "tags": ["wonder-of-u"]
+                "tags": [tags::MINED, kind_tag]
             }
         }),
     );

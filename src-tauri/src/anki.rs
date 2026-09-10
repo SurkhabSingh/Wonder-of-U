@@ -22,6 +22,7 @@ mod model;
 mod push;
 mod references;
 pub(crate) mod screenshot;
+mod tags;
 
 pub(crate) use self::{
     catalog::load_anki_catalog_inner,
