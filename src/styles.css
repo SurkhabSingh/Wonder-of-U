@@ -4121,3 +4121,95 @@ input::placeholder {
 .metric-note.is-warning {
   color: var(--warning);
 }
+
+/* The activity calendar. Four steps of the accent, because a legend with more than four
+   entries is one nobody reads and fewer cannot tell a busy day from a quiet one. */
+.activity-grid {
+  display: grid;
+  grid-auto-flow: row;
+  gap: 3px;
+  margin-top: var(--space-4);
+  max-width: 420px;
+}
+
+.activity-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: var(--surface-active);
+  display: block;
+}
+
+.activity-cell.l1 {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.activity-cell.l2 {
+  background: color-mix(in srgb, var(--accent) 58%, transparent);
+}
+
+.activity-cell.l3 {
+  background: color-mix(in srgb, var(--accent) 92%, transparent);
+}
+
+.activity-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  font-size: var(--text-2xs);
+  color: var(--text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.activity-legend .activity-cell {
+  width: 9px;
+  height: 9px;
+  flex: none;
+}
+
+.activity-count {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Totals are label/value pairs rather than more large numerals: volume is context for the
+   headline, and a second row of big numbers would compete with it for the same attention. */
+.progress-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 var(--space-8);
+  margin: var(--space-4) 0 0;
+}
+
+.progress-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.progress-total dt {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.progress-total dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+}
+
+.progress-total dd small {
+  display: block;
+  font-size: var(--text-2xs);
+  color: var(--text-subtle);
+  font-weight: var(--weight-regular);
+}

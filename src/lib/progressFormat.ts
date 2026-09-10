@@ -19,6 +19,23 @@ export function formatDelta(points: number): string {
   return rounded.toFixed(1);
 }
 
+/// A span of time, as hours and minutes.
+///
+/// Rounded down to the minute rather than to the nearest, so a total never claims time the
+/// library does not hold. Under a minute says so rather than reading as nothing.
+export function formatDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes === 0) {
+    return ms > 0 ? "under a minute" : "0m";
+  }
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) {
+    return `${rest}m`;
+  }
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
 /// A whole number with thousands separators, in the user's own locale.
 export function formatCount(value: number): string {
   return value.toLocaleString();

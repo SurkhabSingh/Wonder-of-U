@@ -5,8 +5,10 @@ import {
   formatCount,
   formatDay,
   formatDelta,
+  formatDuration,
   formatPercent,
 } from "../../lib/progressFormat";
+import { ActivityCalendar } from "./ActivityCalendar";
 
 /// How much of the library the user can read, and whether that is going up.
 ///
@@ -127,6 +129,77 @@ export function ProgressPage({
           />
         </article>
       </div>
+
+      {report ? (
+        <article className="panel">
+          <div className="metric-label">When you worked</div>
+          <ActivityCalendar
+            days={report.activity.days}
+            today={report.activity.today}
+          />
+          {report.activity.itemsWithoutADay > 0 ? (
+            <p className="metric-note">
+              {report.activity.itemsWithoutADay} item
+              {report.activity.itemsWithoutADay === 1 ? "" : "s"} could not be placed on a
+              day, so {report.activity.itemsWithoutADay === 1 ? "it is" : "they are"} not
+              shown above.
+            </p>
+          ) : null}
+        </article>
+      ) : null}
+
+      {report ? (
+        <article className="panel">
+          <div className="metric-label">In total</div>
+          <dl className="progress-totals">
+            <div className="progress-total">
+              <dt>Material</dt>
+              <dd>
+                {formatDuration(report.library.totalMs)}
+                <small>
+                  across {formatCount(report.library.items)} item
+                  {report.library.items === 1 ? "" : "s"}
+                  {report.library.itemsWithoutLength > 0
+                    ? ` · ${report.library.itemsWithoutLength} of no known length`
+                    : ""}
+                </small>
+              </dd>
+            </div>
+            <div className="progress-total">
+              <dt>Recorded</dt>
+              <dd>{formatCount(report.library.recorded)}</dd>
+            </div>
+            <div className="progress-total">
+              <dt>Imported from a link</dt>
+              <dd>{formatCount(report.library.importedFromALink)}</dd>
+            </div>
+            <div className="progress-total">
+              <dt>Imported from a file</dt>
+              <dd>{formatCount(report.library.importedFromAFile)}</dd>
+            </div>
+            {report.library.unknownOrigin > 0 ? (
+              // Its own row rather than folded into "Recorded". These arrived before the
+              // app noted how anything arrived, and saying they were recorded would be
+              // stating something nobody wrote down.
+              <div className="progress-total">
+                <dt>Added before this was tracked</dt>
+                <dd>{formatCount(report.library.unknownOrigin)}</dd>
+              </div>
+            ) : null}
+            <div className="progress-total">
+              <dt>Transcribed</dt>
+              <dd>
+                {formatCount(report.library.transcribed)}
+                <small>{formatCount(report.library.japanese)} of them Japanese</small>
+              </dd>
+            </div>
+            <div className="progress-total">
+              <dt>Translated</dt>
+              <dd>{formatCount(report.library.translated)}</dd>
+            </div>
+          </dl>
+        </article>
+      ) : null}
 
       {coverage && coverage.value === null ? (
         // Carbon's rule: where more than one metric can be unavailable at once, the page

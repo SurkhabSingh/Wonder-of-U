@@ -152,6 +152,10 @@ pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProgressReport {
     pub(crate) coverage_percent: Measured<f64>,
+    /// When the library was worked on, back as far as the evidence goes.
+    pub(crate) activity: super::library::ActivityReport,
+    /// What the library holds.
+    pub(crate) library: super::library::LibraryReport,
     /// The like-for-like change, when two comparable readings exist. `None` is "not yet",
     /// which the page says in words rather than drawing as zero.
     pub(crate) comparison: Option<Comparison>,
@@ -187,10 +191,24 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         .progress_file
         .clone();
 
+    // Read from the recording history rather than from the progress store: every item
+    // already carries when it arrived, so this needs nothing kept and reaches back as far
+    // as the library does, not as far as this feature does.
+    let (activity, library) = {
+        let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
+        let persisted = persisted_state
+            .0
+            .lock()
+            .map_err(|_| "Could not read the recording history.".to_string())?;
+        super::library::summarise(&persisted.recent_recordings, super::day::today())
+    };
+
     match super::store::load(&path) {
         super::store::Loaded::Present { header, store } => Ok(ProgressReport {
             coverage_percent: coverage_from(&store.samples, &current_build),
             comparison: latest_comparison(&store.samples),
+            activity,
+            library,
             readings: store.samples.len(),
             first_run_day: Some(header.first_run_day),
             damaged_rows: store.damaged,
@@ -202,6 +220,8 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
                 "Nothing has been measured yet. Refresh your word list to take a first reading.",
             ),
             comparison: None,
+            activity,
+            library,
             readings: 0,
             first_run_day: None,
             damaged_rows: 0,
@@ -213,6 +233,8 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
                 "Your progress history could not be opened, so there is nothing to show. It is not lost — nothing has been written over it.",
             ),
             comparison: None,
+            activity,
+            library,
             readings: 0,
             first_run_day: None,
             damaged_rows: 0,

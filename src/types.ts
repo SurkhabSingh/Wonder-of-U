@@ -790,8 +790,44 @@ export type ProgressComparison = {
   laterTakenAtMs: number;
 };
 
+export type ActivityDay = {
+  // A `YYYY-MM-DD` label, already shifted by the app's 04:00 day rollover. A date, not an
+  // instant — never re-interpret it in local time.
+  day: string;
+  items: number;
+};
+
+export type ActivityReport = {
+  // Sparse: only days that had something.
+  days: ActivityDay[];
+  sinceDay: string | null;
+  activeDays: number;
+  // Today, as the backend keys days. Sent rather than derived here so the grid cannot
+  // disagree with the rows in it.
+  today: string;
+  itemsWithoutADay: number;
+};
+
+export type LibraryReport = {
+  items: number;
+  totalMs: number;
+  // Items whose length was never recorded, and so are not in `totalMs`.
+  itemsWithoutLength: number;
+  recorded: number;
+  importedFromALink: number;
+  importedFromAFile: number;
+  // Items that predate the app noting how they arrived. Never folded into `recorded`:
+  // "we do not know" and "microphone" are different answers.
+  unknownOrigin: number;
+  transcribed: number;
+  japanese: number;
+  translated: number;
+};
+
 export type ProgressReport = {
   coveragePercent: Measured<number>;
+  activity: ActivityReport;
+  library: LibraryReport;
   // Null is "not yet", which the page says in words rather than drawing as zero.
   comparison: ProgressComparison | null;
   readings: number;

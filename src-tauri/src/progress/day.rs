@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Local};
+use chrono::{DateTime, Duration, Local, LocalResult, TimeZone};
 use serde::{Deserialize, Serialize};
 
 /// The hour at which a new day begins, in local time.
@@ -43,6 +43,22 @@ pub(crate) fn day_key_at(moment: DateTime<Local>) -> DayKey {
     DayKey(shifted.format("%Y-%m-%d").to_string())
 }
 
+/// The day a millisecond timestamp falls in, or `None` when it names no local time.
+///
+/// `None` is reachable: the hour skipped by a daylight-saving jump does not exist locally,
+/// and a timestamp beyond the calendar's range has no date. A caller is handed the absence
+/// rather than a plausible neighbouring day, so it can count what it could not place.
+pub(crate) fn day_key_for_ms(ms: u64) -> Option<DayKey> {
+    let millis = i64::try_from(ms).ok()?;
+    match Local.timestamp_millis_opt(millis) {
+        LocalResult::Single(moment) => Some(day_key_at(moment)),
+        // A repeated local hour names one calendar date either way, so the ambiguity never
+        // reaches the answer; the earlier reading is taken so the choice is stated.
+        LocalResult::Ambiguous(earlier, _) => Some(day_key_at(earlier)),
+        LocalResult::None => None,
+    }
+}
+
 /// The day now.
 pub(crate) fn today() -> DayKey {
     day_key_at(Local::now())
@@ -50,7 +66,7 @@ pub(crate) fn today() -> DayKey {
 
 #[cfg(test)]
 mod tests {
-    use super::{day_key_at, DAY_ROLLOVER_HOUR};
+    use super::{day_key_at, day_key_for_ms, DayKey, DAY_ROLLOVER_HOUR};
     use chrono::{Local, LocalResult, TimeZone};
 
     fn local(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::DateTime<Local> {
@@ -104,6 +120,22 @@ mod tests {
                 keys.len()
             );
         }
+    }
+
+    #[test]
+    fn a_timestamp_resolves_to_the_same_key_as_the_moment_it_names() {
+        let moment = local(2026, 9, 10, 2, 15);
+        let millis = u64::try_from(moment.timestamp_millis()).expect("a positive timestamp");
+        assert_eq!(
+            day_key_for_ms(millis).as_ref().map(DayKey::as_str),
+            Some("2026-09-09"),
+            "02:15 belongs to the evening before"
+        );
+    }
+
+    #[test]
+    fn a_timestamp_beyond_the_calendar_has_no_day_rather_than_a_wrong_one() {
+        assert_eq!(day_key_for_ms(u64::MAX), None);
     }
 
     #[test]

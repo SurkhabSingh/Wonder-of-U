@@ -11,6 +11,7 @@
 //! must never do is show a zero where the honest answer is "I could not tell".
 
 pub(crate) mod day;
+pub(crate) mod library;
 pub(crate) mod measured;
 pub(crate) mod report;
 pub(crate) mod store;
