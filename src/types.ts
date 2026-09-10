@@ -755,8 +755,52 @@ export type AppPage =
   | "recordings"
   | "watch"
   | "transcript"
+  | "progress"
   | "setup"
   | "settings";
+
+// A number the backend worked out, together with whether it could work it out at all.
+//
+// `value` is `T | null` and must stay that way end to end. A `?? 0` anywhere between here
+// and the screen puts a confident zero in front of the user for a reading that never
+// happened, which is the one failure this whole feature exists to prevent.
+export type Measured<T> = {
+  value: T | null;
+  // "known" | "stale" | "partial" | "unavailable". Only "unavailable" carries no value;
+  // the two middle ones are real answers under a caveat and keep their number.
+  status: string;
+  // When the value was measured — not when the page loaded. Null exactly when there is
+  // no value.
+  asOfMs: number | null;
+  // One sentence for the reader, on every status but "known".
+  reason: string | null;
+};
+
+// A like-for-like change between two readings, over the material they both measured.
+export type ProgressComparison = {
+  deltaPoints: number;
+  earlierPercent: number;
+  laterPercent: number;
+  itemsCompared: number;
+  // Reported beside the change, never folded into it: new material is not progress on
+  // old material, and a re-transcribed document is not the same words.
+  itemsAdded: number;
+  itemsChanged: number;
+  earlierTakenAtMs: number;
+  laterTakenAtMs: number;
+};
+
+export type ProgressReport = {
+  coveragePercent: Measured<number>;
+  // Null is "not yet", which the page says in words rather than drawing as zero.
+  comparison: ProgressComparison | null;
+  readings: number;
+  firstRunDay: string | null;
+  damagedRows: number;
+  newerRows: number;
+  // False means every number above is a guess about a file nobody opened.
+  storeReadable: boolean;
+};
 
 // The stacked sections inside the single Settings page. Setup-checklist rows and
 // post-download navigation deep-link to one of these, scrolling it into view.

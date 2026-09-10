@@ -40,6 +40,10 @@ export function createWorkflowPages(
       description: "Play a video and mine as you go",
       count: String(videoCount),
     },
+    // No count badge, deliberately. `createWorkflowPages` runs on every render of
+    // `useAppViewState` with no memo, so a badge whose value changes would re-render the
+    // sidebar on every progress read for no benefit.
+    { id: "progress", label: "Progress", description: "How much you can read" },
   ];
 }
 

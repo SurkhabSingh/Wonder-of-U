@@ -3986,3 +3986,138 @@ input::placeholder {
   max-height: none;
   min-height: 0;
 }
+
+/* Progress — how much of the library the user can read, and whether it is going up.
+   Its own scroll container because `.content-column` is `overflow: hidden`; the same
+   shape `.settings-scroll` uses, for the same reason. */
+.progress-scroll {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  overflow-y: auto;
+  padding-right: var(--space-2);
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.progress-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+  color: var(--text-strong);
+}
+
+.progress-sub {
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+
+.progress-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-5);
+}
+
+/* The slot every metric renders into, whatever it has to say.
+   The fixed height is load-bearing rather than cosmetic: it stops the page reflowing as a
+   metric moves between measured and unmeasured, which is what lets a dash read as a
+   deliberate answer instead of as something that failed to load. */
+.metric-slot {
+  min-height: 40px;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.metric-label {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: var(--weight-medium);
+  margin-bottom: var(--space-2);
+}
+
+.metric-value {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+/* A real measurement taken under settings that have since changed, or one that could not
+   read everything. Same numeral at the same size, one step muted, so it reads as old at a
+   glance without being taken away — a dated answer beats no answer. */
+.metric-value.is-qualified {
+  color: var(--text-muted);
+}
+
+/* No measurement. The dash sits in the numeral's own slot at its own size. */
+.metric-value.is-absent {
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
+}
+
+.metric-unit {
+  font-size: var(--text-md);
+  font-weight: var(--weight-mid);
+  color: var(--text-muted);
+}
+
+.metric-trend {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-top: var(--space-3);
+}
+
+.metric-trend .up {
+  color: var(--success);
+  font-weight: var(--weight-semibold);
+}
+
+.metric-trend .down {
+  color: var(--warning);
+  font-weight: var(--weight-semibold);
+}
+
+.metric-asof {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--text-subtle);
+  margin-top: var(--space-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metric-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--warning);
+  flex: none;
+}
+
+.metric-note {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: var(--space-3) 0 0;
+  line-height: 1.5;
+}
+
+.metric-note.is-warning {
+  color: var(--warning);
+}

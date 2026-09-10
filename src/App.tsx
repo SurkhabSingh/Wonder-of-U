@@ -20,6 +20,8 @@ import { useAnkiCatalog } from "./hooks/useAnkiCatalog";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useAppViewState } from "./hooks/useAppViewState";
 import { useMinedSentences } from "./hooks/useMinedSentences";
+import { useProgress } from "./hooks/useProgress";
+import { ProgressPage } from "./components/progress/ProgressPage";
 import { useWatchSession } from "./hooks/useWatchSession";
 import { useWatchSubtitles } from "./hooks/useWatchSubtitles";
 import { segmentMineKey } from "./lib/segments";
@@ -205,6 +207,12 @@ function App() {
   });
   const { minedSentences, minedWarning, minedReadCount, refreshMinedSentences } =
     useMinedSentences();
+  // Reads only while the page is open; nothing here changes while it is.
+  const {
+    report: progressReport,
+    readCount: progressReadCount,
+    failed: progressFailed,
+  } = useProgress(activePage);
   const watch = useWatchSession();
   const watchSubtitles = useWatchSubtitles();
   // Rows mined in this watch session, and the per-mine padding overrides. "" means
@@ -1241,6 +1249,16 @@ function App() {
               padAfterMs={padAfterMs}
               onPadBeforeChange={setPadBeforeMs}
               onPadAfterChange={setPadAfterMs}
+            />
+          ) : null}
+
+          {activePage === "progress" ? (
+            <ProgressPage
+              bootstrap={bootstrap}
+              report={progressReport}
+              readCount={progressReadCount}
+              failed={progressFailed}
+              onGoToStudyPicks={() => openSettingsSection("studyPicks")}
             />
           ) : null}
 
