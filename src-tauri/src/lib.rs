@@ -119,6 +119,7 @@ pub fn run() {
             lookup_dictionaries,
             download_recommended_dictionary,
             load_mined_sentences,
+            load_progress,
             start_watch_session,
             watch_snapshot,
             stop_watch_session,

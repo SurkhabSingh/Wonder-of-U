@@ -6,6 +6,9 @@ mod known_words;
 mod catalog;
 mod clip;
 mod client;
+mod comprehension;
+
+pub(crate) use comprehension::record_sample as record_comprehension_sample;
 mod fields;
 mod furigana;
 mod furigana_update;

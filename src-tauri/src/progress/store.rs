@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::write_file_atomically;
+use crate::app_types::KnownWordsBuild;
 
 use super::day::{DayKey, DAY_ROLLOVER_HOUR};
 
@@ -67,21 +68,51 @@ pub(crate) struct Sample {
     pub(crate) day: DayKey,
     /// The vocabulary settings this was measured under. Two samples taken under different
     /// builds are not comparable, and saying so is the difference between a trend and a
-    /// coincidence.
-    pub(crate) build: String,
+    /// coincidence. Stored whole rather than as a digest so a reader can say WHICH setting
+    /// moved, and so the existing `matches` stays the one staleness test in the codebase.
+    pub(crate) build: KnownWordsBuild,
+    /// When the word list this was measured against was itself built.
+    pub(crate) index_built_at_ms: u64,
+    /// Documents that were in scope and could not be read.
+    ///
+    /// Kept on the row because it is a fact about the measurement, not about today: a
+    /// denominator that quietly shrank moves the share with no visible cause, so a sample
+    /// that missed something has to be able to say so forever after.
+    #[serde(default)]
+    pub(crate) unread_items: u32,
     pub(crate) items: Vec<SampleItem>,
 }
 
 impl Sample {
-    pub(crate) fn new(taken_at_ms: u64, day: DayKey, build: String, items: Vec<SampleItem>) -> Self {
+    pub(crate) fn new(
+        taken_at_ms: u64,
+        day: DayKey,
+        build: KnownWordsBuild,
+        index_built_at_ms: u64,
+        unread_items: u32,
+        items: Vec<SampleItem>,
+    ) -> Self {
         Self {
             v: RECORD_VERSION,
             kind: KIND_SAMPLE.to_string(),
             taken_at_ms,
             day,
             build,
+            index_built_at_ms,
+            unread_items,
             items,
         }
+    }
+
+    /// Everything the sample counted, pooled.
+    ///
+    /// Pooled rather than averaged over items, so a two-word clip cannot outvote a
+    /// forty-minute episode. Playback count is deliberately not a weight either: looping
+    /// one easy sentence for an hour must not be able to move the number.
+    pub(crate) fn totals(&self) -> (u32, u32) {
+        self.items.iter().fold((0, 0), |(content, known), item| {
+            (content + item.content_tokens, known + item.known_tokens)
+        })
     }
 }
 
@@ -253,11 +284,23 @@ mod tests {
         serde_json::from_str(&format!("\"{day}\"")).expect("a day key is a string")
     }
 
+    fn build_named(note_type: &str) -> KnownWordsBuild {
+        KnownWordsBuild {
+            sources: vec![crate::app_types::VocabularySource {
+                note_type: note_type.to_string(),
+                field: "Word".to_string(),
+            }],
+            mature_after_days: 21,
+        }
+    }
+
     fn sample(taken_at_ms: u64, build: &str) -> Sample {
         Sample::new(
             taken_at_ms,
             key("2026-09-10"),
-            build.to_string(),
+            build_named(build),
+            1_700_000_000_000,
+            0,
             vec![SampleItem {
                 key: "C:/audio.wav|ja".to_string(),
                 fingerprint: "abc123".to_string(),
@@ -399,7 +442,7 @@ mod tests {
             Loaded::Present { store, .. } => {
                 assert_eq!(store.samples.len(), 2);
                 assert_eq!(store.samples[0].taken_at_ms, 10);
-                assert_eq!(store.samples[1].build, "build-b");
+                assert_eq!(store.samples[1].build.sources[0].note_type, "build-b");
                 assert_eq!(store.samples[0].items[0].fingerprint, "abc123");
                 assert_eq!(store.samples[0].items[0].content_tokens, 100);
                 assert_eq!(store.samples[0].items[0].known_tokens, 58);
@@ -419,5 +462,30 @@ mod tests {
         assert_eq!(row["items"][0]["fingerprint"], serde_json::json!("abc123"));
         assert_eq!(row["items"][0]["contentTokens"], serde_json::json!(100));
         assert_eq!(row["items"][0]["knownTokens"], serde_json::json!(58));
+        assert_eq!(row["indexBuiltAtMs"], serde_json::json!(1_700_000_000_000_u64));
+        assert_eq!(row["unreadItems"], serde_json::json!(0));
+    }
+
+    /// Pooled, so one short clip cannot outvote an episode. The check is deliberately
+    /// against hand arithmetic rather than against another call to the same function.
+    #[test]
+    fn totals_pool_across_items_rather_than_averaging_them() {
+        let mut pooled = sample(1, "build-a");
+        pooled.items = vec![
+            SampleItem {
+                key: "short".to_string(),
+                fingerprint: "a".to_string(),
+                content_tokens: 2,
+                known_tokens: 2,
+            },
+            SampleItem {
+                key: "long".to_string(),
+                fingerprint: "b".to_string(),
+                content_tokens: 998,
+                known_tokens: 500,
+            },
+        ];
+        // Averaging the two items would give 75%. Pooling gives 502/1000.
+        assert_eq!(pooled.totals(), (1000, 502));
     }
 }

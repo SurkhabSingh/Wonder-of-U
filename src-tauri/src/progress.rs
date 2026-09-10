@@ -12,4 +12,5 @@
 
 pub(crate) mod day;
 pub(crate) mod measured;
+pub(crate) mod report;
 pub(crate) mod store;

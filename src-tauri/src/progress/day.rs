@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Local, LocalResult, TimeZone};
+use chrono::{DateTime, Duration, Local};
 use serde::{Deserialize, Serialize};
 
 /// The hour at which a new day begins, in local time.
@@ -29,7 +29,7 @@ impl DayKey {
 
 impl std::fmt::Display for DayKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -43,22 +43,6 @@ pub(crate) fn day_key_at(moment: DateTime<Local>) -> DayKey {
     DayKey(shifted.format("%Y-%m-%d").to_string())
 }
 
-/// The day a millisecond timestamp falls in, or `None` when it names no local time at all.
-///
-/// `None` is reachable: the hour skipped by a daylight-saving jump does not exist locally,
-/// and a timestamp beyond the calendar's range has no date. A caller must decide what to do
-/// about that rather than be handed a plausible neighbouring day.
-pub(crate) fn day_key_for_ms(ms: u64) -> Option<DayKey> {
-    let millis = i64::try_from(ms).ok()?;
-    match Local.timestamp_millis_opt(millis) {
-        LocalResult::Single(moment) => Some(day_key_at(moment)),
-        // A repeated local hour names one calendar date either way, so the ambiguity does
-        // not reach the answer; the earlier reading is taken so the choice is stated.
-        LocalResult::Ambiguous(earlier, _) => Some(day_key_at(earlier)),
-        LocalResult::None => None,
-    }
-}
-
 /// The day now.
 pub(crate) fn today() -> DayKey {
     day_key_at(Local::now())
@@ -66,7 +50,7 @@ pub(crate) fn today() -> DayKey {
 
 #[cfg(test)]
 mod tests {
-    use super::{day_key_at, day_key_for_ms, DayKey, DAY_ROLLOVER_HOUR};
+    use super::{day_key_at, DAY_ROLLOVER_HOUR};
     use chrono::{Local, LocalResult, TimeZone};
 
     fn local(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::DateTime<Local> {
@@ -123,31 +107,9 @@ mod tests {
     }
 
     #[test]
-    fn a_timestamp_resolves_to_the_same_key_as_the_moment_it_names() {
-        let moment = local(2026, 9, 10, 2, 15);
-        let from_ms = day_key_for_ms(u64::try_from(moment.timestamp_millis()).expect("positive"));
-        assert_eq!(from_ms.as_deref_key(), Some("2026-09-09"));
-    }
-
-    #[test]
-    fn a_timestamp_beyond_the_calendar_has_no_day_rather_than_a_wrong_one() {
-        assert_eq!(day_key_for_ms(u64::MAX), None);
-    }
-
-    #[test]
     fn the_rollover_is_the_documented_four() {
         // Pinned because the value is baked into every stored row: the constant and the
         // history keyed under it cannot disagree later.
         assert_eq!(DAY_ROLLOVER_HOUR, 4);
-    }
-
-    trait KeyText {
-        fn as_deref_key(&self) -> Option<&str>;
-    }
-
-    impl KeyText for Option<DayKey> {
-        fn as_deref_key(&self) -> Option<&str> {
-            self.as_ref().map(DayKey::as_str)
-        }
     }
 }

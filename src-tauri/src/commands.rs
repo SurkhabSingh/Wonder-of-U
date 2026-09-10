@@ -11,6 +11,7 @@ use crate::{
     },
     watch::transcribe::{generate_watch_subtitles_inner, GeneratedSubtitles},
     app_types::SharedPersistedState,
+    progress::report::{load_progress_inner, ProgressReport},
     runtime_assets::{detect_local_ffmpeg, detect_local_mpv},
     anki::{lookup_term_inner, mine_watched_line_inner, LookupResult},
     jimaku::{
@@ -413,7 +414,20 @@ pub(crate) async fn scan_vocabulary_sources(
 pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnapshot, String> {
     let app_for_blocking = app.clone();
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
-        refresh_known_words_inner(&app_for_blocking)
+        let snapshot = refresh_known_words_inner(&app_for_blocking);
+        // Measured here, INSIDE the blocking task, for two reasons. It is blocking work,
+        // and every command in this file keeps that off the async runtime. And a panic here
+        // is caught by the same `spawn_blocking` that catches one in the rebuild — placed
+        // after the await instead, a panic would leave the invoke promise unsettled and the
+        // button disabled until the app restarts, because the frontend clears its busy flag
+        // in a `finally` that never runs.
+        //
+        // Only on `ready`: the offline and empty paths return before an index exists, and a
+        // reading taken against no index would be a reading of nothing.
+        if snapshot.as_ref().is_ok_and(|ready| ready.status == "ready") {
+            crate::anki::record_comprehension_sample(&app_for_blocking);
+        }
+        snapshot
     })
     .await
     .map_err(|error| error.to_string())??;
@@ -421,6 +435,19 @@ pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnap
     // or an age is now wrong until it hears about it.
     emit_app_snapshot(&app);
     Ok(snapshot)
+}
+
+/// What the Progress page shows.
+///
+/// Reads local files only and never contacts Anki, so the page opens at the same speed
+/// whether Anki is running or not. It also takes no reading: a reading is only ever taken
+/// where the word list is rebuilt, because that is the only thing that can move the number,
+/// and doing it here would put a full tokenize pass behind opening a page.
+#[tauri::command]
+pub(crate) async fn load_progress(app: AppHandle) -> Result<ProgressReport, String> {
+    tauri::async_runtime::spawn_blocking(move || load_progress_inner(&app))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
