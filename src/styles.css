@@ -3995,6 +3995,7 @@ input::placeholder {
   height: 100%;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: var(--space-5);
   overflow-y: auto;
   padding-right: var(--space-2);
@@ -4129,7 +4130,7 @@ input::placeholder {
   grid-auto-flow: row;
   gap: 3px;
   margin-top: var(--space-4);
-  max-width: 420px;
+  width: 100%;
 }
 
 .activity-cell {
@@ -4179,32 +4180,33 @@ input::placeholder {
    headline, and a second row of big numbers would compete with it for the same attention. */
 .progress-totals {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 0 var(--space-8);
-  margin: var(--space-4) 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-8);
+  margin: var(--space-5) 0 0;
 }
 
 .progress-total {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-6);
-  padding: var(--space-3) 0;
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
   font-size: var(--text-sm);
 }
 
 .progress-total dt {
   margin: 0;
   color: var(--text-muted);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .progress-total dd {
   margin: 0;
-  text-align: right;
   color: var(--text-strong);
   font-variant-numeric: tabular-nums;
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-mid);
+  font-size: var(--text-md);
 }
 
 .progress-total dd small {

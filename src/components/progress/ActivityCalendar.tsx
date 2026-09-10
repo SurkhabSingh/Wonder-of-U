@@ -1,6 +1,10 @@
 import type { ActivityDay } from "../../types";
 
-const WEEKS = 26;
+// A full year. The grid stretches to whatever width it is given, so the column count is
+// what decides how big a cell ends up: at 26 weeks across a wide pane the squares grow
+// absurd. A year also makes the start of the library visible as empty space rather than
+// cropping it out, which is the honest picture.
+const WEEKS = 53;
 const DAYS_IN_WEEK = 7;
 
 /// Shades a day by how much arrived on it. Four steps, because more than that is a legend
@@ -60,7 +64,7 @@ export function ActivityCalendar({
         className="activity-grid"
         style={{ gridTemplateColumns: `repeat(${WEEKS}, 1fr)` }}
         role="img"
-        aria-label={`${shown} active days in the last ${WEEKS} weeks`}
+        aria-label={`${shown} active days in the last year`}
       >
         {cells.map((cell) => (
           <i
@@ -82,7 +86,7 @@ export function ActivityCalendar({
         <i className="activity-cell l3" />
         <span>more</span>
         <span className="activity-count">
-          {shown} day{shown === 1 ? "" : "s"} in the last six months
+          {shown} day{shown === 1 ? "" : "s"} in the last year
         </span>
       </div>
     </div>
