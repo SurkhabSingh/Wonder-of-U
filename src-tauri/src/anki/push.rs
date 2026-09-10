@@ -12,6 +12,7 @@ use super::{
         insert_furigana_field, recording_transcript_supports_furigana, request_furigana_html,
     },
     references::refresh_recording_anki_reference,
+    tags,
 };
 use crate::{
     app_runtime::{build_app_bootstrap, update_shell_snapshot},
@@ -181,7 +182,7 @@ fn push_single_recording_to_anki<R: Runtime>(
                         "checkAllModels": false
                     }
                 },
-                "tags": ["wonder-of-u"]
+                "tags": [tags::MINED, tags::MINED_TRANSCRIPT]
             }
         }),
     )
