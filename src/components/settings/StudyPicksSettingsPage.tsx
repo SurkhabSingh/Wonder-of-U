@@ -213,6 +213,31 @@ export function StudyPicksSettingsPage({
     ]);
   };
 
+  // Fields this note type is already read from by another row.
+  //
+  // The same pair twice is not a bigger index — the sources are folded into one set, so a
+  // duplicate adds no word. What it does add is a second full walk of that note type on
+  // every refresh, over AnkiConnect, for a result already in hand. Offering a field that
+  // is spoken for is the only way one gets created, so it is not offered.
+  const fieldsSpokenFor = (noteType: string, exceptIndex: number) =>
+    new Set(
+      sources
+        .filter(
+          (source, position) =>
+            position !== exceptIndex && source.noteType === noteType && source.field,
+        )
+        .map((source) => source.field),
+    );
+
+  // A row that has not been finished yet. An unfinished source is not broken — it is
+  // dropped before any query is built, so it costs nothing but the space it takes — and
+  // one is the ordinary state of a row being filled in. Several are not: the button that
+  // makes them asks nothing and reports nothing, so pressing it repeatedly used to leave a
+  // stack of identical empty rows with no way to tell which was being worked on.
+  const lastSource = sources[sources.length - 1];
+  const lastSourceUnfinished =
+    lastSource !== undefined && (!lastSource.noteType || !lastSource.field);
+
   const updateSourceAt = (index: number, change: Partial<VocabularySource>) => {
     updateSources(
       sources.map((source, position) =>
@@ -220,6 +245,22 @@ export function StudyPicksSettingsPage({
       ),
     );
   };
+
+  // The one source the scan can never propose. It judges a field by how consistently
+  // it is filled, and the mined word field is empty on every card mined from a row
+  // rather than from the lookup popup — so any mixed collection scores it under the
+  // fill threshold and it is dropped before it reaches the suggestions. That test is
+  // right for someone else's deck and wrong for this one, where the mapping is not a
+  // guess: it is the setting the cards were pushed with, so it is offered outright.
+  const minedNoteType = settingsDraft.anki.noteType;
+  const minedWordField = settingsDraft.anki.fields.word;
+  const minedWordsAreUncounted =
+    minedNoteType !== "" &&
+    minedWordField !== "" &&
+    !sources.some(
+      (source) =>
+        source.noteType === minedNoteType && source.field === minedWordField,
+    );
 
   return (
     <>
@@ -352,6 +393,33 @@ export function StudyPicksSettingsPage({
           </div>
         ) : null}
 
+        {minedWordsAreUncounted ? (
+          <div className="suggestion-row">
+            <div className="suggestion-detail">
+              <strong>
+                {minedNoteType} &rarr; {minedWordField}
+              </strong>
+              <p className="microcopy">
+                The words you mine here are written to this field, and it is not one
+                of the sources below &mdash; so however well you learn them, they are
+                not counted among the words you know.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                updateSources([
+                  ...sources,
+                  { noteType: minedNoteType, field: minedWordField },
+                ])
+              }
+            >
+              Use this
+            </button>
+          </div>
+        ) : null}
+
         {sources.length === 0 ? (
           <p className="microcopy">
             No sources yet. Add one to switch this on.
@@ -398,10 +466,20 @@ export function StudyPicksSettingsPage({
                   !(fieldsByNoteType[source.noteType] ?? []).includes(source.field)
                     ? [{ value: source.field, label: source.field }]
                     : []),
-                  ...(fieldsByNoteType[source.noteType] ?? []).map((field) => ({
-                    value: field,
-                    label: field,
-                  })),
+                  // A row always offers the field it is already set to. Without that, two
+                  // rows that duplicate each other each hide the other's field, neither can
+                  // list its own value, and both dropdowns go blank — showing no field for
+                  // a source that has one, on exactly the rows that need correcting.
+                  ...(fieldsByNoteType[source.noteType] ?? [])
+                    .filter(
+                      (field) =>
+                        field === source.field ||
+                        !fieldsSpokenFor(source.noteType, index).has(field),
+                    )
+                    .map((field) => ({
+                      value: field,
+                      label: field,
+                    })),
                 ]}
                 placeholder="Choose field"
                 onChange={(field) => updateSourceAt(index, { field })}
@@ -426,6 +504,12 @@ export function StudyPicksSettingsPage({
             type="button"
             className="secondary"
             onClick={() => updateSources([...sources, { noteType: "", field: "" }])}
+            disabled={lastSourceUnfinished}
+            title={
+              lastSourceUnfinished
+                ? "Finish the source above first — it still needs a note type and a field."
+                : undefined
+            }
           >
             Add a vocabulary source
           </button>
