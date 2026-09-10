@@ -111,3 +111,25 @@ export function readMeasured<T>(measured: Measured<T>): {
     asOfMs: measured.asOfMs,
   };
 }
+
+/// One small stat in the summary grid.
+///
+/// The same rule as `Metric`, at a smaller size: `value` is `string | null` and null draws
+/// a dash rather than a number. A tile is where a zero would be easiest to slip in, because
+/// a grid of them reads as a block and one wrong cell hides in it.
+export function StatTile({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="progress-tile">
+      <div className="progress-tile-label">{label}</div>
+      <div className="progress-tile-value">
+        {value === null ? (
+          <span className="is-absent" aria-label="not measured">
+            &mdash;
+          </span>
+        ) : (
+          value
+        )}
+      </div>
+    </div>
+  );
+}

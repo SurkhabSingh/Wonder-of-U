@@ -1,5 +1,5 @@
 import type { AppBootstrap, Measured, ProgressReport } from "../../types";
-import { Metric, readMeasured } from "./MeasuredValue";
+import { Metric, StatTile, readMeasured } from "./MeasuredValue";
 import {
   formatCompared,
   formatCount,
@@ -114,131 +114,86 @@ export function ProgressPage({
         />
       </article>
 
-      <div className="progress-row">
-        <article className="panel">
-          <Metric
+      <article className="panel progress-summary">
+        <div className="progress-tiles">
+          <StatTile
             label="Words you know"
             value={
               knownWords.status === "ready" || knownWords.wordCount > 0
                 ? formatCount(knownWords.wordCount)
                 : null
             }
-            note={
-              knownWords.status === "ready" || knownWords.wordCount > 0
-                ? null
-                : "Choose the decks you study, and this fills in."
-            }
           />
-        </article>
-        <article className="panel">
-          <Metric
+          <StatTile
             label="Current streak"
-            value={report ? formatCount(report.activity.streak.current) : null}
-            unit={
-              report
-                ? `day${report.activity.streak.current === 1 ? "" : "s"}`
-                : undefined
-            }
-            trend={
-              report && report.activity.streak.best > 0 ? (
-                <>best so far {formatCount(report.activity.streak.best)}</>
-              ) : null
-            }
-            note={
-              report && report.activity.streak.current === 0
-                ? "Add or record something today to start one."
-                : null
-            }
+            value={report ? `${formatCount(report.activity.streak.current)}d` : null}
           />
-        </article>
-        <article className="panel">
-          <Metric
+          <StatTile
+            label="Longest streak"
+            value={report ? `${formatCount(report.activity.streak.best)}d` : null}
+          />
+          <StatTile
             label="Cards from this app"
             value={
               minedCards && minedCards.value !== null
                 ? formatCount(minedCards.value)
                 : null
             }
-            note={minedCards?.reason ?? null}
-            trend={
-              minedCards && minedCards.value !== null ? (
-                <>in the collection that is open</>
-              ) : null
-            }
           />
-        </article>
-      </div>
+          <StatTile
+            label="Material"
+            value={report ? formatDuration(report.library.totalMs) : null}
+          />
+          <StatTile
+            label="Items"
+            value={report ? formatCount(report.library.items) : null}
+          />
+          <StatTile
+            label="Transcribed"
+            value={report ? formatCount(report.library.transcribed) : null}
+          />
+          <StatTile
+            label="Translated"
+            value={report ? formatCount(report.library.translated) : null}
+          />
+        </div>
 
-      {report ? (
-        <article className="panel">
-          <div className="metric-label">When you worked</div>
+        {report ? (
           <ActivityCalendar
             days={report.activity.days}
             today={report.activity.today}
           />
-          {report.activity.itemsWithoutADay > 0 ? (
-            <p className="metric-note">
-              {report.activity.itemsWithoutADay} item
-              {report.activity.itemsWithoutADay === 1 ? "" : "s"} could not be placed on a
-              day, so {report.activity.itemsWithoutADay === 1 ? "it is" : "they are"} not
-              shown above.
-            </p>
-          ) : null}
-        </article>
-      ) : null}
+        ) : null}
 
-      {report ? (
-        <article className="panel">
-          <div className="metric-label">In total</div>
-          <dl className="progress-totals">
-            <div className="progress-total">
-              <dt>Material</dt>
-              <dd>
-                {formatDuration(report.library.totalMs)}
-                <small>
-                  across {formatCount(report.library.items)} item
-                  {report.library.items === 1 ? "" : "s"}
-                  {report.library.itemsWithoutLength > 0
-                    ? ` · ${report.library.itemsWithoutLength} of no known length`
-                    : ""}
-                </small>
-              </dd>
-            </div>
-            <div className="progress-total">
-              <dt>Recorded</dt>
-              <dd>{formatCount(report.library.recorded)}</dd>
-            </div>
-            <div className="progress-total">
-              <dt>Imported from a link</dt>
-              <dd>{formatCount(report.library.importedFromALink)}</dd>
-            </div>
-            <div className="progress-total">
-              <dt>Imported from a file</dt>
-              <dd>{formatCount(report.library.importedFromAFile)}</dd>
-            </div>
-            {report.library.unknownOrigin > 0 ? (
-              // Its own row rather than folded into "Recorded". These arrived before the
-              // app noted how anything arrived, and saying they were recorded would be
-              // stating something nobody wrote down.
-              <div className="progress-total">
-                <dt>Added before this was tracked</dt>
-                <dd>{formatCount(report.library.unknownOrigin)}</dd>
-              </div>
-            ) : null}
-            <div className="progress-total">
-              <dt>Transcribed</dt>
-              <dd>
-                {formatCount(report.library.transcribed)}
-                <small>{formatCount(report.library.japanese)} of them Japanese</small>
-              </dd>
-            </div>
-            <div className="progress-total">
-              <dt>Translated</dt>
-              <dd>{formatCount(report.library.translated)}</dd>
-            </div>
-          </dl>
-        </article>
-      ) : null}
+        {report ? (
+          // The caveats live here rather than beside the numbers they qualify. Each is a
+          // fact about how the totals were reached, and a tile is too small to carry one
+          // without shouting — but leaving them off would make every total read as whole
+          // when some of them are not.
+          <p className="progress-footnote">
+            {[
+              `${formatCount(report.library.japanese)} Japanese`,
+              `${formatCount(report.library.recorded)} recorded`,
+              `${formatCount(report.library.importedFromALink)} from a link`,
+              report.library.importedFromAFile > 0
+                ? `${formatCount(report.library.importedFromAFile)} from a file`
+                : null,
+              report.library.unknownOrigin > 0
+                ? `${formatCount(report.library.unknownOrigin)} added before this was tracked`
+                : null,
+              report.library.itemsWithoutLength > 0
+                ? `${formatCount(report.library.itemsWithoutLength)} of no known length`
+                : null,
+              report.activity.itemsWithoutADay > 0
+                ? `${formatCount(report.activity.itemsWithoutADay)} on no known day`
+                : null,
+              minedCards?.reason ?? null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        ) : null}
+      </article>
 
       {coverage && coverage.value === null ? (
         // Carbon's rule: where more than one metric can be unavailable at once, the page
