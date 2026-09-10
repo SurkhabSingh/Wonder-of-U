@@ -95,8 +95,12 @@ mod tests {
             ("anki/push.rs", include_str!("push.rs")),
         ] {
             assert!(
-                !source.contains(&format!("\"{MINED}\"")),
-                "{name} writes the tag as its own literal instead of using this module"
+                // Any literal STARTING with the tag, not only the tag alone. A kind written
+                // out by hand reads "wonder-of-u::word", which does not contain the
+                // tag followed by its closing quote, so it slipped past the narrower
+                // test while being exactly the drift that test exists to catch.
+                !source.contains(&format!("\"{MINED}")),
+                "{name} writes a tag as its own literal instead of using this module"
             );
             assert!(
                 source.contains("tags::MINED"),
