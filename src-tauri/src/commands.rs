@@ -11,6 +11,7 @@ use crate::{
     },
     watch::transcribe::{generate_watch_subtitles_inner, GeneratedSubtitles},
     app_types::SharedPersistedState,
+    progress::measured::Measured,
     progress::report::{load_progress_inner, ProgressReport},
     runtime_assets::{detect_local_ffmpeg, detect_local_mpv},
     anki::{lookup_term_inner, mine_watched_line_inner, LookupResult},
@@ -448,6 +449,20 @@ pub(crate) async fn load_progress(app: AppHandle) -> Result<ProgressReport, Stri
     tauri::async_runtime::spawn_blocking(move || load_progress_inner(&app))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// How many cards in the open collection came from this app.
+///
+/// Separate from `load_progress` on purpose: that reads local files and must open the page
+/// at the same speed whether Anki is running or not. This is the one number that needs
+/// Anki, so it is asked for on its own and a closed Anki answers rather than fails.
+#[tauri::command]
+pub(crate) async fn count_mined_cards() -> Result<Measured<usize>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::anki::count_mined_cards_inner(crate::app_runtime::now_ms())
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

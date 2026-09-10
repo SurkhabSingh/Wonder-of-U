@@ -1,4 +1,4 @@
-import type { AppBootstrap, ProgressReport } from "../../types";
+import type { AppBootstrap, Measured, ProgressReport } from "../../types";
 import { Metric, readMeasured } from "./MeasuredValue";
 import {
   formatCompared,
@@ -20,12 +20,14 @@ export function ProgressPage({
   report,
   readCount,
   failed,
+  minedCards,
   onGoToStudyPicks,
 }: {
   bootstrap: AppBootstrap;
   report: ProgressReport | null;
   readCount: number;
   failed: boolean;
+  minedCards: Measured<number> | null;
   onGoToStudyPicks: () => void;
 }) {
   const now = new Date();
@@ -125,6 +127,43 @@ export function ProgressPage({
               knownWords.status === "ready" || knownWords.wordCount > 0
                 ? null
                 : "Choose the decks you study, and this fills in."
+            }
+          />
+        </article>
+        <article className="panel">
+          <Metric
+            label="Current streak"
+            value={report ? formatCount(report.activity.streak.current) : null}
+            unit={
+              report
+                ? `day${report.activity.streak.current === 1 ? "" : "s"}`
+                : undefined
+            }
+            trend={
+              report && report.activity.streak.best > 0 ? (
+                <>best so far {formatCount(report.activity.streak.best)}</>
+              ) : null
+            }
+            note={
+              report && report.activity.streak.current === 0
+                ? "Add or record something today to start one."
+                : null
+            }
+          />
+        </article>
+        <article className="panel">
+          <Metric
+            label="Cards from this app"
+            value={
+              minedCards && minedCards.value !== null
+                ? formatCount(minedCards.value)
+                : null
+            }
+            note={minedCards?.reason ?? null}
+            trend={
+              minedCards && minedCards.value !== null ? (
+                <>in the collection that is open</>
+              ) : null
             }
           />
         </article>

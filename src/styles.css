@@ -4181,16 +4181,31 @@ input::placeholder {
 .progress-totals {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--space-8);
+  gap: var(--space-8) 0;
   margin: var(--space-5) 0 0;
 }
 
+/* Divided by a rule between the columns rather than one under each pair. An underline
+   reads as the bottom of a table row, and this grid wraps into columns rather than rows, so
+   what it actually drew was a run of orphaned segments at different lengths. A rule down the
+   left of each cell reads as a column edge instead, which is what these are. */
 .progress-total {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
+  padding-left: var(--space-7);
+  border-left: 1px solid var(--border);
   font-size: var(--text-sm);
+}
+
+/* The first cell needs no edge before it — the panel's own padding is that edge. Only the
+   first is suppressed rather than the first of every wrapped row, because the row a cell
+   lands in depends on the pane width and CSS cannot ask. Where the grid does wrap, the
+   leading rule reads as a rail rather than as a mistake. */
+.progress-total:first-child {
+  padding-left: 0;
+  border-left: none;
 }
 
 .progress-total dt {

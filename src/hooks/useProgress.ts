@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ProgressReport } from "../types";
+import type { Measured, ProgressReport } from "../types";
 
 /// Reads the stored progress report.
 ///
@@ -16,6 +16,10 @@ export function useProgress(activePage: string) {
   /// which needed the same distinction for the same reason.
   const [readCount, setReadCount] = useState(0);
   const [failed, setFailed] = useState(false);
+  // Asked for separately from the report, because it is the one number that needs Anki and
+  // the page must open at the same speed whether Anki is running or not. Null means the
+  // question has not been put yet, which is not the same as Anki having declined it.
+  const [minedCards, setMinedCards] = useState<Measured<number> | null>(null);
   /// Guards two answers to two requests landing out of order.
   const runRef = useRef(0);
 
@@ -38,6 +42,24 @@ export function useProgress(activePage: string) {
         setFailed(true);
       }
     }
+
+    // Fired after the report and never awaited with it: a slow or absent Anki must not be
+    // able to hold up the numbers that came from local files.
+    try {
+      const counted = await invoke<Measured<number>>("count_mined_cards");
+      if (runRef.current === run) {
+        setMinedCards(counted);
+      }
+    } catch {
+      if (runRef.current === run) {
+        setMinedCards({
+          value: null,
+          status: "unavailable",
+          asOfMs: null,
+          reason: "The cards in your collection could not be counted.",
+        });
+      }
+    }
   }, []);
 
   // Read on arrival, not on a timer: nothing on this page changes while it is open, since
@@ -49,5 +71,5 @@ export function useProgress(activePage: string) {
     void refresh();
   }, [activePage, refresh]);
 
-  return { report, readCount, failed, refreshProgress: refresh };
+  return { report, readCount, failed, minedCards, refreshProgress: refresh };
 }

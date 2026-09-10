@@ -806,6 +806,14 @@ export type ActivityReport = {
   // disagree with the rows in it.
   today: string;
   itemsWithoutADay: number;
+  streak: Streak;
+};
+
+export type Streak = {
+  // Days in a row up to now. A day not yet worked does not break a run.
+  current: number;
+  // The longest run there has ever been, which need not be the one ending now.
+  best: number;
 };
 
 export type LibraryReport = {

@@ -38,6 +38,16 @@ pub(crate) struct ActivityReport {
     /// Items whose arrival time is unknown, so they are on no day at all. Counted, because
     /// a calendar quietly missing rows is a calendar that understates the work.
     pub(crate) items_without_a_day: usize,
+    /// Days in a row up to now, and the longest run there has ever been.
+    pub(crate) streak: Streak,
+}
+
+/// A run of consecutive days with something on them.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Streak {
+    pub(crate) current: usize,
+    pub(crate) best: usize,
 }
 
 /// What the library holds, in total.
@@ -122,15 +132,93 @@ pub(crate) fn summarise(
         .map(|(day, items)| ActivityDay { day, items })
         .collect();
 
+    let streak = streak_from(&days, &today);
+
     (
         ActivityReport {
             since_day: days.first().map(|entry| entry.day.clone()),
             active_days: days.len(),
             today,
+            streak,
             days,
             items_without_a_day,
         },
         library,
+    )
+}
+
+/// The run of days up to now, and the longest run there has ever been.
+///
+/// A day still in progress does not break a run. Someone who worked yesterday and has not
+/// started today is on a streak, not off one — counting from today alone would report every
+/// streak as broken every morning, which is a number that punishes the user for the hour
+/// they happened to open the app.
+///
+/// Days are `YYYY-MM-DD` labels already shifted by the rollover, so "the day before" is
+/// plain calendar arithmetic on the label and needs no timezone.
+fn streak_from(days: &[ActivityDay], today: &DayKey) -> Streak {
+    use std::collections::HashSet;
+
+    let present: HashSet<&str> = days.iter().map(|entry| entry.day.as_str()).collect();
+
+    let mut current = 0;
+    // Start at today when it counts, else at yesterday. Anything older than that is a run
+    // that has already ended.
+    let mut cursor = if present.contains(today.as_str()) {
+        Some(today.as_str().to_string())
+    } else {
+        let yesterday = step_back(today.as_str());
+        yesterday.filter(|day| present.contains(day.as_str()))
+    };
+    while let Some(day) = cursor {
+        if !present.contains(day.as_str()) {
+            break;
+        }
+        current += 1;
+        cursor = step_back(&day);
+    }
+
+    // The longest run anywhere in the history, which is a different question and is not
+    // necessarily the one ending now.
+    let mut best = 0;
+    let mut run = 0;
+    let mut previous: Option<String> = None;
+    for entry in days {
+        let day = entry.day.as_str();
+        run = match previous.as_deref().and_then(step_back_of(day)) {
+            Some(_) => run + 1,
+            None => 1,
+        };
+        best = best.max(run);
+        previous = Some(day.to_string());
+    }
+
+    Streak { current, best }
+}
+
+/// `Some(previous)` when `previous` is the day immediately before `day`.
+fn step_back_of(day: &str) -> impl Fn(&str) -> Option<()> + '_ {
+    move |previous| {
+        step_back(day).filter(|before| before == previous).map(|_| ())
+    }
+}
+
+/// The day before a `YYYY-MM-DD` label, as a label.
+///
+/// Arithmetic on the date itself rather than on an instant: the rollover was applied when
+/// the label was made, and re-reading it as a moment would apply a timezone to a string
+/// that no longer has one.
+fn step_back(day: &str) -> Option<String> {
+    let mut parts = day.split('-');
+    let year: i32 = parts.next()?.parse().ok()?;
+    let month: u32 = parts.next()?.parse().ok()?;
+    let date: u32 = parts.next()?.parse().ok()?;
+    let civil = chrono::NaiveDate::from_ymd_opt(year, month, date)?;
+    Some(
+        civil
+            .pred_opt()?
+            .format("%Y-%m-%d")
+            .to_string(),
     )
 }
 
@@ -276,6 +364,66 @@ mod tests {
         assert_eq!(library.transcribed, 2);
         assert_eq!(library.japanese, 2, "an item is Japanese once, not once per transcript");
         assert_eq!(library.translated, 1);
+    }
+
+    fn days_on(labels: &[&str]) -> Vec<ActivityDay> {
+        labels
+            .iter()
+            .map(|label| ActivityDay {
+                day: key(label),
+                items: 1,
+            })
+            .collect()
+    }
+
+    /// The rule that decides whether a streak reads as encouragement or as a scold. A day
+    /// that has not started yet must not end a run, or every streak breaks every morning.
+    #[test]
+    fn a_day_not_yet_worked_does_not_break_a_run() {
+        let days = days_on(&["2026-09-07", "2026-09-08", "2026-09-09"]);
+        assert_eq!(
+            streak_from(&days, &key("2026-09-10")).current,
+            3,
+            "yesterday was worked, so the run is alive"
+        );
+        assert_eq!(
+            streak_from(&days, &key("2026-09-11")).current,
+            0,
+            "a whole day was missed, so it is not"
+        );
+    }
+
+    #[test]
+    fn a_run_counts_only_consecutive_days() {
+        let days = days_on(&["2026-09-01", "2026-09-03", "2026-09-04", "2026-09-05"]);
+        let streak = streak_from(&days, &key("2026-09-05"));
+        assert_eq!(streak.current, 3, "the gap on the 2nd ends the earlier run");
+        assert_eq!(streak.best, 3);
+    }
+
+    /// The longest run is a different question from the one ending now, and a page that
+    /// answered the second while labelling it the first would be quietly wrong.
+    #[test]
+    fn the_best_run_need_not_be_the_current_one() {
+        let days = days_on(&[
+            "2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-09-10",
+        ]);
+        let streak = streak_from(&days, &key("2026-09-10"));
+        assert_eq!(streak.current, 1);
+        assert_eq!(streak.best, 4);
+    }
+
+    #[test]
+    fn a_month_boundary_does_not_end_a_run() {
+        let days = days_on(&["2026-08-30", "2026-08-31", "2026-09-01"]);
+        assert_eq!(streak_from(&days, &key("2026-09-01")).current, 3);
+    }
+
+    #[test]
+    fn no_days_is_no_streak_rather_than_a_broken_one() {
+        let streak = streak_from(&[], &key("2026-09-10"));
+        assert_eq!(streak.current, 0);
+        assert_eq!(streak.best, 0);
     }
 
     #[test]
