@@ -1,22 +1,12 @@
 use chrono::{DateTime, Duration, Local, LocalResult, TimeZone};
 use serde::{Deserialize, Serialize};
 
-/// The hour at which a new day begins, in local time.
-///
-/// Not midnight. A session that ends at 00:30 belongs to the evening it started in, and
-/// keyed by local midnight a streak would break for someone who studied at 23:30 and again
-/// at 00:30 — two sessions in one sitting, reported as a missed day.
-///
-/// A constant rather than a setting, because the key is written into stored rows: changing
-/// it later could not re-bucket the history already keyed under the old one, so the choice
-/// has to be made once.
+/// When a new day begins locally. Not midnight: 23:30 and 00:30 are one sitting, and a
+/// midnight key reports them as a missed day. Constant, because stored rows are keyed by it.
 pub(crate) const DAY_ROLLOVER_HOUR: i64 = 4;
 
-/// The local day a moment belongs to, as `YYYY-MM-DD`.
-///
-/// A newtype with one constructor so that every row in the store, every chart bucket and
-/// every streak comparison is keyed the same way. Two pieces of code deciding
-/// independently what "today" means is how a streak breaks for a reason nobody can find.
+/// The local day a moment belongs to, as `YYYY-MM-DD`. One constructor, so rows, buckets
+/// and streaks cannot disagree about what "today" means.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(crate) struct DayKey(String);
@@ -33,33 +23,25 @@ impl std::fmt::Display for DayKey {
     }
 }
 
-/// The day a local moment falls in, once the rollover is applied.
-///
-/// Shifting the moment back and then taking its date is what makes the rule one
-/// subtraction rather than a branch on the hour, so the boundary cannot be off by one in
-/// only one direction.
+/// The day a local moment falls in. Shifting back then taking the date keeps this one
+/// subtraction, so the boundary cannot be off by one in a single direction.
 pub(crate) fn day_key_at(moment: DateTime<Local>) -> DayKey {
     let shifted = moment - Duration::hours(DAY_ROLLOVER_HOUR);
     DayKey(shifted.format("%Y-%m-%d").to_string())
 }
 
-/// The day a millisecond timestamp falls in, or `None` when it names no local time.
-///
-/// `None` is reachable: the hour skipped by a daylight-saving jump does not exist locally,
-/// and a timestamp beyond the calendar's range has no date. A caller is handed the absence
-/// rather than a plausible neighbouring day, so it can count what it could not place.
+/// The day a timestamp falls in, or `None` when it names no local time — a skipped
+/// daylight-saving hour, or a date off the calendar. Callers count what they cannot place.
 pub(crate) fn day_key_for_ms(ms: u64) -> Option<DayKey> {
     let millis = i64::try_from(ms).ok()?;
     match Local.timestamp_millis_opt(millis) {
         LocalResult::Single(moment) => Some(day_key_at(moment)),
-        // A repeated local hour names one calendar date either way, so the ambiguity never
-        // reaches the answer; the earlier reading is taken so the choice is stated.
+        // A repeated local hour names one date either way; taking the earlier states it.
         LocalResult::Ambiguous(earlier, _) => Some(day_key_at(earlier)),
         LocalResult::None => None,
     }
 }
 
-/// The day now.
 pub(crate) fn today() -> DayKey {
     day_key_at(Local::now())
 }
@@ -77,15 +59,13 @@ mod tests {
         }
     }
 
-    /// The whole point of the rollover, and the case a streak lives or dies on.
     #[test]
     fn the_minute_before_the_rollover_belongs_to_the_day_before() {
         assert_eq!(day_key_at(local(2026, 9, 10, 3, 59)).as_str(), "2026-09-09");
         assert_eq!(day_key_at(local(2026, 9, 10, 4, 0)).as_str(), "2026-09-10");
     }
 
-    /// A late-night session and the small hours after it are one day, which is the reason
-    /// the rollover exists at all.
+    /// A late session and the small hours after it are one day.
     #[test]
     fn a_session_either_side_of_midnight_is_one_day() {
         let evening = day_key_at(local(2026, 9, 9, 23, 30));
@@ -100,8 +80,7 @@ mod tests {
         assert_eq!(day_key_at(local(2026, 9, 10, 23, 59)).as_str(), "2026-09-10");
     }
 
-    /// Whatever the machine's zone, a calendar date must produce exactly one key across
-    /// its whole span — including a date on which the clocks moved.
+    /// One key across a whole date, including one on which the clocks moved.
     #[test]
     fn one_calendar_date_yields_one_key_across_its_whole_span() {
         for (year, month, day) in [(2026, 3, 29), (2026, 10, 25), (2026, 9, 10)] {
@@ -140,8 +119,7 @@ mod tests {
 
     #[test]
     fn the_rollover_is_the_documented_four() {
-        // Pinned because the value is baked into every stored row: the constant and the
-        // history keyed under it cannot disagree later.
+        // Pinned: stored rows are keyed by this, so it cannot drift.
         assert_eq!(DAY_ROLLOVER_HOUR, 4);
     }
 }

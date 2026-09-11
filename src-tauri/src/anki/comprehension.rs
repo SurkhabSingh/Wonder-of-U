@@ -13,32 +13,20 @@ use crate::tokenizer::tokenize_japanese;
 use super::known_words::normalize_expression;
 use super::sentence_ranking::is_content_word;
 
-/// Below this many content words there is nothing to say.
-///
-/// A share is only as meaningful as the text under it: two transcribed sentences can put
-/// the figure anywhere, and a headline that swings twenty points because one clip arrived
-/// teaches the reader to distrust it. Reported as "not enough yet" rather than as a number.
+/// Below this there is nothing to say: a headline that swings twenty points because one
+/// clip arrived teaches the reader to distrust it.
 const MIN_CONTENT_TOKENS: u32 = 200;
 
-/// Why no sample was taken.
-///
-/// Each is a state the user can act on, and none of them is a number. The whole reason this
-/// is an enum rather than an empty sample is that a sample of nothing sums to `0 / 0`, and
-/// the page would render a confident zero for "I could not look".
+/// Why no sample was taken. An enum rather than an empty sample: nothing sums to `0 / 0`,
+/// and the page would render a confident zero for "I could not look".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Skip {
-    /// No vocabulary sources chosen, so there is no word list to compare against.
     Unconfigured,
-    /// The Japanese dictionary is not installed, so nothing can be split into words.
     NeedsDictionary,
-    /// No word list has been built yet.
     Unbuilt,
-    /// A word list exists, built under vocabulary settings that have since changed.
-    /// Measuring against it would date the answer to a rule the user has left behind.
+    /// Built under settings that have since changed, so the answer would be misdated.
     Stale,
-    /// Nothing Japanese has been transcribed.
     NothingToRead,
-    /// Too little text to draw a share from.
     Insufficient,
 }
 
@@ -48,7 +36,6 @@ pub(crate) enum Sampled {
     Taken(Sample),
 }
 
-/// One document's worth of counted words.
 struct Counted {
     key: String,
     fingerprint: String,
@@ -56,23 +43,13 @@ struct Counted {
     known_tokens: u32,
 }
 
-/// Measures how much of the Japanese library the current word list covers.
-///
-/// Counted in content-word TOKENS, not in distinct words per line. Tokens make the number
-/// independent of how a transcript happens to be split into rows — the viewer splits on
-/// timed segments and the scanner on newlines, and an unreadable segments sidecar changes
-/// the row set without changing a word of the text. A share that moves when the rows move
-/// is not a measure of the reader.
-///
-/// The content-word judgement itself is not re-implemented: `is_content_word` and
-/// `normalize_expression` are the same ones the transcript badge uses, so the two can
-/// disagree about a total but never about what counts as a word.
+/// Coverage in content-word tokens, so the share does not move when the row split does.
+/// Reuses `is_content_word`, so this and the transcript badge agree on what is a word.
 pub(crate) fn sample_comprehension<R: Runtime>(
     app: &AppHandle<R>,
     now_ms: u64,
 ) -> Result<Sampled, String> {
-    // Settings under one lock, released before anything slow. The lock discipline here is
-    // the module's, not a preference: never hold this across a file read, a tokenize pass,
+    // Released before anything slow. Never hold this across a file read, a tokenize pass,
     // or the known-word index.
     let (asset_directory, build, recordings) = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -94,12 +71,8 @@ pub(crate) fn sample_comprehension<R: Runtime>(
         return Ok(Sampled::Skipped(Skip::NeedsDictionary));
     };
 
-    // The index is copied out under its lock and the lock released immediately. The
-    // tokenize pass below can load a 58 MB dictionary on a cold cache, and holding the
-    // index across that would stall a Refresh behind a transcript being opened.
-    //
-    // Read BEFORE the counting rather than after, so the two states that mean "do not
-    // measure" are found before the expensive work rather than paid for and thrown away.
+    // Copied out and the lock released at once: the tokenize pass can load a 58 MB
+    // dictionary, and the two "do not measure" states are found before paying for it.
     let (known_words, built_at_ms) = {
         let state = app.state::<KnownWordsState>();
         let guard = state
@@ -124,9 +97,8 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     let mut unread = 0_u32;
     for (key, path) in japanese {
         let Ok(text) = crate::text_files::read_external_text(Path::new(&path)) else {
-            // Counted, never skipped silently. A denominator that quietly shrinks moves the
-            // headline with no visible cause, which is the failure this whole feature is
-            // built to avoid.
+            // Never skipped silently: a denominator that quietly shrinks moves the
+            // headline with no visible cause.
             unread += 1;
             continue;
         };
@@ -159,17 +131,8 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     )))
 }
 
-/// Takes a sample and stores it. Cannot fail its caller, by signature.
-///
-/// Returns nothing, so no future contributor can propagate it with `?` out of a command
-/// whose own work already succeeded. Every outcome goes to the log instead: a reading is a
-/// by-product of the refresh the user asked for, and it must never be able to turn a
-/// refresh that worked into an error, nor leave a button disabled behind an unsettled
-/// promise.
-///
-/// The `catch_unwind` is for the same reason and covers the whole body. It is honest about
-/// what it does: it protects this caller's thread. It cannot un-poison a lock a panic
-/// crossed, which is why the sampler holds no lock across any slow work.
+/// Returns nothing by signature, so a reading cannot turn a working refresh into an error.
+/// `catch_unwind` protects this thread only, so nothing here holds a lock across slow work.
 pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String, String> {
         let now_ms = crate::app_runtime::now_ms();
@@ -210,10 +173,8 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Every Japanese transcript in the library, as `(item key, path)`.
-///
-/// `auto` counts only once whisper has said what it heard. An undetected `auto` is not
-/// evidence of Japanese, and counting it would put an unknown language in the denominator.
+/// Every Japanese transcript, as `(item key, path)`. An undetected `auto` is not evidence
+/// of Japanese and would put an unknown language in the denominator.
 fn japanese_transcripts(recordings: &[RecentRecording]) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for recording in recordings {
@@ -236,20 +197,14 @@ fn japanese_transcripts(recordings: &[RecentRecording]) -> Vec<(String, String)>
     found
 }
 
-/// Identity for one measured document.
-///
-/// The recording's path rather than the transcript's, so re-transcribing — which rewrites
-/// the transcript in place — keeps the item comparable with its own past instead of
-/// arriving as a new one.
+/// The recording's path, not the transcript's, so a re-transcribe leaves the item
+/// comparable with its own past instead of arriving as a new one.
 fn item_key(recording_path: &str, language: &str) -> String {
     format!("{recording_path}|{}", language.trim().to_ascii_lowercase())
 }
 
-/// What the text WAS when it was counted.
-///
-/// Two samples are only comparable over items whose text did not change between them.
-/// Transcripts are rewritten in place by a re-transcribe, so without this a change of
-/// speech model reads as the reader having learned something.
+/// What the text was when counted. Without it a change of speech model reads as the
+/// reader having learned something.
 fn fingerprint(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()
@@ -339,8 +294,7 @@ mod tests {
         assert_eq!(found[0].1, "C:/a.ja.txt");
     }
 
-    /// `auto` is a request, not an answer. Counting an undetected one would put an unknown
-    /// language into the denominator and quietly lower the share.
+    /// `auto` is a request, not an answer; counting it lowers the share silently.
     #[test]
     fn auto_counts_only_once_the_language_is_known() {
         let undetected = vec![recording("C:/a.wav", vec![transcript("auto", None, "C:/a.txt")])];
@@ -359,8 +313,7 @@ mod tests {
         assert!(japanese_transcripts(&other).is_empty());
     }
 
-    /// The key is the RECORDING's path, so a re-transcribe — which rewrites the transcript
-    /// file in place — leaves the item comparable with its own past.
+    /// Keyed on the recording, so a re-transcribe leaves the item comparable.
     #[test]
     fn the_key_survives_a_retranscribe_and_separates_languages() {
         assert_eq!(item_key("C:/a.wav", "ja"), item_key("C:/a.wav", "JA"));
@@ -368,8 +321,7 @@ mod tests {
         assert_ne!(item_key("C:/a.wav", "ja"), item_key("C:/b.wav", "ja"));
     }
 
-    /// The fingerprint is what stops a model change reading as learning. Same text, same
-    /// value; one character different, different value.
+    /// Same text, same value; one character different, different value.
     #[test]
     fn the_fingerprint_moves_only_when_the_text_moves() {
         assert_eq!(fingerprint("こんにちは"), fingerprint("こんにちは"));

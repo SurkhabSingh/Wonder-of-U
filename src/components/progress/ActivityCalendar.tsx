@@ -1,14 +1,11 @@
 import type { ActivityDay } from "../../types";
 
-// A full year. The grid stretches to whatever width it is given, so the column count is
-// what decides how big a cell ends up: at 26 weeks across a wide pane the squares grow
-// absurd. A year also makes the start of the library visible as empty space rather than
-// cropping it out, which is the honest picture.
+// A full year. The column count decides cell size in a stretched grid, and a year shows
+// the start of the library as empty space rather than cropping it out.
 const WEEKS = 53;
 const DAYS_IN_WEEK = 7;
 
-/// Shades a day by how much arrived on it. Four steps, because more than that is a legend
-/// nobody reads and fewer cannot tell a busy day from a quiet one.
+/// Four steps: more is a legend nobody reads, fewer cannot tell busy from quiet.
 function level(items: number): number {
   if (items === 0) return 0;
   if (items <= 2) return 1;
@@ -16,12 +13,8 @@ function level(items: number): number {
   return 3;
 }
 
-/// Steps back one day from a `YYYY-MM-DD` label.
-///
-/// The labels are dates, not instants: the backend already applied the 04:00 rollover when
-/// it made them. Walking them with UTC arithmetic keeps them dates — using local time here
-/// would re-introduce a timezone to strings that no longer have one, and shift the grid by
-/// a day for anyone west of UTC.
+/// Labels are dates, not instants. UTC arithmetic keeps them dates; local time would shift
+/// the grid by a day for anyone west of UTC.
 function stepBack(day: string, byDays: number): string {
   const at = new Date(`${day}T00:00:00Z`);
   at.setUTCDate(at.getUTCDate() - byDays);
@@ -33,10 +26,8 @@ function weekdayOf(day: string): number {
   return (new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7;
 }
 
-/// When the library was worked on, as a year-ish grid.
-///
-/// Drawn from the arrival time every recording already carries, so it needs nothing stored
-/// and reaches back as far as the library does rather than as far as this feature does.
+/// Drawn from arrival times recordings already carry, so it needs nothing stored and
+/// reaches back as far as the library rather than as far as this feature.
 export function ActivityCalendar({
   days,
   today,

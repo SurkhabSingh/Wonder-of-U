@@ -2,23 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Measured, ProgressReport } from "../types";
 
-/// Reads the stored progress report.
-///
-/// The command touches local files only and never contacts Anki, so this is cheap and can
-/// run whenever the page mounts. It also never TAKES a reading — the only thing that moves
-/// coverage is rebuilding the word list, so a reading is taken there and read here.
+/// Reads the stored report. Local files only, and never takes a reading: coverage moves
+/// when the word list is rebuilt, so a reading is taken there and read here.
 export function useProgress(activePage: string) {
   const [report, setReport] = useState<ProgressReport | null>(null);
-  /// How many times a read has SUCCEEDED, as a counter rather than a boolean.
-  ///
-  /// The page has to tell "we have looked and there is nothing stored" from "we have never
-  /// managed to look", and a null `report` means both. Copied from `useMinedSentences`,
-  /// which needed the same distinction for the same reason.
+  /// Successful reads. A null `report` means both "nothing stored" and "never looked",
+  /// and the page needs to tell them apart.
   const [readCount, setReadCount] = useState(0);
   const [failed, setFailed] = useState(false);
-  // Asked for separately from the report, because it is the one number that needs Anki and
-  // the page must open at the same speed whether Anki is running or not. Null means the
-  // question has not been put yet, which is not the same as Anki having declined it.
+  // Separate, because it is the one number needing Anki. Null is "not asked yet", which
+  // is not the same as Anki declining.
   const [minedCards, setMinedCards] = useState<Measured<number> | null>(null);
   /// Guards two answers to two requests landing out of order.
   const runRef = useRef(0);
@@ -35,16 +28,14 @@ export function useProgress(activePage: string) {
       setFailed(false);
       setReadCount((count) => count + 1);
     } catch {
-      // The command rejected rather than answering. Its own wording is not shown — every
-      // reason worth telling apart is already a state inside the report — so the page says
-      // the one fixed thing instead.
+      // Rejected rather than answered. Its wording is not shown: every reason worth
+      // telling apart is already a state inside the report.
       if (runRef.current === run) {
         setFailed(true);
       }
     }
 
-    // Fired after the report and never awaited with it: a slow or absent Anki must not be
-    // able to hold up the numbers that came from local files.
+    // Never awaited with the report: a slow Anki must not hold up local numbers.
     try {
       const counted = await invoke<Measured<number>>("count_mined_cards");
       if (runRef.current === run) {
@@ -62,8 +53,7 @@ export function useProgress(activePage: string) {
     }
   }, []);
 
-  // Read on arrival, not on a timer: nothing on this page changes while it is open, since
-  // a reading is only taken where the word list is rebuilt.
+  // On arrival, not on a timer: nothing here changes while the page is open.
   useEffect(() => {
     if (activePage !== "progress") {
       return;

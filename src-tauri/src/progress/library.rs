@@ -4,7 +4,6 @@ use crate::app_types::RecentRecording;
 
 use super::day::{day_key_for_ms, DayKey};
 
-/// One day the library grew.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ActivityDay {
@@ -12,33 +11,21 @@ pub(crate) struct ActivityDay {
     pub(crate) items: u32,
 }
 
-/// When the library was worked on.
-///
-/// Sparse rather than dense — only days that had something. Most days have nothing, and a
-/// row per empty day would be mostly zeroes for the frontend to filter back out.
+/// When the library was worked on. Sparse: a row per empty day would be mostly zeroes
+/// for the frontend to filter back out.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ActivityReport {
     pub(crate) days: Vec<ActivityDay>,
-    /// The oldest day anything is known for.
-    ///
-    /// NOT floored at the day this feature first ran. Every recording carries the moment it
-    /// arrived, and those moments are real dated evidence from before any of this existed —
-    /// refusing to draw them would tell a user with months of history that they had done
-    /// nothing until the day the feature shipped.
+    /// Not floored at the day this feature first ran: recordings carry real dated evidence
+    /// from before it, and hiding that tells a user with history they did nothing.
     pub(crate) since_day: Option<DayKey>,
     pub(crate) active_days: usize,
-    /// Today, as this app keys days.
-    ///
-    /// Sent rather than worked out again on the other side. The day boundary is 04:00 and
-    /// that rule lives in one place; a frontend that derived "today" from local midnight
-    /// would put the last column of the calendar on a different day from the rows in it,
-    /// for the four hours a night when the two disagree.
+    /// Sent, not re-derived: the 04:00 boundary lives in one place, and a frontend using
+    /// local midnight would disagree with its own rows for four hours a night.
     pub(crate) today: DayKey,
-    /// Items whose arrival time is unknown, so they are on no day at all. Counted, because
-    /// a calendar quietly missing rows is a calendar that understates the work.
+    /// On no day at all. Counted: a calendar quietly missing rows understates the work.
     pub(crate) items_without_a_day: usize,
-    /// Days in a row up to now, and the longest run there has ever been.
     pub(crate) streak: Streak,
 }
 
@@ -62,11 +49,8 @@ pub(crate) struct LibraryReport {
     pub(crate) recorded: usize,
     pub(crate) imported_from_a_link: usize,
     pub(crate) imported_from_a_file: usize,
-    /// Items that predate the app noting how they arrived.
-    ///
-    /// Its own count rather than folded into `recorded`, which is what a reader would
-    /// assume of an item with no origin. "We do not know" and "microphone" are different
-    /// answers, and on this library the first is the larger of the two.
+    /// Items predating the origin field. Its own count: "we do not know" and "microphone"
+    /// are different answers.
     pub(crate) unknown_origin: usize,
     pub(crate) transcribed: usize,
     pub(crate) japanese: usize,
@@ -106,9 +90,8 @@ pub(crate) fn summarise(
             library.total_ms += recording.duration_ms;
         }
 
-        // Matched against the values the app actually writes: "recording" at the end of a
-        // capture, "import" for a local file, "youtube" for a link. Anything else, `None`
-        // included, is an origin nobody recorded — never guessed at.
+        // The values the app writes. Anything else, `None` included, is an origin nobody
+        // recorded, and is never guessed at.
         match recording.source.as_deref() {
             Some("recording") => library.recorded += 1,
             Some("import") => library.imported_from_a_file += 1,
@@ -147,15 +130,8 @@ pub(crate) fn summarise(
     )
 }
 
-/// The run of days up to now, and the longest run there has ever been.
-///
-/// A day still in progress does not break a run. Someone who worked yesterday and has not
-/// started today is on a streak, not off one — counting from today alone would report every
-/// streak as broken every morning, which is a number that punishes the user for the hour
-/// they happened to open the app.
-///
-/// Days are `YYYY-MM-DD` labels already shifted by the rollover, so "the day before" is
-/// plain calendar arithmetic on the label and needs no timezone.
+/// A day still in progress does not break a run: counting from today alone reports every
+/// streak as broken every morning. Labels are pre-shifted, so stepping back needs no zone.
 fn streak_from(days: &[ActivityDay], today: &DayKey) -> Streak {
     use std::collections::HashSet;
 
@@ -203,11 +179,8 @@ fn step_back_of(day: &str) -> impl Fn(&str) -> Option<()> + '_ {
     }
 }
 
-/// The day before a `YYYY-MM-DD` label, as a label.
-///
-/// Arithmetic on the date itself rather than on an instant: the rollover was applied when
-/// the label was made, and re-reading it as a moment would apply a timezone to a string
-/// that no longer has one.
+/// Arithmetic on the date, not an instant: the rollover was applied when the label was
+/// made, and re-reading it as a moment re-applies a timezone it no longer has.
 fn step_back(day: &str) -> Option<String> {
     let mut parts = day.split('-');
     let year: i32 = parts.next()?.parse().ok()?;
@@ -282,9 +255,8 @@ mod tests {
         }
     }
 
-    /// The finding this test exists for. On a real library most items predate the origin
-    /// field, and calling those "recorded" states something nobody recorded. It is the
-    /// same mistake as reading an empty answer as a zero, one field along.
+    /// Most items predate the origin field, and calling those "recorded" states something
+    /// nobody recorded — an empty answer read as a value, one field along.
     #[test]
     fn an_item_with_no_origin_is_counted_as_unknown_and_not_as_recorded() {
         let recordings = vec![

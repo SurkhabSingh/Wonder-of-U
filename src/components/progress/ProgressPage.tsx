@@ -10,11 +10,8 @@ import {
 } from "../../lib/progressFormat";
 import { ActivityCalendar } from "./ActivityCalendar";
 
-/// How much of the library the user can read, and whether that is going up.
-///
-/// The page answers one question — am I getting better — so comprehension leads and
-/// everything else is context. It never contacts Anki: a closed Anki must not be able to
-/// turn a measurement that was taken into a number that is missing.
+/// One question — am I getting better — so comprehension leads and the rest is context.
+/// Never contacts Anki: a closed Anki must not hide a measurement that was taken.
 export function ProgressPage({
   bootstrap,
   report,
@@ -35,8 +32,8 @@ export function ProgressPage({
   const comparison = report?.comparison ?? null;
   const knownWords = bootstrap.knownWords;
 
-  // Never looked yet, as opposed to looked and found nothing. Until a read has succeeded
-  // there is nothing honest to draw, and a page of dashes would claim we had checked.
+  // Never looked, as opposed to looked and found nothing. A page of dashes would claim
+  // we had checked.
   if (readCount === 0 && !failed) {
     return (
       <section className="progress-scroll">
@@ -62,9 +59,8 @@ export function ProgressPage({
       </div>
 
       {storeUnavailable ? (
-        // A condition the app is in rather than one action's outcome, so it is stated on
-        // the page it concerns and not raised as a toast. Nothing is lost — the file is
-        // never written over when it cannot be read.
+        // A condition the app is in, not one action's outcome, so it is stated here
+        // rather than raised as a toast.
         <p className="microcopy field-warning">
           Your progress history could not be opened, so there is nothing to show. Nothing
           has been written over it.
@@ -89,9 +85,8 @@ export function ProgressPage({
             comparison ? (
               <>
                 {comparison.deltaPoints === 0 ? (
-                  // Neither coloured nor signed. A zero shown in the colour of growth is a
-                  // number dressed as something it is not, and "+0.0" reads as a gain of
-                  // nothing rather than as no gain.
+                  // Neither coloured nor signed: "+0.0" reads as a gain of nothing
+                  // rather than as no gain.
                   <span>No change</span>
                 ) : (
                   <span className={comparison.deltaPoints > 0 ? "up" : "down"}>
@@ -106,8 +101,7 @@ export function ProgressPage({
                 )}
               </>
             ) : coverage?.value !== null && coverage?.value !== undefined ? (
-              // One reading is a number, not a trend. Saying so beats drawing a flat line
-              // that implies no progress was made.
+              // One reading is a number, not a trend, and a flat line would imply one.
               <>Refresh your word list again to see whether this is moving.</>
             ) : null
           }
@@ -166,10 +160,8 @@ export function ProgressPage({
         ) : null}
 
         {report ? (
-          // The caveats live here rather than beside the numbers they qualify. Each is a
-          // fact about how the totals were reached, and a tile is too small to carry one
-          // without shouting — but leaving them off would make every total read as whole
-          // when some of them are not.
+          // Here rather than beside each number: a tile is too small to carry one, and
+          // leaving them off makes every total read as whole.
           <p className="progress-footnote">
             {[
               `${formatCount(report.library.japanese)} Japanese`,
@@ -187,10 +179,8 @@ export function ProgressPage({
               report.activity.itemsWithoutADay > 0
                 ? `${formatCount(report.activity.itemsWithoutADay)} on no known day`
                 : null,
-              // Said out loud rather than counted and discarded. Both are readings this
-              // build did not fold into the numbers above, and both are kept in the file
-              // exactly as they were — so the sentence has to carry that second half, or
-              // it reports a loss that did not happen.
+              // Both are readings not folded into the numbers above, and both are kept
+              // in the file — so each says so, or it reports a loss that did not happen.
               report.damagedRows > 0
                 ? `${formatCount(report.damagedRows)} earlier reading${
                     report.damagedRows === 1 ? "" : "s"

@@ -5,42 +5,23 @@ use serde::Serialize;
 use super::measured::Measured;
 use super::store::Sample;
 
-/// A like-for-like change between two samples.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Comparison {
-    /// Percentage points, later minus earlier, over the compared items only.
     pub(crate) delta_points: f64,
     pub(crate) earlier_percent: f64,
     pub(crate) later_percent: f64,
-    /// How many documents both samples measured with unchanged text.
     pub(crate) items_compared: usize,
-    /// Documents the later sample has and the earlier one did not. Reported beside the
-    /// change, never folded into it.
+    /// New documents. Reported beside the change, never folded into it.
     pub(crate) items_added: usize,
-    /// Documents both samples have whose text changed in between — a re-transcribe. Held
-    /// out for the same reason as a new document: their words are not the same words.
+    /// Re-transcribed in between. Held out: their words are not the same words.
     pub(crate) items_changed: usize,
     pub(crate) earlier_taken_at_ms: u64,
     pub(crate) later_taken_at_ms: u64,
 }
 
-/// The change between two samples, over the material they both measured.
-///
-/// This is the whole reason samples are stored rather than recomputed. With one word list
-/// that gets overwritten, a share recomputed today puts the reader's growth into both the
-/// numerator and the denominator, where it cancels — what is left on screen is how hard the
-/// material was. Two dated samples over a FIXED set of documents can differ only because
-/// the word list changed, and that difference is the learning.
-///
-/// Three things are held out of the comparison, all for the same reason: their words are
-/// not the same words.
-///
-///   * documents the later sample added — new material is not progress on old material;
-///   * documents whose fingerprint moved — a re-transcribe rewrites the text in place under
-///     an unchanged key, so a change of speech model would otherwise read as learning;
-///   * everything, when the two samples were measured under different vocabulary settings,
-///     which is not a comparison at all.
+/// Over material both measured: recomputing a share puts growth into numerator and
+/// denominator alike. New, re-transcribed and differently-configured items are held out.
 pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
     if !earlier.build.matches(&later.build) {
         return None;
@@ -92,9 +73,8 @@ pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
     let earlier_percent = percent(earlier_known, earlier_content);
     let later_percent = percent(later_known, later_content);
     Some(Comparison {
-        // Rounded like the two shares it is drawn from. Both operands are already at one
-        // decimal, but their difference is not: 50.2 - 50.0 is 0.20000000000000284 in
-        // binary floating point, and that is what would reach the screen.
+        // Both operands are at one decimal; their difference is not. 50.2 - 50.0 is
+        // 0.20000000000000284, and that is what would reach the screen.
         delta_points: round_tenth(later_percent - earlier_percent),
         earlier_percent,
         later_percent,
@@ -106,11 +86,8 @@ pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
     })
 }
 
-/// A share, to one decimal place.
-///
-/// Floored just below whole while any word remains unknown, so "100%" is only ever printed
-/// for a text with nothing left in it. Rounding 99.97 up to 100 tells the reader they are
-/// finished with material they are not finished with.
+/// A share to one decimal, floored below whole while any word is unknown: 99.97 rounded
+/// up tells the reader they are finished with material they are not.
 pub(crate) fn percent(known: u32, content: u32) -> f64 {
     if content == 0 {
         return 0.0;
@@ -123,17 +100,12 @@ pub(crate) fn percent(known: u32, content: u32) -> f64 {
     }
 }
 
-/// One decimal place, which is the precision every share and change is reported at.
 fn round_tenth(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
 
-/// The most recent sample, and the newest earlier one it can be compared against.
-///
-/// The pair is chosen by walking backwards for the first sample that yields a comparison,
-/// rather than taking the one immediately before: a sample taken under different vocabulary
-/// settings, or over a library that has since been re-transcribed, is not comparable, and
-/// stopping at it would report "no change yet" while comparable history sits behind it.
+/// Walks back for the first comparable sample rather than taking the one before: an
+/// incomparable neighbour would report "no change yet" over comparable history.
 pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
     let latest = samples.last()?;
     samples
@@ -143,36 +115,27 @@ pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
         .find_map(|earlier| compare(earlier, latest))
 }
 
-/// Everything the Progress page is told.
-///
-/// Built from local files only. It never contacts Anki, so the page opens at the same speed
-/// whether Anki is running or not, and a closed Anki cannot turn a measurement that was
-/// taken into a number that is missing.
+/// Everything the Progress page is told, from local files only: a closed Anki cannot turn
+/// a measurement that was taken into a number that is missing.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProgressReport {
     pub(crate) coverage_percent: Measured<f64>,
-    /// When the library was worked on, back as far as the evidence goes.
     pub(crate) activity: super::library::ActivityReport,
-    /// What the library holds.
     pub(crate) library: super::library::LibraryReport,
-    /// The like-for-like change, when two comparable readings exist. `None` is "not yet",
-    /// which the page says in words rather than drawing as zero.
+    /// `None` is "not yet", which the page says in words rather than drawing as zero.
     pub(crate) comparison: Option<Comparison>,
     pub(crate) readings: usize,
-    /// The first day this store existed. A series that could only have been measured from
-    /// here is floored at it.
+    /// The first day this store existed. Series measured only from here are floored at it.
     pub(crate) first_run_day: Option<super::day::DayKey>,
-    /// Rows the file holds that this build could not read. Surfaced rather than swallowed:
-    /// a smaller answer with no explanation is the failure this feature is built to avoid.
+    /// Rows this build could not read. Surfaced: a smaller answer with no explanation is
+    /// the failure this feature exists to avoid.
     pub(crate) damaged_rows: usize,
     pub(crate) newer_rows: usize,
-    /// Whether the store could be read at all. False means every number above is a guess
-    /// about a file nobody opened, and the page says so instead of drawing it.
+    /// False means every number above is a guess about a file nobody opened.
     pub(crate) store_readable: bool,
 }
 
-/// Reads the stored readings and turns them into what the page shows.
 pub(crate) fn load_progress_inner<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<ProgressReport, String> {
@@ -191,9 +154,8 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         .progress_file
         .clone();
 
-    // Read from the recording history rather than from the progress store: every item
-    // already carries when it arrived, so this needs nothing kept and reaches back as far
-    // as the library does, not as far as this feature does.
+    // From the recording history, not the store: items already carry when they arrived,
+    // so this reaches back as far as the library rather than as far as this feature.
     let (activity, library) = {
         let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
         let persisted = persisted_state
@@ -244,7 +206,6 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
     }
 }
 
-/// The coverage the latest sample measured, carrying whether it can still be trusted.
 pub(crate) fn coverage_from(
     samples: &[Sample],
     current_build: &crate::app_types::KnownWordsBuild,
@@ -316,8 +277,7 @@ mod tests {
         Sample::new(taken_at_ms, day(), build(note_type), 1, 0, items)
     }
 
-    /// The point of the whole design. Over a fixed corpus the two shares differ only
-    /// because the word list grew, which is the learning.
+    /// Over a fixed corpus the shares differ only because the word list grew.
     #[test]
     fn a_fixed_corpus_shows_the_word_list_growing() {
         let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
@@ -329,8 +289,7 @@ mod tests {
         assert_eq!(comparison.items_compared, 1);
     }
 
-    /// New material is not progress on old material. Adding an easy transcript must not be
-    /// able to move the change, or the number rewards importing rather than learning.
+    /// New material is not progress on old: importing must not move the number.
     #[test]
     fn material_added_since_the_earlier_sample_is_held_out_of_the_change() {
         let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
@@ -345,8 +304,7 @@ mod tests {
         assert_eq!(comparison.items_added, 1);
     }
 
-    /// A re-transcribe rewrites the text in place under an unchanged key. Without the
-    /// fingerprint, swapping the speech model would read as the reader having learned.
+    /// Without the fingerprint, swapping the speech model reads as having learned.
     #[test]
     fn a_document_whose_text_changed_is_not_compared_against_its_own_past() {
         let earlier = sample(1, "Kaishi", vec![item("a", "old", 100, 50)]);

@@ -1,18 +1,7 @@
 import type { Measured } from "../../types";
 
-/// The only component allowed to paint a number on the Progress page.
-///
-/// Everything the backend measures crosses the wire as a `Measured`, which carries whether
-/// it could be worked out at all. This is where that decision becomes pixels, and it is one
-/// component rather than a rule at each call site because a rule at each call site is a rule
-/// somebody forgets: a single `?? 0` between the backend's `null` and a bare `<span>` puts a
-/// confident zero on screen for a reading that never happened.
-///
-/// The value prop is `T | null` on purpose and there is no code path from null to a number.
-///
-/// Every state renders into the same fixed-height slot, so the page does not reflow as a
-/// metric changes state. That is what makes the dash read as deliberate rather than as
-/// something that failed to load.
+/// The only component allowed to paint a number here: one `?? 0` at a call site would put
+/// a confident zero on screen for a reading that never happened.
 export function MeasuredValue({
   value,
   unit,
@@ -37,12 +26,8 @@ export function MeasuredValue({
   );
 }
 
-/// A whole metric: its label, its number, and whatever the number needs said about it.
-///
-/// `qualified` covers the two states that carry a real value under a caveat — a reading
-/// taken before the vocabulary settings changed, and one that could not read everything.
-/// Both keep their number at full size and gain a dated line, because a dated answer beats
-/// no answer as long as the date is on it.
+/// `qualified` is the two states carrying a real value under a caveat. Both keep the
+/// number at full size and gain a dated line: a dated answer beats no answer.
 export function Metric({
   label,
   value,
@@ -91,11 +76,8 @@ export function Metric({
   );
 }
 
-/// Reads a `Measured` from the backend into what `Metric` needs.
-///
-/// Kept beside the component so the mapping from wire status to treatment lives in one
-/// place. `unavailable` is the only status that yields a null value, and it does so because
-/// the backend sent null — never because a status string was unrecognised.
+/// `unavailable` is the only status yielding a null value, and only because the backend
+/// sent null — never because a status string was unrecognised.
 export function readMeasured<T>(measured: Measured<T>): {
   known: boolean;
   qualified: boolean;
@@ -112,11 +94,8 @@ export function readMeasured<T>(measured: Measured<T>): {
   };
 }
 
-/// One small stat in the summary grid.
-///
-/// The same rule as `Metric`, at a smaller size: `value` is `string | null` and null draws
-/// a dash rather than a number. A tile is where a zero would be easiest to slip in, because
-/// a grid of them reads as a block and one wrong cell hides in it.
+/// `Metric`'s rule at tile size: null draws a dash. A grid reads as a block, so one wrong
+/// cell hides in it.
 export function StatTile({ label, value }: { label: string; value: string | null }) {
   return (
     <div className="progress-tile">
