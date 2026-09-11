@@ -132,8 +132,8 @@ pub(crate) struct ProgressStore {
     /// Rows carrying a version this build does not read. Counted so the reader can be told
     /// its answer is incomplete rather than shown a smaller number as if it were whole.
     pub(crate) newer: usize,
-    /// Rows that were not JSON at all. Dropped rather than re-emitted: a torn line is
-    /// damage, and writing it back would preserve the damage forever.
+    /// Rows this build could not read. Kept in `passthrough` too, so a write cannot erase
+    /// what it could not parse.
     pub(crate) damaged: usize,
 }
 
