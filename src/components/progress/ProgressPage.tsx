@@ -101,7 +101,6 @@ export function ProgressPage({
                 )}
               </>
             ) : coverage?.value !== null && coverage?.value !== undefined ? (
-              // One reading is a number, not a trend, and a flat line would imply one.
               <>Refresh your word list again to see whether this is moving.</>
             ) : null
           }
@@ -160,8 +159,6 @@ export function ProgressPage({
         ) : null}
 
         {report ? (
-          // Here rather than beside each number: a tile is too small to carry one, and
-          // leaving them off makes every total read as whole.
           <p className="progress-footnote">
             {[
               `${formatCount(report.library.japanese)} Japanese`,
@@ -204,8 +201,6 @@ export function ProgressPage({
       </article>
 
       {coverage && coverage.value === null ? (
-        // Carbon's rule: where more than one metric can be unavailable at once, the page
-        // carries one action rather than each panel carrying its own.
         <button type="button" className="ghost" onClick={onGoToStudyPicks}>
           Go to Study Picks
         </button>

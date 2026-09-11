@@ -10,8 +10,6 @@ use crate::app_types::KnownWordsBuild;
 
 use super::day::{DayKey, DAY_ROLLOVER_HOUR};
 
-/// Carried per row, not once in the header, so a file written by two builds stays
-/// readable row by row.
 const RECORD_VERSION: u32 = 1;
 
 /// Serialises read-modify-write against itself: writers share one temp path, so a second
@@ -22,11 +20,8 @@ static WRITE: Mutex<()> = Mutex::new(());
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Header {
     pub(crate) v: u32,
-    /// The first day this store existed. Series measured only from here are floored at it.
     pub(crate) first_run_day: DayKey,
-    /// The rollover these day keys were written under, so a later build can tell.
     pub(crate) rollover_hour: i64,
-    /// Set only where a file that existed could not be read at all.
     pub(crate) history_lost_at_ms: Option<u64>,
 }
 
@@ -97,7 +92,6 @@ pub(crate) struct ProgressStore {
     /// Rows this build did not model, written back untouched: rebuilding from the parsed
     /// model alone deletes what a newer build wrote, on the first write after a rollback.
     pub(crate) passthrough: Vec<String>,
-    /// Rows from a newer version. Counted, so the reader is told the answer is incomplete.
     pub(crate) newer: usize,
     /// Rows this build could not read. Kept in `passthrough` too, so a write cannot erase
     /// what it could not parse.
@@ -139,8 +133,6 @@ pub(crate) fn load(path: &Path) -> Loaded {
             continue;
         }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            // Counted and kept: every write rebuilds from what was parsed, so dropping it
-            // here erases it on the next reading taken.
             store.damaged += 1;
             store.passthrough.push(line.to_string());
             continue;
@@ -162,7 +154,6 @@ pub(crate) fn load(path: &Path) -> Loaded {
                     store.passthrough.push(line.to_string());
                 }
             },
-            // This version, a kind this build does not handle. Not damage, so it survives.
             _ => store.passthrough.push(line.to_string()),
         }
     }
@@ -219,7 +210,6 @@ pub(crate) fn append_sample(path: &Path, sample: Sample) -> Result<(), String> {
     write_all(path, &header, &store)
 }
 
-/// Serialises the header, then every row this build models, then every row it did not.
 fn write_all(path: &Path, header: &Header, store: &ProgressStore) -> Result<(), String> {
     let mut out = serde_json::to_string(header).map_err(|error| error.to_string())?;
     for sample in &store.samples {
@@ -293,7 +283,6 @@ mod tests {
         }
     }
 
-    /// The expensive failure: an unreadable file rewritten as if it were empty.
     #[test]
     fn an_unreadable_file_is_never_mistaken_for_an_empty_one() {
         let dir = temp_dir("unreadable");
@@ -312,8 +301,6 @@ mod tests {
         );
     }
 
-    /// The other half of unreadable: the read itself fails, not the header. A directory
-    /// in the file's place reproduces what a backup agent holding it open would do.
     #[test]
     fn a_file_that_cannot_be_read_at_all_is_not_an_empty_one_either() {
         let dir = temp_dir("unopenable");
@@ -330,7 +317,6 @@ mod tests {
         );
     }
 
-    /// A rollback must not delete what a newer build wrote, so those rows are carried.
     #[test]
     fn a_row_from_a_newer_build_survives_a_write_by_this_one() {
         let dir = temp_dir("newer");
@@ -383,8 +369,6 @@ mod tests {
             other => panic!("expected a present store, got {other:?}"),
         }
 
-        // The half that matters: a damaged row left out of the model is erased by the
-        // next reading taken, not merely skipped.
         append_sample(&path, sample(2, "build-a")).expect("append after the tear");
         let after = fs::read_to_string(&path).expect("read back");
         assert!(
@@ -402,8 +386,6 @@ mod tests {
         }
     }
 
-    /// Well-formed JSON claiming this version and kind, still refused by the model: what
-    /// removing a field looks like. Kept, so it costs one reading rather than every one.
     #[test]
     fn a_reading_this_build_cannot_model_is_kept_rather_than_rewritten_away() {
         let dir = temp_dir("unmodellable");
@@ -455,8 +437,6 @@ mod tests {
         }
     }
 
-    /// The rows carry the fingerprint under the name the comparison reads. A rename here
-    /// silently turns every item into a new one and every delta into nothing.
     #[test]
     fn the_stored_row_uses_the_names_the_reader_expects() {
         let row = serde_json::to_value(sample(5, "build-a")).expect("serialize");
@@ -470,8 +450,6 @@ mod tests {
         assert_eq!(row["unreadItems"], serde_json::json!(0));
     }
 
-    /// Pooled, so one short clip cannot outvote an episode. The check is deliberately
-    /// against hand arithmetic rather than against another call to the same function.
     #[test]
     fn totals_pool_across_items_rather_than_averaging_them() {
         let mut pooled = sample(1, "build-a");

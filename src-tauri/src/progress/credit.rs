@@ -10,8 +10,6 @@ pub(crate) const MAX_CHUNK_MS: u64 = 120_000;
 /// Below this a rate reads as a stall; dividing by it turns milliseconds into hours.
 const MIN_RATE: f64 = 0.05;
 
-/// Which surface a sample came from. The names are the wire: renaming a variant changes
-/// what the frontend has to send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ImmersionSource {
@@ -192,14 +190,12 @@ mod tests {
         assert_eq!(credit.unmeasured_ms, 600_000 - MAX_CHUNK_MS);
     }
 
-    /// The defence itself: wall alone would pay for a minute spent buffering.
     #[test]
     fn a_stretch_that_barely_advanced_credits_the_advance_not_the_wall() {
         let credit = credit_ms(Some(&playing(0)), &playing(5_000), Duration::from_secs(60));
         assert_eq!(credit.credited_ms, 5_000, "only the media that actually played");
     }
 
-    /// A crawling rate inflates the estimate until it covers the gap, undoing the rule.
     #[test]
     fn a_crawling_rate_is_floored_rather_than_covering_the_gap() {
         let crawling = PlaybackSample {

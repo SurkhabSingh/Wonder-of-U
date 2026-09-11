@@ -12,9 +12,7 @@ pub(crate) struct Comparison {
     pub(crate) earlier_percent: f64,
     pub(crate) later_percent: f64,
     pub(crate) items_compared: usize,
-    /// New documents. Reported beside the change, never folded into it.
     pub(crate) items_added: usize,
-    /// Re-transcribed in between. Held out: their words are not the same words.
     pub(crate) items_changed: usize,
     pub(crate) earlier_taken_at_ms: u64,
     pub(crate) later_taken_at_ms: u64,
@@ -104,8 +102,6 @@ fn round_tenth(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
 
-/// Walks back for the first comparable sample rather than taking the one before: an
-/// incomparable neighbour would report "no change yet" over comparable history.
 pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
     let latest = samples.last()?;
     samples
@@ -123,16 +119,13 @@ pub(crate) struct ProgressReport {
     pub(crate) coverage_percent: Measured<f64>,
     pub(crate) activity: super::library::ActivityReport,
     pub(crate) library: super::library::LibraryReport,
-    /// `None` is "not yet", which the page says in words rather than drawing as zero.
     pub(crate) comparison: Option<Comparison>,
     pub(crate) readings: usize,
-    /// The first day this store existed. Series measured only from here are floored at it.
     pub(crate) first_run_day: Option<super::day::DayKey>,
     /// Rows this build could not read. Surfaced: a smaller answer with no explanation is
     /// the failure this feature exists to avoid.
     pub(crate) damaged_rows: usize,
     pub(crate) newer_rows: usize,
-    /// False means every number above is a guess about a file nobody opened.
     pub(crate) store_readable: bool,
 }
 
@@ -277,7 +270,6 @@ mod tests {
         Sample::new(taken_at_ms, day(), build(note_type), 1, 0, items)
     }
 
-    /// Over a fixed corpus the shares differ only because the word list grew.
     #[test]
     fn a_fixed_corpus_shows_the_word_list_growing() {
         let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
@@ -289,7 +281,6 @@ mod tests {
         assert_eq!(comparison.items_compared, 1);
     }
 
-    /// New material is not progress on old: importing must not move the number.
     #[test]
     fn material_added_since_the_earlier_sample_is_held_out_of_the_change() {
         let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
@@ -304,7 +295,6 @@ mod tests {
         assert_eq!(comparison.items_added, 1);
     }
 
-    /// Without the fingerprint, swapping the speech model reads as having learned.
     #[test]
     fn a_document_whose_text_changed_is_not_compared_against_its_own_past() {
         let earlier = sample(1, "Kaishi", vec![item("a", "old", 100, 50)]);
@@ -327,7 +317,6 @@ mod tests {
         assert_eq!(comparison.delta_points, 10.0, "only the unchanged item counts");
     }
 
-    /// Two readings taken under different vocabulary settings are not a trend.
     #[test]
     fn samples_from_different_vocabulary_settings_are_not_comparable() {
         let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
@@ -335,7 +324,6 @@ mod tests {
         assert_eq!(compare(&earlier, &later), None);
     }
 
-    /// Pooled, not averaged: a two-word clip must not outvote an episode.
     #[test]
     fn the_change_is_pooled_across_documents() {
         let earlier = sample(
@@ -365,7 +353,6 @@ mod tests {
         assert_eq!(comparison.delta_points, 20.0);
     }
 
-    /// "100%" must mean finished. A text with one word left in it is 99.9.
     #[test]
     fn a_share_only_reads_as_whole_when_nothing_is_left() {
         assert_eq!(percent(9_999, 10_000), 99.9);

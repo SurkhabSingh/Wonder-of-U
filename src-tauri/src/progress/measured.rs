@@ -6,9 +6,7 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub(crate) enum MeasuredStatus {
     Known,
-    /// Measured under settings that have since changed. Shown dated, not withheld.
     Stale,
-    /// An input could not be read, so the value is real but smaller than the truth.
     Partial,
     Unavailable,
 }
@@ -52,7 +50,6 @@ impl<T> Measured<T> {
         }
     }
 
-    /// Takes no value, so no caller can pass a placeholder for a measurement.
     pub(crate) fn unavailable(reason: impl Into<String>) -> Self {
         Self {
             value: None,
@@ -95,7 +92,6 @@ mod tests {
         assert_eq!(value["reason"], serde_json::json!("Anki is not open."));
     }
 
-    /// Stale and partial keep their value; only the words around them change.
     #[test]
     fn the_two_qualified_states_keep_their_value() {
         let stale = serde_json::to_value(Measured::stale(7_u32, 100, "The word list changed."))

@@ -28,8 +28,6 @@ export function useProgress(activePage: string) {
       setFailed(false);
       setReadCount((count) => count + 1);
     } catch {
-      // Rejected rather than answered. Its wording is not shown: every reason worth
-      // telling apart is already a state inside the report.
       if (runRef.current === run) {
         setFailed(true);
       }
@@ -53,7 +51,6 @@ export function useProgress(activePage: string) {
     }
   }, []);
 
-  // On arrival, not on a timer: nothing here changes while the page is open.
   useEffect(() => {
     if (activePage !== "progress") {
       return;

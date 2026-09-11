@@ -94,8 +94,6 @@ export function readMeasured<T>(measured: Measured<T>): {
   };
 }
 
-/// `Metric`'s rule at tile size: null draws a dash. A grid reads as a block, so one wrong
-/// cell hides in it.
 export function StatTile({ label, value }: { label: string; value: string | null }) {
   return (
     <div className="progress-tile">

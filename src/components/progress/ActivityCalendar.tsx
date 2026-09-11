@@ -5,7 +5,6 @@ import type { ActivityDay } from "../../types";
 const WEEKS = 53;
 const DAYS_IN_WEEK = 7;
 
-/// Four steps: more is a legend nobody reads, fewer cannot tell busy from quiet.
 function level(items: number): number {
   if (items === 0) return 0;
   if (items <= 2) return 1;
@@ -26,8 +25,6 @@ function weekdayOf(day: string): number {
   return (new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7;
 }
 
-/// Drawn from arrival times recordings already carry, so it needs nothing stored and
-/// reaches back as far as the library rather than as far as this feature.
 export function ActivityCalendar({
   days,
   today,

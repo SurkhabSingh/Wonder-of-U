@@ -24,12 +24,10 @@ pub(crate) struct ActivityReport {
     /// Sent, not re-derived: the 04:00 boundary lives in one place, and a frontend using
     /// local midnight would disagree with its own rows for four hours a night.
     pub(crate) today: DayKey,
-    /// On no day at all. Counted: a calendar quietly missing rows understates the work.
     pub(crate) items_without_a_day: usize,
     pub(crate) streak: Streak,
 }
 
-/// A run of consecutive days with something on them.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Streak {
@@ -37,7 +35,6 @@ pub(crate) struct Streak {
     pub(crate) best: usize,
 }
 
-/// What the library holds, in total.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibraryReport {
@@ -57,7 +54,6 @@ pub(crate) struct LibraryReport {
     pub(crate) translated: usize,
 }
 
-/// Everything the two reports need, from one pass over the history.
 pub(crate) fn summarise(
     recordings: &[RecentRecording],
     today: DayKey,
@@ -138,8 +134,6 @@ fn streak_from(days: &[ActivityDay], today: &DayKey) -> Streak {
     let present: HashSet<&str> = days.iter().map(|entry| entry.day.as_str()).collect();
 
     let mut current = 0;
-    // Start at today when it counts, else at yesterday. Anything older than that is a run
-    // that has already ended.
     let mut cursor = if present.contains(today.as_str()) {
         Some(today.as_str().to_string())
     } else {
@@ -154,8 +148,6 @@ fn streak_from(days: &[ActivityDay], today: &DayKey) -> Streak {
         cursor = step_back(&day);
     }
 
-    // The longest run anywhere in the history, which is a different question and is not
-    // necessarily the one ending now.
     let mut best = 0;
     let mut run = 0;
     let mut previous: Option<String> = None;
@@ -172,7 +164,6 @@ fn streak_from(days: &[ActivityDay], today: &DayKey) -> Streak {
     Streak { current, best }
 }
 
-/// `Some(previous)` when `previous` is the day immediately before `day`.
 fn step_back_of(day: &str) -> impl Fn(&str) -> Option<()> + '_ {
     move |previous| {
         step_back(day).filter(|before| before == previous).map(|_| ())
@@ -195,8 +186,6 @@ fn step_back(day: &str) -> Option<String> {
     )
 }
 
-/// The same rule the comprehension sampler uses: `auto` counts only once the language has
-/// actually been detected, because a request is not an answer.
 fn is_japanese(transcript: &crate::app_types::RecordingTranscript) -> bool {
     let language = transcript.language.trim().to_ascii_lowercase();
     let detected = transcript
@@ -255,8 +244,6 @@ mod tests {
         }
     }
 
-    /// Most items predate the origin field, and calling those "recorded" states something
-    /// nobody recorded — an empty answer read as a value, one field along.
     #[test]
     fn an_item_with_no_origin_is_counted_as_unknown_and_not_as_recorded() {
         let recordings = vec![
@@ -282,8 +269,6 @@ mod tests {
         );
     }
 
-    /// A length nobody recorded contributes nothing to the total, so the total has to be
-    /// able to say how many it could not include.
     #[test]
     fn a_total_says_how_many_items_it_could_not_measure() {
         let recordings = vec![
@@ -297,8 +282,6 @@ mod tests {
 
     #[test]
     fn activity_is_grouped_by_day_and_counted() {
-        // Two on one day, one on another. Exact instants do not matter here — only that
-        // items sharing a day are summed and the day list is ordered.
         let day_one = 1_700_000_000_000;
         let day_two = day_one + 3 * 24 * 60 * 60 * 1000;
         let recordings = vec![
@@ -348,8 +331,6 @@ mod tests {
             .collect()
     }
 
-    /// The rule that decides whether a streak reads as encouragement or as a scold. A day
-    /// that has not started yet must not end a run, or every streak breaks every morning.
     #[test]
     fn a_day_not_yet_worked_does_not_break_a_run() {
         let days = days_on(&["2026-09-07", "2026-09-08", "2026-09-09"]);
@@ -373,8 +354,6 @@ mod tests {
         assert_eq!(streak.best, 3);
     }
 
-    /// The longest run is a different question from the one ending now, and a page that
-    /// answered the second while labelling it the first would be quietly wrong.
     #[test]
     fn the_best_run_need_not_be_the_current_one() {
         let days = days_on(&[

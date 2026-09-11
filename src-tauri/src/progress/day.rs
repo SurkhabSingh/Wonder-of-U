@@ -23,8 +23,6 @@ impl std::fmt::Display for DayKey {
     }
 }
 
-/// The day a local moment falls in. Shifting back then taking the date keeps this one
-/// subtraction, so the boundary cannot be off by one in a single direction.
 pub(crate) fn day_key_at(moment: DateTime<Local>) -> DayKey {
     let shifted = moment - Duration::hours(DAY_ROLLOVER_HOUR);
     DayKey(shifted.format("%Y-%m-%d").to_string())
@@ -65,7 +63,6 @@ mod tests {
         assert_eq!(day_key_at(local(2026, 9, 10, 4, 0)).as_str(), "2026-09-10");
     }
 
-    /// A late session and the small hours after it are one day.
     #[test]
     fn a_session_either_side_of_midnight_is_one_day() {
         let evening = day_key_at(local(2026, 9, 9, 23, 30));
@@ -80,7 +77,6 @@ mod tests {
         assert_eq!(day_key_at(local(2026, 9, 10, 23, 59)).as_str(), "2026-09-10");
     }
 
-    /// One key across a whole date, including one on which the clocks moved.
     #[test]
     fn one_calendar_date_yields_one_key_across_its_whole_span() {
         for (year, month, day) in [(2026, 3, 29), (2026, 10, 25), (2026, 9, 10)] {
@@ -119,7 +115,6 @@ mod tests {
 
     #[test]
     fn the_rollover_is_the_documented_four() {
-        // Pinned: stored rows are keyed by this, so it cannot drift.
         assert_eq!(DAY_ROLLOVER_HOUR, 4);
     }
 }

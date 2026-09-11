@@ -22,7 +22,6 @@ pub(crate) fn count_mined_cards_inner(now_ms: u64) -> Measured<usize> {
     };
 
     match json_i64_array(reply, "note id list") {
-        // Notes, not cards: one note can make several, and the reader can check in Anki.
         Ok(ids) => Measured::known(ids.len(), now_ms),
         Err(reason) => Measured::unavailable(reason),
     }

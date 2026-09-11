@@ -1,4 +1,3 @@
-/// Formatting for the Progress page. Pure, so a test framework could cover it.
 
 /// Exactly as the backend rounded it. Re-rounding could put "100%" back on a text that
 /// still has something left in it.
@@ -45,8 +44,6 @@ export function formatDay(ms: number, now: Date): string {
   });
 }
 
-/// How many documents a comparison covered. A change from three transcripts and one from
-/// three hundred deserve different trust, and only this says which it is.
 export function formatCompared(
   compared: number,
   added: number,

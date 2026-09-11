@@ -24,7 +24,6 @@ pub(crate) enum Skip {
     Unconfigured,
     NeedsDictionary,
     Unbuilt,
-    /// Built under settings that have since changed, so the answer would be misdated.
     Stale,
     NothingToRead,
     Insufficient,
@@ -49,8 +48,6 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     app: &AppHandle<R>,
     now_ms: u64,
 ) -> Result<Sampled, String> {
-    // Released before anything slow. Never hold this across a file read, a tokenize pass,
-    // or the known-word index.
     let (asset_directory, build, recordings) = {
         let persisted_state = app.state::<SharedPersistedState>();
         let persisted = persisted_state
@@ -173,8 +170,6 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Every Japanese transcript, as `(item key, path)`. An undetected `auto` is not evidence
-/// of Japanese and would put an unknown language in the denominator.
 fn japanese_transcripts(recordings: &[RecentRecording]) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for recording in recordings {
@@ -197,14 +192,10 @@ fn japanese_transcripts(recordings: &[RecentRecording]) -> Vec<(String, String)>
     found
 }
 
-/// The recording's path, not the transcript's, so a re-transcribe leaves the item
-/// comparable with its own past instead of arriving as a new one.
 fn item_key(recording_path: &str, language: &str) -> String {
     format!("{recording_path}|{}", language.trim().to_ascii_lowercase())
 }
 
-/// What the text was when counted. Without it a change of speech model reads as the
-/// reader having learned something.
 fn fingerprint(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()
@@ -294,7 +285,6 @@ mod tests {
         assert_eq!(found[0].1, "C:/a.ja.txt");
     }
 
-    /// `auto` is a request, not an answer; counting it lowers the share silently.
     #[test]
     fn auto_counts_only_once_the_language_is_known() {
         let undetected = vec![recording("C:/a.wav", vec![transcript("auto", None, "C:/a.txt")])];
@@ -313,7 +303,6 @@ mod tests {
         assert!(japanese_transcripts(&other).is_empty());
     }
 
-    /// Keyed on the recording, so a re-transcribe leaves the item comparable.
     #[test]
     fn the_key_survives_a_retranscribe_and_separates_languages() {
         assert_eq!(item_key("C:/a.wav", "ja"), item_key("C:/a.wav", "JA"));
@@ -321,7 +310,6 @@ mod tests {
         assert_ne!(item_key("C:/a.wav", "ja"), item_key("C:/b.wav", "ja"));
     }
 
-    /// Same text, same value; one character different, different value.
     #[test]
     fn the_fingerprint_moves_only_when_the_text_moves() {
         assert_eq!(fingerprint("こんにちは"), fingerprint("こんにちは"));
