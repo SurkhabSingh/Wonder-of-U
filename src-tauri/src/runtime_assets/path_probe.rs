@@ -60,10 +60,6 @@ impl PathProbeCache {
     }
 
     /// Runs `probe` only when there is no result inside the trust window.
-    ///
-    /// `probe` spawns a process, so it runs with the cache lock released — two callers
-    /// racing a cold cache may both probe, and both then store the same answer. A
-    /// poisoned lock degrades to probing every call rather than failing detection.
     pub(super) fn binary_is_available<P>(&self, probe: P) -> bool
     where
         P: FnOnce() -> bool,

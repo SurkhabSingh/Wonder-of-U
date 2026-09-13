@@ -24,19 +24,6 @@ const RECORDINGS_PER_PAGE = 8;
 
 // Keeps the saved deck and note type selectable while Anki has not answered, so a
 // closed Anki never reads as "you configured nothing".
-//
-// The saved FIELD names are deliberately not merged in. Each of the twelve field rows
-// reads this one list, so merging them put every row's saved name into every other
-// row's dropdown: pick a note type with different fields and each dropdown still
-// offered the previous note type's names, and choosing one produced a mapping Anki has
-// no field for — which AnkiConnect discards without a word. Preserving the current
-// selection is a per-row job and `AnkiFieldSelect` already does it, offering
-// `currentValue` when the live list lacks it.
-//
-// The deck and note-type merges below are the same idea done safely: one value each,
-// which is the one that select is showing, and both of those selects carry the same
-// per-value fallback. Kept because they are the value the user chose, not a pool of
-// names borrowed from elsewhere.
 function mergeSavedAnkiSettingsIntoCatalog(
   catalog: AnkiCatalog,
   ankiSettings: AnkiSettings,
@@ -57,7 +44,8 @@ function mergeSavedAnkiSettingsIntoCatalog(
     ),
     fields: catalog.fields,
     message:
-      catalog.status === "idle" && (ankiSettings.deckName || ankiSettings.noteType)
+      catalog.status === "idle" &&
+      (ankiSettings.deckName || ankiSettings.noteType)
         ? "Using your saved Anki mapping. Refresh only if you changed decks, note types, or fields in Anki."
         : catalog.message,
   };
@@ -70,12 +58,13 @@ export function useRecordingLibrary({
   transcriptionLanguage,
 }: UseRecordingLibraryOptions) {
   const [selectedRecordings, setSelectedRecordings] = useState<string[]>([]);
-  const [recordingFilter, setRecordingFilter] = useState<RecordingFilter>("all");
+  const [recordingFilter, setRecordingFilter] =
+    useState<RecordingFilter>("all");
   const [recordingSearch, setRecordingSearch] = useState("");
   const [recordingPage, setRecordingPage] = useState(1);
-  const [openRecordingMenuPath, setOpenRecordingMenuPath] = useState<string | null>(
-    null,
-  );
+  const [openRecordingMenuPath, setOpenRecordingMenuPath] = useState<
+    string | null
+  >(null);
 
   const displayedAnkiCatalog = useMemo(
     () => mergeSavedAnkiSettingsIntoCatalog(ankiCatalog, ankiSettings),
@@ -129,7 +118,8 @@ export function useRecordingLibrary({
     () =>
       transcribedRecordings.filter(
         (recording) =>
-          !recording.audioDeleted && !recordingPushedToCurrentAnkiDeck(recording),
+          !recording.audioDeleted &&
+          !recordingPushedToCurrentAnkiDeck(recording),
       ),
     [recordingPushedToCurrentAnkiDeck, transcribedRecordings],
   );
@@ -237,7 +227,11 @@ export function useRecordingLibrary({
       selectedTranscribedRecordings.filter((recording) =>
         recordingPushableToDeck(recording, ankiSettings.deckName),
       ),
-    [ankiSettings.deckName, recordingPushableToDeck, selectedTranscribedRecordings],
+    [
+      ankiSettings.deckName,
+      recordingPushableToDeck,
+      selectedTranscribedRecordings,
+    ],
   );
 
   const selectedUntranscribedRecordings = useMemo(
@@ -259,21 +253,19 @@ export function useRecordingLibrary({
 
   const selectedFuriganaRecordings = useMemo(
     () =>
-      selectedTranscribedRecordings.filter(
-        (recording) => {
-          const push = recordingAnkiPushForTarget(
-            recording,
-            transcriptionLanguage,
-            ankiSettings.deckName,
-            ankiSettings.noteType,
-          );
-          return (
-            push !== null &&
-            !push.furiganaApplied &&
-            recordingSupportsFurigana(recording, transcriptionLanguage)
-          );
-        },
-      ),
+      selectedTranscribedRecordings.filter((recording) => {
+        const push = recordingAnkiPushForTarget(
+          recording,
+          transcriptionLanguage,
+          ankiSettings.deckName,
+          ankiSettings.noteType,
+        );
+        return (
+          push !== null &&
+          !push.furiganaApplied &&
+          recordingSupportsFurigana(recording, transcriptionLanguage)
+        );
+      }),
     [
       ankiSettings.deckName,
       ankiSettings.noteType,

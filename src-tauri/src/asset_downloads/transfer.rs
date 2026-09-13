@@ -21,16 +21,12 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .user_agent("Wonder of U Desktop/0.1.0")
         .connect_timeout(Duration::from_secs(15))
-        // Paused downloads intentionally keep the response open until the user resumes.
         .timeout(None)
         .build()
         .map_err(|error| error.to_string())
 }
 
 /// Records new download state without telling anyone.
-///
-/// Separated from the emit because the byte loop needs to keep the state exact — every chunk —
-/// while announcing it far less often. See `ProgressEmitter`.
 fn write_download_snapshot<R: Runtime, F>(app: &AppHandle<R>, update: F) -> Result<(), String>
 where
     F: FnOnce(&mut ModelDownloadSnapshot),
@@ -57,16 +53,11 @@ where
 }
 
 /// Checks a downloaded file against a published digest.
-///
-/// A transfer that ends early still leaves a file, and every asset before this treated the file
-/// existing as proof the download worked. Only assets pinned to an immutable URL can have a
-/// constant to compare against, which is why this is not applied to all of them.
 pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
     use sha2::{Digest, Sha256};
 
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
-    // Streamed rather than read whole: the archives this guards are tens of megabytes.
     std::io::copy(&mut file, &mut hasher).map_err(|error| error.to_string())?;
     let actual = format!("{:x}", hasher.finalize());
 
@@ -79,37 +70,9 @@ pub(super) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
 }
 
 /// How often a download in flight may announce its progress.
-///
-/// An emit is not cheap. `emit_app_snapshot` rebuilds the *entire* bootstrap — it deep-clones
-/// the persisted state, runs four live detections including a recursive directory walk for
-/// ffmpeg, serialises the lot, and pushes it across the IPC boundary, where React re-renders
-/// the whole app. The measured payload floor is the size of `state.json`: **67 KB, every time**.
-///
-/// The byte loop was calling that once per 64 KB chunk, so the cost scaled with the download:
-///
-/// | asset      | size   | emits | JSON pushed |
-/// |------------|--------|-------|-------------|
-/// | yt-dlp     |  18 MB |   288 |      19 MB  |
-/// | alass      |  25 MB |   403 |      26 MB  |
-/// | ffmpeg     |  73 MB | 1,174 |      77 MB  |
-/// | model      | 466 MB | 7,456 |     487 MB  |
-///
-/// Past roughly 400 emits the webview cannot drain the queue as fast as it fills, so events
-/// back up and the interface falls behind the download it is describing. That is what made
-/// ffmpeg look broken while the smaller assets seemed fine: **nothing about ffmpeg differs —
-/// it was simply the largest thing anyone had paused.** Pressing Pause enqueued a "paused"
-/// behind hundreds of stale "downloading"s, so the button kept its old label, and pressing it
-/// again just toggled the download back on.
-///
-/// 200ms caps it at five emits a second whatever the size, which is well inside what the eye
-/// reads as a live progress bar.
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Rate-limits progress announcements for one transfer.
-///
-/// Owned by the byte loop rather than kept globally, so there is no clock to reset between
-/// downloads and no state shared across them. `now` is a parameter so the policy can be tested
-/// without sleeping.
 pub(super) struct ProgressEmitter {
     last_emit: Option<Instant>,
     interval: Duration,
@@ -123,8 +86,6 @@ impl ProgressEmitter {
         }
     }
 
-    /// True when enough time has passed. The first call is always true, so a download says
-    /// something immediately rather than appearing dead for its first interval.
     pub(super) fn should_emit(&mut self, now: Instant) -> bool {
         let due = match self.last_emit {
             None => true,
@@ -138,12 +99,6 @@ impl ProgressEmitter {
 }
 
 /// A progress tick: always records the new byte count, announces it at most every interval.
-///
-/// **Only in-flight progress may be throttled.** A status *transition* — starting, paused,
-/// cancelled, completed, failed — must go out immediately, because those are exactly the
-/// moments the interface has to react to, and some of them are the last thing a download ever
-/// says. Pause in particular emits once and then blocks, so a swallowed pause would never be
-/// followed by anything to correct it.
 fn update_download_progress<R: Runtime, F>(
     app: &AppHandle<R>,
     emitter: &mut ProgressEmitter,
@@ -173,20 +128,12 @@ pub(super) fn reset_model_download_control<R: Runtime>(app: &AppHandle<R>) -> Re
 }
 
 /// Owns the single asset-download control slot that every download shares.
-///
-/// Between claiming the slot and handing it to the worker thread there are several
-/// fallible steps, and each one used to early-return with `active` still set — which
-/// wedges every asset download behind "Another download is already in progress."
-/// until the app restarts. Dropping the guard releases the slot, so any `?` on the
-/// way to `spawn` unwinds cleanly. The worker thread resets the slot itself on both
-/// its success and failure paths, so `disarm` hands ownership over once it is running.
 pub(super) struct DownloadSlotGuard<R: Runtime> {
     app: AppHandle<R>,
     armed: bool,
 }
 
 impl<R: Runtime> DownloadSlotGuard<R> {
-    /// Claims the slot, or fails with `busy_message` when another download holds it.
     pub(super) fn acquire(app: &AppHandle<R>, busy_message: &str) -> Result<Self, String> {
         let control_state = app.state::<ModelDownloadControlState>();
         let mut control = control_state
@@ -226,10 +173,6 @@ pub(super) fn ensure_directory_exists(path: &Path) -> Result<(), String> {
 }
 
 /// Where managed assets live, as currently configured.
-///
-/// Lock, read one field, unlock. It was written out longhand twelve times across the six
-/// downloaders — three of them reading it twice on the calling thread and once more inside the
-/// worker, because the first read had not been moved in.
 pub(super) fn asset_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let persisted_state = app.state::<SharedPersistedState>();
     let persisted = persisted_state
@@ -240,11 +183,6 @@ pub(super) fn asset_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf,
 }
 
 /// Removes the `.part` file unless the transfer got as far as its final rename.
-///
-/// Cancel used to be the only path that cleaned up, so any read/write error left a
-/// partial file behind in the asset directory forever. Declare this guard *before*
-/// the `File` handle it protects: locals drop in reverse, so the file closes first
-/// and the removal is not racing its own open handle.
 struct PartialDownloadGuard {
     path: PathBuf,
     armed: bool,
@@ -269,13 +207,6 @@ impl Drop for PartialDownloadGuard {
 }
 
 /// Verifies a freshly installed managed binary, deleting it when it will not run.
-///
-/// Detection trusts a managed binary by existence (see `managed_binary_is_present`),
-/// so a binary left on disk after a failed `--version` probe would be reported as
-/// ready and then spawned by a real import. A missing VC++ runtime, antivirus
-/// tampering, or a complete-but-corrupt download all land here. The removal is
-/// deliberately best-effort: it must never replace the verification error the user
-/// needs to see.
 pub(super) fn verify_managed_binary_or_remove<V>(
     executable_path: &Path,
     verify: V,
@@ -293,15 +224,6 @@ where
 }
 
 /// The first candidate that both exists and runs, with any that does not removed.
-///
-/// This is what "we already have it" has to mean before a download may be skipped.
-/// Existence alone was the test, and the downloads that would have repaired a broken
-/// binary were the very thing it suppressed — worst for the whisper runtime, where
-/// nothing removed the file afterwards either, so the failure repeated on every retry
-/// with no way out through the interface.
-///
-/// Removal is what keeps detection honest, since it tests existence as well and would
-/// otherwise report a runtime that cannot transcribe as ready.
 pub(super) fn first_runnable_binary<V>(candidates: Vec<PathBuf>, verify: V) -> Option<PathBuf>
 where
     V: Fn(&Path) -> Result<(), String>,
@@ -341,26 +263,12 @@ pub(super) fn extract_zip_archive_to_directory(
 }
 
 /// Extraction that can leave entries out.
-///
-/// One archive carries debug symbols four times the size of everything else in it. Skipping
-/// them while unpacking costs nothing; writing them and deleting them afterwards would need the
-/// disk for both.
 pub(super) fn extract_zip_archive_except(
     archive_path: &Path,
     target_directory: &Path,
     skip: impl Fn(&str) -> bool,
 ) -> Result<(), String> {
     // Open and validate the archive BEFORE touching what is already installed.
-    //
-    // The wipe used to come first, so a truncated or corrupt download destroyed a working
-    // install and replaced it with nothing. That is survivable when the directory is empty —
-    // which it always was, because the only caller reaching extraction had found nothing
-    // installed — but the FFmpeg reinstall deliberately runs over a copy that works, and the
-    // `latest` archive it fetches is republished daily and can be read mid-republish.
-    //
-    // Validating first does not make extraction atomic: a failure partway through still leaves
-    // a half-unpacked directory. It removes the cause that can be removed by ordering alone,
-    // and it costs two moved lines.
     let archive_file = fs::File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(archive_file).map_err(|error| error.to_string())?;
 
@@ -399,11 +307,6 @@ pub(super) fn extract_zip_archive_except(
 }
 
 /// Pulls a single named file out of an archive, ignoring everything else.
-///
-/// The sibling above unpacks the whole thing, which is right for ffmpeg and wrong for alass:
-/// alass's release carries its own complete copy of ffmpeg, ~70 MB the app already has a
-/// better-managed version of. `select` is handed the entry names and returns the one wanted,
-/// so the choice stays in the module that understands the archive.
 pub(super) fn extract_zip_entry_to_path(
     archive_path: &Path,
     target_path: &Path,
@@ -424,8 +327,6 @@ pub(super) fn extract_zip_entry_to_path(
     let mut entry = archive
         .by_name(&wanted)
         .map_err(|error| format!("Could not read {wanted} from the download: {error}"))?;
-    // `enclosed_name` is what rejects `../` traversal in the archive; a name that fails it is
-    // not a file we are willing to write anywhere.
     if entry.enclosed_name().is_none() {
         return Err("The download contained an unsafe file path.".into());
     }
@@ -438,10 +339,6 @@ pub(super) fn extract_zip_entry_to_path(
     Ok(())
 }
 
-/// `kind` says which asset this is; `label` is the wording for this particular transfer,
-/// which is not always the asset's own name — the model download names the chosen model and
-/// the runtime names its version. They were two adjacent `&str` parameters, so a call site
-/// could swap them and still compile; typing `kind` makes that swap impossible.
 pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     app: &AppHandle<R>,
     url: &str,
@@ -450,14 +347,6 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     label: &str,
 ) -> Result<(), String> {
     let client = http_client()?;
-    // The raw error here is a reqwest one, and it renders as "error sending request for url
-    // (https://huggingface.co/.../ggml-large-v3.bin)". That was fine while it only ever reached
-    // a settings card; the first-run card put it on the landing page, URL and all, where it
-    // told a user with no connection nothing they could act on.
-    //
-    // Replaced at the point it is produced rather than filtered at the point it is shown, so
-    // every other failure in this module — "ffmpeg.exe was not found", a bad zip — keeps its
-    // own already-readable sentence. The original is still logged by the caller.
     let mut response = client.get(url).send().map_err(|error| {
         log_event(
             app,
@@ -480,7 +369,6 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
     let mut downloaded_bytes = 0u64;
     let mut progress_emitter = ProgressEmitter::new(PROGRESS_EMIT_INTERVAL);
 
-    // The transition into "downloading" is not throttled — only the per-chunk ticks below are.
     update_model_download_snapshot(app, |snapshot| {
         snapshot.kind = Some(kind);
         snapshot.status = "downloading".into();
@@ -504,9 +392,6 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
                 update_model_download_snapshot(app, |snapshot| {
                     snapshot.kind = Some(kind);
                     snapshot.status = "paused".into();
-                    // Shared with `control.rs`, which writes this same message the instant the
-                    // user presses Pause. Both land; wording them separately made the card
-                    // change its mind about what it was doing.
                     snapshot.message = paused_message(kind.label());
                 })?;
                 control =
@@ -541,8 +426,6 @@ pub(super) fn download_file_to_path_with_progress<R: Runtime>(
             .map_err(|error| error.to_string())?;
         downloaded_bytes = downloaded_bytes.saturating_add(read_bytes as u64);
 
-        // The hot path: once per 64KB. Recorded every time, announced at most five times a
-        // second — see PROGRESS_EMIT_INTERVAL for what an announcement actually costs.
         update_download_progress(app, &mut progress_emitter, |snapshot| {
             snapshot.kind = Some(kind);
             snapshot.status = "downloading".into();
@@ -762,14 +645,6 @@ mod tests {
 }
 
 /// Removes a half-installed directory unless the install got as far as verifying.
-///
-/// Extraction writes an archive's entries in order, so an interrupted one leaves a
-/// directory that is real but incomplete — and the lindera archive happens to write
-/// its small `metadata.json` long before its 32MB `dict.words`, which is precisely
-/// the file detection keys on. Without this, a download that died mid-extract would
-/// be trusted as ready forever and fail on every use. Covers the cancel and
-/// mid-extract paths; `verify_managed_directory_or_remove` covers a complete
-/// install that still will not load.
 pub(super) struct PartialInstallGuard {
     path: PathBuf,
     armed: bool,
@@ -794,11 +669,6 @@ impl Drop for PartialInstallGuard {
 }
 
 /// Verifies a freshly installed managed directory, deleting it when it is not usable.
-///
-/// The binary sibling above cannot be reused for this: it removes with
-/// `fs::remove_file`, which fails on a directory and would leave a broken install
-/// exactly where detection trusts it. The removal is best-effort for the same
-/// reason as the binary sibling — it must never replace the verification error.
 pub(super) fn verify_managed_directory_or_remove<T, V>(
     directory_path: &Path,
     verify: V,
@@ -821,9 +691,6 @@ mod extraction_ordering_tests {
     use std::fs;
 
     /// A digest that matches passes, and one that does not is refused.
-    ///
-    /// The refusal is the point: a transfer that ends early still leaves a file, and every
-    /// other asset treats the file existing as proof the download worked.
     #[test]
     fn a_download_is_checked_against_its_published_digest() {
         let directory = tempfile::tempdir().unwrap();
@@ -891,11 +758,6 @@ mod extraction_ordering_tests {
 
 
     /// A bad archive must not cost the user what they already had.
-    ///
-    /// The wipe used to run before the archive was opened, so a truncated or corrupt download
-    /// emptied the install directory and then failed — leaving nothing installed. Harmless while
-    /// the only caller reaching extraction had found nothing installed, and not harmless at all
-    /// once the FFmpeg reinstall began running deliberately over a copy that works.
     #[test]
     fn a_corrupt_archive_leaves_the_installed_files_alone() {
         let staging = tempfile::tempdir().unwrap();

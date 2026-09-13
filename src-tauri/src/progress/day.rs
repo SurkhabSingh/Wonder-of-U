@@ -28,13 +28,10 @@ pub(crate) fn day_key_at(moment: DateTime<Local>) -> DayKey {
     DayKey(shifted.format("%Y-%m-%d").to_string())
 }
 
-/// The day a timestamp falls in, or `None` when it names no local time — a skipped
-/// daylight-saving hour, or a date off the calendar. Callers count what they cannot place.
 pub(crate) fn day_key_for_ms(ms: u64) -> Option<DayKey> {
     let millis = i64::try_from(ms).ok()?;
     match Local.timestamp_millis_opt(millis) {
         LocalResult::Single(moment) => Some(day_key_at(moment)),
-        // A repeated local hour names one date either way; taking the earlier states it.
         LocalResult::Ambiguous(earlier, _) => Some(day_key_at(earlier)),
         LocalResult::None => None,
     }

@@ -15,32 +15,15 @@ type TranscriptionEnqueueInput = {
 };
 
 type UseTranscriptionQueueOptions = {
-  // Applied after EACH item so the Library refreshes as transcripts land — the
-  // same bootstrap the single-file backend command returns. Threaded in rather
-  // than reached through the old blocking action, mirroring how
-  // `useRecordingActions.transcribeRecordings` called `applyBootstrap`.
   applyBootstrap: (nextBootstrap: AppBootstrap) => void;
-  // Flush any pending settings edits before the invoke so a just-changed
-  // language / model / CPU-usage value is on disk when whisper-cli reads it.
   persistSettingsIfNeeded: () => Promise<void>;
   // Report a run that did not produce a transcript.
-  //
-  // The queue used to raise nothing at all: a refused batch became a row reading "failed"
-  // with the reason hidden in a `title` tooltip, so a transcription blocked because a video
-  // was already being transcribed looked like it had simply done nothing. A cancel stays
-  // silent here — the user just asked for it, and the phase toast already names it.
   onFailure: (message: string) => void;
 };
 
 // The backend transcribe command is single-file and single-flight on the one
 // whisper-cli slot, so this is a strictly sequential queue on top of it: only
 // ever one `active` item, the rest wait as `queued`. It mirrors useYoutubeQueue.
-//
-// Completion is the awaited `invoke` resolving — nothing else. A user Cancel
-// arrives as a resolved "cancelled" item. Progress is a lightweight
-// `transcription-progress` percent event, and cancel is a `transcription-cancel`
-// event that kills the running whisper-cli so the active file returns cancelled
-// and the loop moves on. A failed/cancelled item never stops the queue.
 
 export function useTranscriptionQueue({
   applyBootstrap,
@@ -48,22 +31,11 @@ export function useTranscriptionQueue({
   onFailure,
 }: UseTranscriptionQueueOptions) {
   const [items, setItems] = useState<TranscriptionQueueItem[]>([]);
-  // Percent for the single active file, or null when nothing is active.
-  // Single-flight, so this always belongs to the one `active` item.
   const [activeProgress, setActiveProgress] = useState<number | null>(null);
-  // Sentences streamed so far for the active file, tagged with whose they are.
-  // Single-flight means one list is enough; the path is what makes a consumer able
-  // to tell "no sentences yet" from "these belong to a different recording".
   const [activeSegments, setActiveSegments] = useState<{
     filePath: string | null;
     segments: TranscriptionLiveSegment[];
   }>({ filePath: null, segments: [] });
-  // Dropping the path as well as the sentences is the point: a run that has ENDED must
-  // leave nothing a later render could match on. Keeping them would replay the finished
-  // transcript as "live" the next time the same recording was queued, since a queued
-  // item already reads as transcribing before it is promoted to active.
-  // The file whose sentences may currently be appended, read by the event listener
-  // without re-subscribing. Null whenever nothing is running.
   const activeFilePathRef = useRef<string | null>(null);
   const clearActiveSegments = useCallback(() => {
     activeFilePathRef.current = null;
@@ -136,10 +108,6 @@ export function useTranscriptionQueue({
         if (!mountedRef.current || typeof payload?.filePath !== "string") {
           return;
         }
-        // Only the file the queue is actually running may append. A straggler from a
-        // run that just ended must not resurrect a finished list or overwrite the next
-        // recording's. The ref is what makes this reliable rather than dependent on
-        // event/state ordering.
         if (payload.filePath !== activeFilePathRef.current) {
           return;
         }
@@ -161,8 +129,6 @@ export function useTranscriptionQueue({
         return;
       }
       setItems((prev) => {
-        // Dedupe against still-pending/active items and within this call, by
-        // file path — re-adding a file already waiting is a no-op.
         const seen = new Set(
           prev
             .filter(
@@ -196,7 +162,6 @@ export function useTranscriptionQueue({
   );
 
   const remove = useCallback((id: string) => {
-    // Only a still-queued row can be dropped; active/terminal rows are a no-op.
     setItems((prev) =>
       prev.filter((item) => {
         const droppable = item.id === id && item.status === "queued";
@@ -209,8 +174,6 @@ export function useTranscriptionQueue({
   }, []);
 
   const cancelActive = useCallback(() => {
-    // Kill the active whisper-cli. The active item's invoke then resolves with a
-    // "cancelled" item, and the loop advances to the next queued file.
     void emit("transcription-cancel");
   }, []);
 
@@ -223,10 +186,7 @@ export function useTranscriptionQueue({
   }, []);
 
   // The sequential processor — a plain loop guarded by `runningRef` so it never
-  // runs twice. Each iteration promotes the next queued item, awaits the
-  // single-file invoke to completion, and stamps the terminal status from the
-  // RESOLVED result. Both the success and the error path advance, so one failed
-  // or cancelled item never blocks the rest of the queue.
+  // runs twice.
   const startProcessing = useCallback(() => {
     if (runningRef.current) {
       return;
@@ -237,11 +197,6 @@ export function useTranscriptionQueue({
     runningRef.current = true;
 
     void (async () => {
-      // `finally`, not a trailing assignment. `runningRef` is what stops a second
-      // processor starting, so anything that escapes this loop without clearing it leaves
-      // the queue permanently "already running" — every later item sits at Queued forever,
-      // with nothing on screen to say why. The loop body is not all inside the inner
-      // try/catch (`applyBootstrap` is not), so that escape is reachable.
       try {
         while (mountedRef.current) {
           const next = itemsRef.current.find(
@@ -259,14 +214,8 @@ export function useTranscriptionQueue({
             ),
           );
           setActiveProgress(0);
-          // Start this file's live list empty, so the previous recording's sentences
-          // never linger under the next one's progress bar.
           activeFilePathRef.current = next.filePath;
           setActiveSegments({ filePath: next.filePath, segments: [] });
-
-          // Completion = this awaited invoke resolving. A rejection (whisper-cli
-          // missing, spawn failure) is caught and marks the item failed; a user
-          // Cancel comes back as a resolved "cancelled" item.
           let result: RecordingBatchResult | null = null;
           let failureMessage = "The recording could not be transcribed.";
           try {
@@ -303,9 +252,6 @@ export function useTranscriptionQueue({
                 return { ...item, status: "failed", message: failureMessage };
               }
               const outcome = result.items[0];
-              // A batch with no item never ran — the engine was unavailable, or another
-              // transcription already holds the whisper slot. That reason only lived in a
-              // tooltip, so a refusal looked exactly like nothing happening.
               if (!outcome) {
                 onFailureRef.current(result.message);
                 return { ...item, status: "failed", message: result.message };

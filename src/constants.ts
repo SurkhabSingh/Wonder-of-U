@@ -238,9 +238,6 @@ export const APP_SNAPSHOT_EVENT = "app://snapshot-changed";
 export const MP3_CONVERSION_WARNING =
   "MP3 reduces file size but uses lossy compression, so audio quality may be lower. Existing Anki cards are not affected.";
 
-// The scan gesture. "None" is offered because some users genuinely want bare hover, but
-// it is not the default: over a subtitle list you are reading, a popup on every pointer
-// move is noise.
 export const SCAN_MODIFIER_OPTIONS = [
   { value: "shift", label: "Hold Shift (like Yomitan)" },
   { value: "ctrl", label: "Hold Ctrl" },
@@ -261,9 +258,6 @@ export const SCAN_DEBOUNCE_OPTIONS = [
   { value: "250", label: "250 ms" },
 ] as const;
 
-// Families that ship with Windows and cover Japanese, plus the app's own stack. A free
-// text field would let a user name anything, but every miss renders as fallback with no
-// explanation, so the list is the honest surface.
 export const FONT_FAMILY_OPTIONS = [
   { value: "", label: "Match the app" },
   { value: "Yu Gothic UI", label: "Yu Gothic UI" },

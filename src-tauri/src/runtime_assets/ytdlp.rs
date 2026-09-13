@@ -29,9 +29,6 @@ fn push_ytdlp_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
-/// The app-managed yt-dlp binary is always a bare `yt-dlp.exe` (or `yt-dlp`)
-/// landed directly in the install directory — there is no archive to unpack, so
-/// the candidate list is short and flat.
 pub(crate) fn collect_managed_ytdlp_candidates(asset_directory: &Path) -> Vec<PathBuf> {
     let install_directory = managed_ytdlp_install_directory(asset_directory);
     let mut candidates = Vec::new();
@@ -47,13 +44,6 @@ fn hide_command_window(command: &mut Command) {
     }
 }
 
-/// A managed binary is trusted by existence: it lives at a path the app installed to
-/// and verified at download time, so a non-empty regular file there is treated as
-/// ready WITHOUT spawning it. This matters because `detect_local_ytdlp` runs on every
-/// app-snapshot emit (via `build_app_bootstrap`), and spawning the frozen-Python
-/// `yt-dlp --version` costs ~1s a call — those per-emit spawns are what dragged the
-/// YouTube completion path out for seconds and stalled the import queue. The
-/// non-empty check still rejects a truncated/partial download.
 pub(crate) fn managed_binary_is_present(candidate: &Path) -> bool {
     candidate
         .metadata()
@@ -64,7 +54,6 @@ pub(crate) fn managed_binary_is_present(candidate: &Path) -> bool {
 pub(crate) fn verify_ytdlp_binary(executable_path: &Path) -> Result<(), String> {
     let mut command = Command::new(executable_path);
     hide_command_window(&mut command);
-    // --ignore-config: a stray yt-dlp.conf must not influence even a version probe.
     let output = command
         .arg("--ignore-config")
         .arg("--version")

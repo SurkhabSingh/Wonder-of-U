@@ -1,15 +1,3 @@
-//! Realigning an out-of-sync subtitle file against the video's own audio.
-//!
-//! Two tools, for two different faults. When a file is off by a constant, mpv's `sub-delay`
-//! fixes it instantly and reversibly, with nothing written to disk — see
-//! `set_watch_subtitle_delay`. When the drift *varies* across the episode (a different
-//! release, missing ad breaks, a 25 vs 23.976 fps mismatch) no single offset works, and that
-//! is what alass is for: it aligns against voice activity in the real audio.
-//!
-//! The corrected file is written **beside the original with a new name**, never over it. A
-//! sync can be wrong — the reference audio may be music, or the wrong track — and the
-//! original is the only way back.
-
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -36,9 +24,6 @@ fn hide_command_window(command: &mut Command) {
 }
 
 /// Where a synced file lands: `<stem>.synced.<ext>` beside the original.
-///
-/// Deliberately derived rather than a temp file — the user picked this subtitle from disk,
-/// and the corrected version is something they will want to keep and re-open.
 pub(crate) fn synced_subtitle_path(subtitle_path: &Path) -> PathBuf {
     let extension = subtitle_path
         .extension()
@@ -48,7 +33,6 @@ pub(crate) fn synced_subtitle_path(subtitle_path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("subtitles");
-    // Re-syncing an already-synced file would otherwise pile up `.synced.synced.srt`.
     let stem = stem.strip_suffix(".synced").unwrap_or(stem);
     subtitle_path.with_file_name(format!("{stem}.synced.{extension}"))
 }
@@ -61,10 +45,6 @@ fn managed_alass_path(settings: &AppSettings) -> Option<PathBuf> {
 }
 
 /// What alass reported doing, alongside where it wrote.
-///
-/// The summary is surfaced rather than swallowed because a sync can succeed and still be
-/// wrong, and "shifted block of 3 subtitles by -0:00:05.000" is the difference between a
-/// user who can see what happened and one staring at subtitles that are still off.
 pub(crate) struct SyncOutcome {
     pub(crate) output_path: PathBuf,
     pub(crate) summary: String,
@@ -100,10 +80,6 @@ pub(crate) fn sync_subtitles_with_alass(
     let alass_path = managed_alass_path(settings)
         .ok_or_else(|| "alass is not installed yet; download it in Setup.".to_string())?;
 
-    // alass shells out to ffmpeg to read the reference audio and finds it through these two
-    // variables — the same mechanism the release's own `alass.bat` uses. Pointing them at
-    // the app's managed ffmpeg is what lets us ship the 3.5 MB binary alone instead of the
-    // ~70 MB of ffmpeg the archive carries.
     let ffmpeg = detect_local_ffmpeg(settings)
         .executable_path
         .ok_or_else(|| "FFmpeg is required to sync subtitles; install it in Setup.".to_string())?;
@@ -136,8 +112,6 @@ pub(crate) fn sync_subtitles_with_alass(
         });
     }
 
-    // alass exits 0 having written nothing when it cannot find enough speech to align
-    // against, so success is confirmed by the file rather than by the status code.
     if !output_path.exists() {
         return Err("alass finished without writing a synced file — the video may have no speech to align against.".into());
     }
@@ -173,8 +147,6 @@ mod tests {
 
     #[test]
     fn the_synced_file_sits_beside_the_original() {
-        // Never over it: a sync can align against the wrong thing, and the original is the
-        // only way back.
         let path = synced_subtitle_path(Path::new(r"C:\anime\ep01.ja.srt"));
         assert_eq!(path, PathBuf::from(r"C:\anime\ep01.ja.synced.srt"));
     }
@@ -192,7 +164,6 @@ mod tests {
             synced_subtitle_path(Path::new("show.ass")),
             PathBuf::from("show.synced.ass")
         );
-        // No extension at all still produces something openable.
         assert_eq!(
             synced_subtitle_path(Path::new("subs")),
             PathBuf::from("subs.synced.srt")

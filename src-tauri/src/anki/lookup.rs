@@ -1,48 +1,17 @@
-//! Dictionary lookup for the subtitle scanner.
-//!
-//! The dictionary is not a file we read — it is a service. The 1.36M-term database, its
-//! deinflection rule graph (食べた → 食べる) and its search ranking all live inside the
-//! Anki add-on's Python process, reachable only over its local HTTP bridge. **Anki must
-//! be running.** In practice that costs nothing: mining already needs Anki for
-//! AnkiConnect. The alternative — reimplementing deinflection and ranking in Rust
-//! against the SQLite file — would be a second copy of the hardest part, free to drift
-//! from the original.
-//!
-//! This goes through Rust rather than straight from the webview because the app's CSP
-//! `connect-src` forbids the webview reaching any host, exactly as the furigana call does.
-
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 const ANKI_LOOKUP_URL: &str = "http://127.0.0.1:8766/lookup";
 const ANKI_DICTIONARIES_URL: &str = "http://127.0.0.1:8766/dictionaries";
-/// Longer than the furigana call: a lookup deinflects several candidates and ranks
-/// entries across seven dictionaries, and it runs on Anki's UI thread.
 const LOOKUP_TIMEOUT: Duration = Duration::from_millis(4000);
 /// The dictionary listing's own budget, far longer than a lookup's.
-///
-/// A lookup is interactive: a reading popup that waits longer than four seconds has
-/// already failed the reader. The listing is a one-off settings call nobody is waiting
-/// on mid-sentence, and it can legitimately take much longer than the read itself
-/// suggests — it shares one SQLite file with the dictionary importer, and a reader
-/// blocks behind the importer's write lock for as long as an import runs. Sharing the
-/// popup's budget made "an import is in progress" indistinguishable from "Anki is
-/// closed", and the settings page reported the second.
 const DICTIONARIES_TIMEOUT: Duration = Duration::from_secs(15);
-/// How long to wait for the port to accept at all. A refused connection is instant; a
-/// bound-but-dead socket — Anki shutting down with a large collection — would
-/// otherwise hold the full listing budget before saying anything.
+
 const DICTIONARIES_CONNECT_TIMEOUT: Duration = Duration::from_millis(750);
 
-/// The longest run of characters offered as a single term. Matches the reviewer
-/// scanner's own cap; beyond this the candidate is never a word.
 const MAX_TERM_LENGTH: usize = 20;
 
-/// Note the asymmetry on every multi-word field below: the add-on speaks snake_case and
-/// the frontend speaks camelCase, so `rename` is scoped to `deserialize` only. A plain
-/// `rename` would apply to both directions and quietly hand the webview snake_case keys
-/// that its types say do not exist — which reads as an empty popup, not as an error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LookupFrequency {
@@ -58,9 +27,6 @@ pub(crate) struct LookupPitch {
     pub(crate) position: i64,
 }
 
-/// One dictionary entry. Deliberately a SUBSET of what the add-on returns: the popup
-/// shows the headword, reading, glosses and why the form matched, and carrying the rest
-/// would mean tracking a schema we do not use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LookupEntry {
@@ -72,8 +38,6 @@ pub(crate) struct LookupEntry {
     pub(crate) dictionary: String,
     #[serde(default)]
     pub(crate) definitions: Vec<String>,
-    /// Why a conjugated form matched its dictionary form, e.g. ["past"]. Shown so a
-    /// learner can see 食べた came from 食べる rather than guessing.
     #[serde(default, rename(deserialize = "inflection_reasons"))]
     pub(crate) inflection_reasons: Vec<String>,
     #[serde(default)]
@@ -85,12 +49,8 @@ pub(crate) struct LookupEntry {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LookupResult {
-    /// "ready" | "empty" | "unavailable". `unavailable` means Anki is not running, which
-    /// is an ordinary state rather than an error — the panel says so and moves on.
     pub(crate) status: String,
     pub(crate) message: String,
-    /// The candidate that actually matched, which is what should be highlighted in the
-    /// sentence — it is usually longer than the single character that was clicked.
     pub(crate) term: String,
     pub(crate) entries: Vec<LookupEntry>,
 }
@@ -109,16 +69,6 @@ struct LookupBridgeResponse {
 }
 
 /// Every prefix of `text` from `offset`, longest first.
-///
-/// This is how Yomitan and the add-on's own reviewer scanner work, and it is why no
-/// morphological analyser is needed: the backend deinflects each candidate and the
-/// longest dictionary hit wins. Splitting the sentence into words first would be a
-/// second, worse segmenter.
-/// One dictionary installed in the add-on.
-///
-/// `priority` is the order lookups consult them in, which is why it is carried
-/// rather than dropped: it is what explains why an answer came from one dictionary
-/// rather than another.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LookupDictionary {
@@ -154,33 +104,16 @@ struct DictionariesBridgeResponse {
     error: Option<String>,
 }
 
-/// Nobody answered on the port. True whether Anki is shut or running without the
-/// add-on, which the app cannot tell apart and should not pretend to — so the sentence
-/// covers both and gives a next step for each.
 const DICTIONARIES_SILENT: &str =
     "Anki isn't answering. Open Anki, and check that the Anki Lookup add-on is installed and enabled.";
-/// Anki is there and did not finish in time — an import or a sync holding the
-/// dictionary file. Names the control that retries, because the section has none of
-/// its own and the one that works is at the top of the page.
 const DICTIONARIES_BUSY: &str =
     "Anki is busy and didn't answer in time. Use Refresh Anki above to try again.";
-/// The add-on predates this endpoint. Reached by its 404 rather than by a parse
-/// failure: the versions that lack it answer 404 with a perfectly parseable body.
 const DICTIONARIES_ADDON_TOO_OLD: &str =
     "Your Anki Lookup add-on is too old to list dictionaries. Update it, then restart Anki.";
-/// Something answered on the port and it was not the add-on, or the add-on failed
-/// inside itself. Either way there is nothing the user can do about the detail, and the
-/// detail is tool text.
 const DICTIONARIES_UNREADABLE: &str =
     "Your dictionaries couldn't be listed. Restart Anki and try again.";
 
 /// A listing that carries a reason instead of dictionaries.
-///
-/// Every message the settings page can show for a failed listing is built here, from
-/// the constants above, and never from a tool's own words. The page renders whatever
-/// `message` holds as the section's only copy, so a serde parse error or the add-on's
-/// Python exception text would otherwise land under "Meanings come from" — against the
-/// rule that this app's copy says what the app does, not how it is built.
 fn dictionaries_unavailable(message: &str) -> LookupDictionaries {
     LookupDictionaries {
         status: "unavailable".into(),
@@ -190,14 +123,6 @@ fn dictionaries_unavailable(message: &str) -> LookupDictionaries {
 }
 
 /// Lists the dictionaries the add-on can answer from.
-///
-/// Read-only. Which are enabled, and in what order, belongs to the add-on's own
-/// dictionary manager; this only reports it so the app can offer a subset for
-/// mined cards without changing what the reading popup sees.
-///
-/// Not answering is an ordinary state here, so every way of not answering resolves as
-/// an `unavailable` listing rather than an error. The one exception is an add-on that
-/// answered and reported its own failure, which is a real fault worth an `Err`.
 pub(crate) fn lookup_dictionaries_inner() -> Result<LookupDictionaries, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(DICTIONARIES_TIMEOUT)
@@ -207,22 +132,17 @@ pub(crate) fn lookup_dictionaries_inner() -> Result<LookupDictionaries, String> 
 
     let response = match client.get(ANKI_DICTIONARIES_URL).send() {
         Ok(response) => response,
-        // `is_connect` is tested first: reqwest reports a connect TIMEOUT as a timeout
-        // too, and a port that never accepted is a silent Anki, not a busy one.
         Err(error) if error.is_connect() => return Ok(dictionaries_unavailable(DICTIONARIES_SILENT)),
         Err(error) if error.is_timeout() => return Ok(dictionaries_unavailable(DICTIONARIES_BUSY)),
         Err(_) => return Ok(dictionaries_unavailable(DICTIONARIES_SILENT)),
     };
 
-    // Checked before the body is parsed. An add-on without this endpoint answers 404
-    // with a body that parses perfectly well, so a parse failure never identifies it.
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(dictionaries_unavailable(DICTIONARIES_ADDON_TOO_OLD));
     }
 
     let body = match response.text() {
         Ok(body) => body,
-        // The budget covers the body too, so the same "Anki is busy" can land here.
         Err(error) if error.is_timeout() => return Ok(dictionaries_unavailable(DICTIONARIES_BUSY)),
         Err(_) => return Ok(dictionaries_unavailable(DICTIONARIES_UNREADABLE)),
     };
@@ -230,9 +150,6 @@ pub(crate) fn lookup_dictionaries_inner() -> Result<LookupDictionaries, String> 
         return Ok(dictionaries_unavailable(DICTIONARIES_UNREADABLE));
     };
     if !parsed.ok {
-        // The add-on answered and said it failed. That is a genuine fault rather than
-        // an ordinary state, so it stays an error — and its own wording never reaches
-        // the page, which shows fixed copy for a rejected listing.
         return Err(parsed
             .error
             .unwrap_or_else(|| "The dictionaries could not be listed.".into()));
@@ -262,20 +179,6 @@ pub(crate) fn lookup_candidates(text: &str, offset: usize) -> Vec<String> {
 }
 
 /// Looks a word up directly, without offering the add-on any prefixes.
-///
-/// The scanner cannot know where a word ends — someone clicked into the middle of a
-/// sentence — so it hands over every prefix and lets the add-on pick. The card
-/// enricher is in the opposite position: the word came out of the tokenizer, so it
-/// is already exactly one word.
-///
-/// Sending prefixes there was a bug with a visible symptom. Measured against the
-/// real add-on: asking about カフェ WITH prefixes answers カフェ, カフ and カ — the
-/// middle one a manga character — while asking with the word alone answers カフェ
-/// five times over and nothing else.
-///
-/// `dictionary_ids` narrows the answer to chosen dictionaries. Empty sends no
-/// filter at all, which the add-on reads as every enabled one — the card enricher
-/// never calls it that way, because for a card nothing chosen means nothing.
 pub(super) fn lookup_exact_word(
     word: &str,
     limit: u32,
@@ -299,14 +202,9 @@ pub(crate) fn lookup_term_inner(
         });
     };
 
-    // No dictionary filter: the scanner reads what the user reads while immersing,
-    // which is what the add-on's own priority order is for.
     post_lookup(&term, &candidates, &text, limit.unwrap_or(20), &[])
 }
 
-/// The one request both callers make, so the two can never answer in different
-/// shapes — the same reason the add-on serializes both its consumers through
-/// `lookup_result`.
 fn post_lookup(
     term: &str,
     candidates: &[String],
@@ -326,9 +224,6 @@ fn post_lookup(
         "sentence": sentence,
         "limit": limit,
     });
-    // Omitted entirely when empty rather than sent as `[]`. Both mean the same thing
-    // to the add-on, but a request that carries no filter is one that provably cannot
-    // be filtered — and this is the request the verified scanner makes.
     if !dictionary_ids.is_empty() {
         payload["dictionaryIds"] = serde_json::json!(dictionary_ids);
     }
@@ -340,7 +235,6 @@ fn post_lookup(
         .send()
     {
         Ok(response) => response,
-        // Anki closed is the common case, not a failure worth an error dialog.
         Err(_) => {
             return Ok(LookupResult {
                 status: "unavailable".into(),
@@ -366,8 +260,6 @@ fn post_lookup(
 
     let matched = parsed.term.unwrap_or(term);
     let entries = parsed.entries;
-    // The add-on already decides ready-vs-empty; take its answer rather than deriving a
-    // second one that could disagree with it.
     let status = parsed
         .status
         .unwrap_or_else(|| if entries.is_empty() { "empty" } else { "ready" }.into());
@@ -516,12 +408,6 @@ mod tests {
 #[cfg(test)]
 mod bridge_tests {
     /// Asks the real add-on for its dictionaries.
-    ///
-    /// The client had never been exercised end to end — the settings toggle that
-    /// triggers it was off, so the first "it does not work" report could not tell a
-    /// broken client from a hidden UI. Needs Anki running.
-    ///
-    ///   cargo test dictionaries_from_the_real_addon -- --ignored --nocapture
     #[test]
     #[ignore = "requires Anki running with the lookup add-on"]
     fn dictionaries_from_the_real_addon() {

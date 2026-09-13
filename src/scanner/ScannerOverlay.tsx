@@ -9,23 +9,13 @@ import { APP_SNAPSHOT_EVENT, DEFAULT_BOOTSTRAP } from "../constants";
 
 // What the user sees over the video: the current subtitle line, and a dictionary popup
 // when a word is hovered with the modifier held.
-//
-// The line comes from mpv's own `sub-text` / `sub-start` / `sub-end`, not from the parsed
-// cue list — the spike confirmed those keep reporting with `sub-visibility=no`, so the
-// overlay inherits mpv's timing and its `sub-delay` for free and cannot drift from what the
-// player thinks is on screen.
 
 const SCANNER_STATE_EVENT = "scanner-overlay-state";
-/// Matches the watch page's poll. The overlay reads the same snapshot command, so this
-/// costs mpv nothing it is not already paying.
 const POLL_INTERVAL_MS = 250;
 
 type ScannerState = {
   tracking: boolean;
-  /// True while the modifier is held — pushed from Rust, because this window carries
-  /// WS_EX_NOACTIVATE and so never receives key events of its own.
   scanning: boolean;
-  /// Same reason: Escape is polled in Rust, since no keydown ever reaches this window.
   escapePressed: boolean;
   width: number;
   height: number;
@@ -129,32 +119,16 @@ export function ScannerOverlay() {
   const ownerKey = `mpv:${snapshot?.subtitleStartMs ?? 0}`;
 
   // Close the popup when the line it belongs to goes away.
-  //
-  // An earlier version deliberately left it open, reasoning that the video moving on does
-  // not make a dictionary entry wrong. That is true of the entry and false of everything
-  // else: the popup is anchored to a word that is no longer on screen, and between cues
-  // `line` is empty, so the tree below unmounts and takes the popup with it while the
-  // scanner still believes one is open — leaving the overlay interactive with nothing
-  // visible, quietly eating clicks meant for mpv, until the next cue redrew the popup from
-  // stale state. That is what "gets stuck" was.
-  //
-  // Closing costs nothing in the case that matters: pausing is how you actually study a
-  // line, and a paused video never changes `ownerKey`.
   const closeScanner = scanner.close;
   useEffect(() => {
     closeScanner();
   }, [ownerKey, state.tracking, closeScanner]);
 
-  // Click-through is a property of the whole window, so Rust has to know a popup is up or
-  // releasing the modifier would make the entry unreadable the instant it appeared.
   const popupOpen = scanner.target !== null;
   useEffect(() => {
     void invoke("set_scanner_popup", { open: popupOpen });
   }, [popupOpen]);
 
-  // The overlay never has focus (WS_EX_NOACTIVATE), so it never sees a keydown and the
-  // hook's own Escape handler cannot fire here. Rust polls the key instead, the same way it
-  // polls the scan modifier, so there is always a keyboard way out.
   useEffect(() => {
     if (state.escapePressed) {
       closeScanner();

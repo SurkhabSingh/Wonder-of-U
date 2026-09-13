@@ -166,10 +166,6 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Widen the asset-protocol scope to the few directories the webview genuinely reads through
-/// `convertFileSrc`. The static scope in `tauri.conf.json` is intentionally empty; the real
-/// scope is assembled at runtime from the configured folders rather than a broad glob.
-/// Failures are logged, never fatal.
 fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
     let directories = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -188,17 +184,6 @@ fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
             }
         };
 
-        // Three directories, and no more. Recordings stream to the audio player, video
-        // thumbnails are drawn in the video library, and sentence previews are the clips
-        // playback plays instead of seeking a VBR file it cannot seek accurately.
-        //
-        // Deliberately `{asset}/thumbnails` and NOT the asset directory itself: that folder
-        // also holds the whisper and ffmpeg binaries and the ggml models, and nothing the
-        // webview does should be able to read those. The thumbnails subfolder holds only
-        // stills this app generated.
-        //
-        // The preview folder is likewise its own, never the miner's scratch directory — the
-        // webview has no business reading files a mine is about to hand to Anki.
         let mut directories = vec![
             guard.settings.output_directory.clone(),
             Path::new(&guard.settings.asset_directory)
@@ -218,8 +203,6 @@ fn allow_recording_directories_in_asset_scope(app: &tauri::AppHandle) {
             continue;
         }
 
-        // This runs at startup, before the first thumbnail exists. Creating the folder up
-        // front keeps a fresh install from logging a scope warning it can do nothing about.
         let _ = std::fs::create_dir_all(&directory);
 
         if let Err(error) = scope.allow_directory(&directory, true) {

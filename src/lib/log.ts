@@ -1,15 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
-/**
- * Sends a line to the same file the Rust side writes.
- *
- * Nothing from the interface reached the log before this, so a report from a user was silent
- * about half the app: a failed command, a render that threw, a rejected promise. The backend
- * owns the file, the redaction and the rotation; this only hands it a record.
- *
- * Failures here are swallowed deliberately — a logger that throws while reporting a throw turns
- * one problem into two, and the console still has it during development.
- */
+// Sends a line to the same file the Rust side writes.
+ 
 export function logToFile(
   level: "INFO" | "WARN" | "ERROR",
   event: string,
@@ -41,16 +33,8 @@ function describe(value: unknown): { message: string; stack?: string } {
   }
 }
 
-/**
- * Routes the two ways the interface fails on its own into the log.
- *
- * `error` covers anything thrown outside React's control — an event handler, a timer, a
- * callback. A render that throws is caught by the boundary instead and never reaches here.
- * `unhandledrejection` is where a rejected `invoke` lands when nothing caught it. Neither
- * leaves any trace otherwise, because a packaged build has no console anyone will read.
- *
- * The listeners live for the life of the process, so there is nothing to remove.
- */
+//Routes the two ways the interface fails on its own into the log.
+
 export function installGlobalErrorLogging(): void {
   const onError = (event: ErrorEvent) => {
     const described = describe(event.error ?? event.message);

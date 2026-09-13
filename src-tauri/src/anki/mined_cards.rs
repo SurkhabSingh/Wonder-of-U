@@ -14,7 +14,6 @@ pub(crate) fn count_mined_cards_inner(now_ms: u64) -> Measured<usize> {
         );
     }
 
-    // The identifying tag, not a kind: every card carries this one alongside its kind.
     let query = format!("tag:{}", tags::MINED);
     let reply = match anki_connect_request("findNotes", serde_json::json!({ "query": query })) {
         Ok(reply) => reply,

@@ -1,18 +1,3 @@
-//! The tags every card this app makes carries.
-//!
-//! One module rather than a literal beside each `addNote`. These tags are the only thing
-//! telling a card made here from the rest of a collection, so whatever writes them and
-//! whatever counts them have to agree on the exact string — and a count looking for one
-//! spelling while the writers put down another reads zero for a healthy collection, which
-//! is a wrong answer wearing the clothes of an empty one.
-//!
-//! The kinds are built FROM the identifying tag rather than spelled out beside it, so
-//! renaming it moves them with it and a kind that is not a child of it cannot be written.
-
-/// `mined_tag!()` is the tag on everything; `mined_tag!("word")` is a kind under it.
-///
-/// Anki reads `::` as a hierarchy separator, so the kinds group under the parent in its
-/// tag list and `tag:wonder-of-u::word` selects one of them.
 macro_rules! mined_tag {
     () => {
         "wonder-of-u"
@@ -23,21 +8,12 @@ macro_rules! mined_tag {
 }
 
 /// On every card this app has ever made, whatever made it.
-///
-/// Written alongside a kind rather than left to be inferred from one: `tag:wonder-of-u`
-/// matches this tag itself, so a count of everything mined here does not rest on how Anki
-/// happens to treat a parent tag in a search.
 pub(crate) const MINED: &str = mined_tag!();
 
-/// Mined from the lookup popup, for one word the reader pointed at. The only kind whose
-/// card names a single word, and so the only one a count of words can be built on.
 pub(crate) const MINED_WORD: &str = mined_tag!("word");
 
-/// Mined from a transcript row, or from a subtitle during a watch session: a whole line,
-/// with no one word behind it.
 pub(crate) const MINED_LINE: &str = mined_tag!("line");
 
-/// A whole recording pushed as one card, rather than a line taken out of one.
 pub(crate) const MINED_TRANSCRIPT: &str = mined_tag!("transcript");
 
 #[cfg(test)]
@@ -45,11 +21,6 @@ mod tests {
     use super::{MINED, MINED_LINE, MINED_TRANSCRIPT, MINED_WORD};
 
     /// The exact strings, pinned.
-    ///
-    /// These go into the user's own collection and stay there. A card tagged a year ago
-    /// has to be found by the same string today, so renaming any of these does not rename
-    /// anything already written — it orphans every card carrying the old one, in a
-    /// collection this app cannot see to migrate.
     #[test]
     fn the_tags_are_the_strings_already_written_into_collections() {
         assert_eq!(MINED, "wonder-of-u");
@@ -98,10 +69,6 @@ mod tests {
             ("anki/mined_cards.rs", include_str!("mined_cards.rs")),
         ] {
             assert!(
-                // Any literal STARTING with the tag, not only the tag alone. A kind written
-                // out by hand reads "wonder-of-u::word", which does not contain the
-                // tag followed by its closing quote, so it slipped past the narrower
-                // test while being exactly the drift that test exists to catch.
                 !source.contains(&format!("\"{MINED}")),
                 "{name} names a tag as its own literal instead of using this module"
             );

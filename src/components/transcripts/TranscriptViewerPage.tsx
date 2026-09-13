@@ -3,11 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useAudioPlayer } from "../../hooks/useAudioPlayer";
 import { useRecordingTexts } from "../../hooks/useRecordingTexts";
-import {
-  formatBytes,
-  formatDuration,
-  formatTimestamp,
-} from "../../lib/format";
+import { formatBytes, formatDuration, formatTimestamp } from "../../lib/format";
 import { transcriptLanguageLabel } from "../../lib/helpers";
 import { ScannableText } from "../scanner/ScannableText";
 import type {
@@ -40,27 +36,12 @@ const VIEW_MODES: { id: TranscriptViewMode; label: string }[] = [
 const CJK_LANGUAGES = new Set(["ja", "zh", "yue", "zh-cn", "zh-tw"]);
 
 // Sentence-ending punctuation used to pick a natural split point (CJK + Latin).
-const SENTENCE_ENDINGS = new Set([
-  "。",
-  "！",
-  "？",
-  "．",
-  ".",
-  "!",
-  "?",
-  "…",
-]);
+const SENTENCE_ENDINGS = new Set(["。", "！", "？", "．", ".", "!", "?", "…"]);
 
-// A stable, content-derived key for a segment so an already-mined row keeps its
-// "✓ Mined" marker across re-renders. Merging/splitting produces a new sentence
-// (new text/timing), so its key differs and the marker naturally resets.
 function segmentMineKey(segment: RecordingSegment): string {
   return `${segment.startMs}:${segment.endMs}:${segment.text}`;
 }
 
-// Merge row i with row i+1 into one sentence spanning both time ranges. The
-// joiner is script-aware: CJK scripts run without inter-word spaces, so a space
-// would leave an unnatural gap in the merged sentence (and in a mined card).
 function mergeSegmentAt(
   segments: RecordingSegment[],
   index: number,
@@ -79,9 +60,6 @@ function mergeSegmentAt(
   return [...segments.slice(0, index), merged, ...segments.slice(index + 2)];
 }
 
-// Split row i at the first sentence-ending punctuation at or after the text
-// midpoint, else at the character midpoint. Time is divided proportionally by
-// the character cut index so each half keeps a plausible span.
 function splitSegmentAt(
   segments: RecordingSegment[],
   index: number,
@@ -99,13 +77,11 @@ function splitSegmentAt(
   let cutIndex = midpoint;
   for (let position = midpoint; position < text.length; position += 1) {
     if (SENTENCE_ENDINGS.has(text[position])) {
-      // Keep the punctuation with the first sentence.
       cutIndex = position + 1;
       break;
     }
   }
-  // A punctuation mark sitting at the very end leaves nothing for the second
-  // half; fall back to the character midpoint in that case.
+
   if (cutIndex <= 0 || cutIndex >= text.length) {
     cutIndex = midpoint;
   }
@@ -128,19 +104,16 @@ function splitSegmentAt(
     startMs: splitMs,
     endMs: segment.endMs,
   };
-  return [...segments.slice(0, index), first, second, ...segments.slice(index + 1)];
+  return [
+    ...segments.slice(0, index),
+    first,
+    second,
+    ...segments.slice(index + 1),
+  ];
 }
 
-/// Returned when a translation exists but its lines do not correspond to the transcript's,
-/// so no line can be attached. Distinct from `null`, which means there is no translation at
-/// all — the first is worth telling the reader about, the second is not.
 const MISALIGNED_TRANSLATION = Symbol("misaligned-translation");
 
-// The translation that already exists for a mined sentence: the positionally
-// paired line the viewer shows beside it. Returns null (mine the text alone,
-// never generate a fresh translation) when there is no translation document, or
-// when the row was merged/split — an edit shifts the row out of alignment with
-// the translation's lines, so the pairing can no longer be trusted.
 function pairedTranslationFor(
   index: number,
   segment: RecordingSegment,
@@ -159,11 +132,6 @@ function pairedTranslationFor(
   ) {
     return null;
   }
-  // The pairing is positional, so it is only meaningful when the two sides have the same
-  // number of lines. A whole-document translation re-segments freely — one Japanese line
-  // can come back as three English ones — and then row i on one side is simply not the
-  // counterpart of row i on the other. Attaching it anyway put a confidently wrong sentence
-  // on the card, which is worse than attaching none: nothing on the card says it is wrong.
   const lines = splitTranscriptSegments(translation.text);
   if (lines.length !== transcript?.segments.length) {
     return MISALIGNED_TRANSLATION;
@@ -211,10 +179,6 @@ function TranscriptSkeleton() {
   );
 }
 
-// The transcript as it is being decoded. Deliberately read-only — no mining, no
-// merge/split, no per-sentence playback: none of it is anchored to a saved transcript
-// yet, and offering an action that would be undone seconds later is worse than not
-// offering it. The pane sticks to the newest line so the text scrolls itself.
 function LiveTranscriptPane({
   segments,
 }: {
@@ -222,9 +186,6 @@ function LiveTranscriptPane({
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  // Stick to the newest line ONLY while the reader is already at the bottom. Scrolling
-  // unconditionally would yank them back down every second or two, making it impossible
-  // to read back over an earlier sentence while the run continues.
   useEffect(() => {
     const body = bodyRef.current;
     if (!body) {
@@ -232,8 +193,6 @@ function LiveTranscriptPane({
     }
     const distanceFromBottom =
       body.scrollHeight - body.scrollTop - body.clientHeight;
-    // Generous threshold: a row lands between the measurement and this effect, so an
-    // exact-bottom test would already read as "scrolled up".
     if (distanceFromBottom < 120) {
       endRef.current?.scrollIntoView({ block: "nearest" });
     }
@@ -246,9 +205,6 @@ function LiveTranscriptPane({
           <p className="panel-kicker">Transcribing</p>
           <h3>Live transcript</h3>
         </div>
-        {/* The count is the live region, not the list: announcing every appended row
-            (timestamp included) would read hundreds of sentences aloud with no way to
-            stop it. */}
         <span className="transcript-pane-note" aria-live="polite">
           {segments.length === 1
             ? "1 sentence so far"
@@ -310,22 +266,11 @@ export function TranscriptViewerPage({
 }: {
   recording: RecentRecording;
   onBack: () => void;
-  // Force a re-transcribe of this recording for the active language so an older
-  // transcript can be backfilled with timestamps. Undefined disables the
-  // affordance entirely.
   onReTranscribe: ((force: boolean) => void) | undefined;
   isReTranscribing: boolean;
-  // Percent (0–100) while this recording is the active re-transcription, or null when it's
-  // queued / not transcribing — drives the in-viewer progress bar.
   reTranscribeProgress: number | null;
-  // Force a re-translate of this recording (overwrites the existing translation).
-  // Undefined disables the affordance.
   onReTranslate: ((force: boolean) => void) | undefined;
   isReTranslating: boolean;
-  // Mine a single sentence into its own Anki card. Resolves true when a card was
-  // actually created, so the row can show a persistent "✓ Mined" marker. The
-  // paired translation line (or null when the recording has none) rides along so
-  // mining reuses the existing translation instead of generating a fresh one.
   onMineSegment: (
     text: string,
     startMs: number,
@@ -333,74 +278,30 @@ export function TranscriptViewerPage({
     translation: string | null,
   ) => Promise<boolean>;
   isMining: boolean;
-  // Whether the Anki expression field is mapped and Anki is reachable. Together
-  // they decide whether Mine is enabled and which tooltip explains a disabled one.
   expressionFieldMapped: boolean;
   ankiReachable: boolean;
-  // Normalized sentences already mined into the Anki deck, from any past session.
-  // Empty when Anki is closed or the note type is unmapped, which simply means no
-  // row is marked — never an error.
   minedSentences: Set<string>;
-  // Sentences streamed from the whisper pass currently transcribing THIS recording.
-  // Empty when nothing is running, or when the running transcription belongs to
-  // another file in the queue.
   liveSegments: TranscriptionLiveSegment[];
-  // Stop the running transcription. Undefined when this recording is not the one
-  // being transcribed, which is also when the progress block is not rendered.
   onCancelTranscription: (() => void) | undefined;
-  /// The transcription language from Settings. A recording can hold several transcript
-  /// variants, and this is what decides which one is "the" transcript — the same setting a
-  /// push reads, so what is on screen is what a push sends. The viewer used to open
-  /// whichever variant happened to be first in the list, which is how the two came to
-  /// disagree without either being obviously wrong.
   transcriptionLanguage: string;
-  // Milliseconds the miner pads a clip by on each side. Playback uses the same value so a
-  // previewed sentence and the card made from it cannot drift apart.
   clipPaddingMs: number;
-  // Whether "Mine all" may make more than one card for the same new word. Changes
-  // the count on the button as well as what it mines, so it is read here rather
-  // than only at mining time.
   allowDuplicateMinedWords: boolean;
   mineWordsWithoutContext: boolean;
-  // Lines mined this session from somewhere other than a row — today that means the
-  // dictionary popup, which mines a word with its line. Without it the row goes on
-  // offering "Mine" for a line that already has a card, and pressing it can only
-  // fail as a duplicate.
   externallyMinedKeys: ReadonlySet<string>;
-  // Reports back every line this page has mined, so the popup — which lives above
-  // this one — stops offering to mine a line that already has a card. Reported from
-  // one effect rather than from each handler, so a mining path added later is
-  // covered without anyone remembering to call it.
   onLinesMined: (keys: ReadonlySet<string>) => void;
-  // When the known-word list was last read from Anki. Only a re-rank trigger: a
-  // Refresh has to update the badges on a transcript already open, or the words
-  // learned this morning would not show until the page was left and returned to.
   knownWordsBuiltAtMs: number | null;
-  // Set when the most recent transcription of this recording ended badly, so the viewer
-  // can say which of "you cancelled it", "it failed" and "there is no transcript" the
-  // empty screen actually means. Null when the last run succeeded or none has run.
   lastTranscriptionOutcome: { status: string; message?: string } | null;
 }) {
-  // The segments sidecar path is folded in so backfilling timestamps on an
-  // already-transcribed language (same count, same translation) still changes
-  // the signature and triggers a re-read once the sidecar lands.
   const changeSignature = `${recording.transcripts
-    .map((transcript) => `${transcript.language}:${transcript.segmentsPath ?? ""}`)
+    .map(
+      (transcript) => `${transcript.language}:${transcript.segmentsPath ?? ""}`,
+    )
     .join("|")}:${recording.translationPath ?? ""}`;
   const { data, status, error, reload } = useRecordingTexts({
     filePath: recording.filePath,
     changeSignature,
   });
 
-  // `changeSignature` is built from sidecar PATHS, and every writer here overwrites the
-  // path it already used — so a re-run is invisible to it by construction. That was known
-  // for re-transcription and handled; re-translation has exactly the same shape and was
-  // not, which is why a successful re-translate left the previous translation on screen.
-  // The first translation did update, because the path went from null to set.
-  //
-  // So this watches every writer at once rather than growing a ref per writer: any work
-  // that can rewrite this recording's text forces the re-read as it finishes, and a
-  // future writer joins by being named in this one expression.
   const isRewritingText = isReTranscribing || isReTranslating;
   const wasRewritingTextRef = useRef(false);
   useEffect(() => {
@@ -410,8 +311,6 @@ export function TranscriptViewerPage({
     wasRewritingTextRef.current = isRewritingText;
   }, [isRewritingText, reload]);
 
-  // Whole-file playback for this recording, driven by the compact top bar.
-  // Gated on audioDeleted below so a transcript-only entry never tries to load.
   const player = useAudioPlayer();
   const isActiveTrack = player.filePath === recording.filePath;
   const handleTogglePlayback = () => {
@@ -425,21 +324,18 @@ export function TranscriptViewerPage({
     if (isActiveTrack) {
       player.seekMs(ms);
     } else {
-      // Nothing loaded yet — start the track so the scrub has audio to move.
       player.playRecording(recording);
     }
   };
-  // Per-sentence playback rides the same player as the top bar. Disabled when
-  // the local audio is gone, so timed rows still show their timestamp but no
-  // play control rather than pretending playback works.
   const handlePlaySegment = recording.audioDeleted
     ? undefined
     : (startMs: number, endMs: number) =>
-        // The miner's own padding, so what you hear here is what the card will hold.
-        // A sentence that cannot be cut says so rather than falling back to the
-        // inaccurate seek it replaced.
-        player.playSegment(recording, startMs, endMs, clipPaddingMs, (message) =>
-          toast.error(message),
+        player.playSegment(
+          recording,
+          startMs,
+          endMs,
+          clipPaddingMs,
+          (message) => toast.error(message),
         );
   const activeSegment = isActiveTrack ? player.activeSegment : null;
 
@@ -450,11 +346,6 @@ export function TranscriptViewerPage({
   const [viewMode, setViewMode] = useState<TranscriptViewMode>("sideBySide");
   const [query, setQuery] = useState("");
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
-  // Links transcript row i to translation row i by POSITION only. Today's
-  // translation is a whole-document translation, so row i on one side is not
-  // guaranteed to be the semantic counterpart of row i on the other — the
-  // pairing is purely positional. Exact per-line alignment arrives with
-  // per-segment translation; there is no semantic matching here.
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number | null>(
     null,
   );
@@ -463,9 +354,6 @@ export function TranscriptViewerPage({
     if (transcripts.length === 0) {
       return null;
     }
-    // What the reader picked wins; otherwise the Settings language, which is what a push
-    // reads. Only when the recording has no variant for it does this fall back to the first
-    // one, so "there is nothing in your language" still shows something rather than nothing.
     for (const preferred of [activeLanguage, transcriptionLanguage]) {
       if (!preferred) {
         continue;
@@ -480,21 +368,13 @@ export function TranscriptViewerPage({
 
   const activeTranslation = translations[0] ?? null;
 
-  // A local, in-session editable copy of the active transcript's timed segments.
-  // Merge/split rewrite this copy only; nothing is persisted, and switching
-  // language or reloading the transcript resets it from the source segments.
   const [editedSegments, setEditedSegments] = useState<RecordingSegment[]>([]);
-  // Narrows the transcript to the lines a single word from being readable.
   const [withinReachOnly, setWithinReachOnly] = useState(false);
   const allowDuplicateWords = allowDuplicateMinedWords;
-  // Why a batch mine could not make a card of a row, keyed like the mined markers.
   const [mineFailures, setMineFailures] = useState<Map<string, string>>(
     new Map(),
   );
   const [isBatchMining, setIsBatchMining] = useState(false);
-  // The same rows the transcript pane will build, so entry N of the ranking
-  // describes row N. Merging or splitting a sentence changes these and re-ranks,
-  // which is the point of ranking the lines rather than the sidecar.
   const transcriptLines = useMemo(
     () =>
       activeTranscript
@@ -503,37 +383,17 @@ export function TranscriptViewerPage({
     [activeTranscript, editedSegments],
   );
   const ranking = useSentenceRanking(transcriptLines, knownWordsBuiltAtMs);
-  // Rows already mined, tracked by content key so the marker survives re-renders
-  // but not a merge/split (which makes a new sentence). Seeded below from the
-  // cards actually in Anki, so it covers earlier sessions too, then extended as
-  // the user mines.
   const [minedKeys, setMinedKeys] = useState<Set<string>>(new Set());
-  // What the rows are judged against: mined here, or mined elsewhere in this session
-  // for the same line. Both spend a row's Mine button, because both mean the card
-  // exists — where it was made from does not change that.
   const minedInThisSession = useMemo(
     () => new Set([...minedKeys, ...externallyMinedKeys]),
     [minedKeys, externallyMinedKeys],
   );
 
-  // Only what THIS page mined goes up. Sending the union back would return the
-  // caller's own keys to it, which is harmless but circular, and the sort of loop
-  // that stops being harmless the day someone derives state from it.
   useEffect(() => {
     onLinesMined(minedKeys);
   }, [minedKeys, onLinesMined]);
-  // The single row with a mine request in flight, so only it shows "Mining…".
   const [miningKey, setMiningKey] = useState<string | null>(null);
 
-  // Rows whose sentence is already a card in the Anki mining deck. Derived rather
-  // than stored, because `minedSentences` arrives from Anki asynchronously and the
-  // segments change under merge/split — recomputing keeps both in step without an
-  // effect that would clobber the in-session edits.
-  //
-  // These rows are flagged but stay mineable, which is why they are kept apart from
-  // the session `minedKeys` that do spend the action: matching is on sentence text
-  // across the whole deck, so a short recurring line would otherwise become
-  // permanently unmineable everywhere once mined from any one recording.
   const minedKeysFromAnki = useMemo(
     () =>
       new Set(
@@ -551,7 +411,6 @@ export function TranscriptViewerPage({
     setMinedKeys(new Set());
     setMineFailures(new Map());
     setMiningKey(null);
-    // A new transcript reindexes every row, so drop the old focus/selection.
     setSelectedSegment(null);
     setActiveSegmentIndex(null);
   }, [activeTranscript]);
@@ -571,10 +430,6 @@ export function TranscriptViewerPage({
       return;
     }
     const key = segmentMineKey(segment);
-    // Mined during this session — the row shows "✓ Mined" and hides its Mine button
-    // in the mouse UI, so the keyboard path must refuse the duplicate too. A row
-    // matched only against the deck is deliberately NOT refused: it still offers
-    // "Mine again", and Enter has to agree with the button.
     if (minedInThisSession.has(key)) {
       return;
     }
@@ -586,15 +441,17 @@ export function TranscriptViewerPage({
       activeTranslation,
     );
     if (paired === MISALIGNED_TRANSLATION) {
-      // Said before the card is made, not after: the reader is about to get a card without
-      // the translation they can see on screen, and the reason is not guessable from the
-      // card itself.
       toast.warning(
         "This line is mined without a translation — the translation has a different number of lines, so no single line matches it.",
       );
     }
     const translation = paired === MISALIGNED_TRANSLATION ? null : paired;
-    void onMineSegment(segment.text, segment.startMs, segment.endMs, translation)
+    void onMineSegment(
+      segment.text,
+      segment.startMs,
+      segment.endMs,
+      translation,
+    )
       .then((mined) => {
         if (mined) {
           setMinedKeys((previous) => {
@@ -605,12 +462,10 @@ export function TranscriptViewerPage({
         }
       })
       .catch((error: unknown) => {
-        // The handler catches its own Anki errors and answers `null`, so nothing reaches here
-        // today. It is here because `.finally` clears the spinner either way: without this, a
-        // throw introduced upstream would look exactly like a mine that quietly did nothing —
-        // button returns to normal, no card, no message.
         toast.error(
-          typeof error === "string" ? error : "This sentence could not be mined.",
+          typeof error === "string"
+            ? error
+            : "This sentence could not be mined.",
         );
       })
       .finally(() => {
@@ -618,10 +473,6 @@ export function TranscriptViewerPage({
       });
   };
 
-  // The rows the "Mine all" action would act on: within reach, and not already a
-  // card. Already-mined rows are skipped rather than refused — mining one at a time
-  // offers "Mine again" deliberately, but a bulk run is not reviewed card by card,
-  // and quietly doubling forty notes is not a thing to make easy.
   const minableWithinReach = useMemo(() => {
     if (!ranking || ranking.status !== "ready") {
       return [];
@@ -631,11 +482,8 @@ export function TranscriptViewerPage({
       .filter(({ segment, index }) => {
         const key = segmentMineKey(segment);
         const line = ranking.lines[index];
-        // A bare line — one new word and nothing around it — is listed and filtered like any
-        // other line one word away, but a batch only takes it when asked. Two of every five
-        // one-word-away lines are bare, so this is where the 40% lands, and cards are the one
-        // part of this that is awkward to undo.
-        const learnable = (line?.withinReach ?? false) &&
+        const learnable =
+          (line?.withinReach ?? false) &&
           (mineWordsWithoutContext || (line?.hasContext ?? false));
         return (
           learnable &&
@@ -647,14 +495,10 @@ export function TranscriptViewerPage({
       return candidates;
     }
 
-    // One line per new word. A transcript teaches a word twice often enough to
-    // matter — a song repeats its lines, and this one has 生まれ変わる in two — and
-    // two cards for one word is review load without extra learning.
-    //
-    // The line with the MOST content words wins, earliest on a tie. Same reasoning
-    // as "i+1 needs an i": of two sentences a word away, the one with more around
-    // it is the one you can infer the word from.
-    const bestForWord = new Map<string, { segment: RecordingSegment; index: number }>();
+    const bestForWord = new Map<
+      string,
+      { segment: RecordingSegment; index: number }
+    >();
     for (const candidate of candidates) {
       const line = ranking.lines[candidate.index];
       const word = line?.unknownWords[0];
@@ -670,8 +514,7 @@ export function TranscriptViewerPage({
         bestForWord.set(word, candidate);
       }
     }
-    // Back into recording order: the list is read alongside the audio, and mining
-    // is reported against it.
+
     return [...bestForWord.values()].sort((a, b) => a.index - b.index);
   }, [
     ranking,
@@ -682,22 +525,11 @@ export function TranscriptViewerPage({
     mineWordsWithoutContext,
   ]);
 
-  // How many one-word-away lines the batch will NOT mine because the sentence is
-  // already a card. Counted so the difference can be SAID: the transcript shows a
-  // badge on every line within reach, the button offers fewer, and without this the
-  // gap between the two numbers has no explanation anywhere on screen.
   const skippedWithinReach = useMemo(() => {
     if (!ranking || ranking.status !== "ready") {
       return 0;
     }
     // Counted over every line the filter SHOWS, which is every line one word away.
-    //
-    // It briefly counted only the lines a batch would consider, on the reasoning that a bare
-    // line is not "skipped" but simply out of scope. That is true internally and false to the
-    // reader: the filter showed ten rows, the button offered six, and four went unmined with
-    // nothing on screen joining the two numbers. A line you can see and did not get a card is
-    // skipped, whatever the code calls it — so all three reasons are counted here and named in
-    // the tooltip.
     const shown = ranking.lines.filter((line) => line.withinReach).length;
     return Math.max(0, shown - minableWithinReach.length);
   }, [ranking, minableWithinReach]);
@@ -707,8 +539,6 @@ export function TranscriptViewerPage({
       return;
     }
     setIsBatchMining(true);
-    // Cleared first: a marker left from the previous run beside a line this run
-    // succeeded on would be a lie about the state of the deck.
     setMineFailures(new Map());
     try {
       const result = await invoke<MinedLinesResult>("mine_segments_to_anki", {
@@ -743,8 +573,6 @@ export function TranscriptViewerPage({
       setMineFailures(failures);
 
       if (failures.size > 0) {
-        // The count in the toast, the reasons on the rows. A toast holding three
-        // lines of Japanese and three error messages is a toast nobody reads.
         toast.warning(
           `${result.message} The lines that failed are marked in the transcript.`,
         );
@@ -753,7 +581,9 @@ export function TranscriptViewerPage({
       }
     } catch (error: unknown) {
       toast.error(
-        typeof error === "string" ? error : "These sentences could not be mined.",
+        typeof error === "string"
+          ? error
+          : "These sentences could not be mined.",
       );
     } finally {
       setIsBatchMining(false);
@@ -768,10 +598,7 @@ export function TranscriptViewerPage({
       ? "Anki not reachable"
       : null;
 
-  // Keyboard-driven mining. The once-registered keydown listener reads live state
-  // through this ref so it never re-subscribes on every selection change nor holds
-  // a stale closure. j/k (or ↓/↑) move a focused sentence, Space replays it, Enter
-  // mines it — all reusing the same handlers the row buttons call.
+  // Keyboard-driven mining.
   const keyboardStateRef = useRef({
     enabled: false,
     segments: editedSegments,
@@ -781,11 +608,9 @@ export function TranscriptViewerPage({
     play: handlePlaySegment,
     mine: handleMineSegment,
   });
-  // Sync the ref after each render (not during it, which React discourages) so the
-  // once-registered keydown listener always reads the latest state.
+
   useEffect(() => {
     keyboardStateRef.current = {
-      // Only when the transcript's timed sentences are actually on screen.
       enabled: viewMode !== "translation" && editedSegments.length > 0,
       segments: editedSegments,
       selectedSegment,
@@ -809,8 +634,6 @@ export function TranscriptViewerPage({
       if (!state.enabled || event.ctrlKey || event.metaKey || event.altKey) {
         return;
       }
-      // Never hijack typing or a focused control (search box, buttons, the speed
-      // dropdown, the language tabs, links).
       const focused = document.activeElement as HTMLElement | null;
       const tag = focused?.tagName;
       if (
@@ -820,7 +643,6 @@ export function TranscriptViewerPage({
         tag === "BUTTON" ||
         tag === "A" ||
         focused?.isContentEditable ||
-        // An open popup (e.g. the speed dropdown's listbox) owns arrow/enter keys.
         focused?.closest("[role='listbox'], [role='menu'], [role='dialog']")
       ) {
         return;
@@ -884,24 +706,20 @@ export function TranscriptViewerPage({
   );
 
   // Every match on screen, in reading order, as (pane, row, occurrence).
-  //
-  // Built from the RENDERED rows rather than from the document's plain text. The
-  // count used to come from the text while the rows come from the segments
-  // sidecar, which are not always the same lines — tolerable for a number nobody
-  // navigates, but "3 of 27" has to point at a row that exists.
   const matches = useMemo(() => {
     const trimmed = query.trim();
     if (!trimmed) {
       return [];
     }
-    const panes: { paneKey: "transcript" | "translation"; rows: string[] }[] = [];
-    if (viewMode !== "translation" && activeTranscript && !activeTranscript.missing) {
+    const panes: { paneKey: "transcript" | "translation"; rows: string[] }[] =
+      [];
+    if (
+      viewMode !== "translation" &&
+      activeTranscript &&
+      !activeTranscript.missing
+    ) {
       panes.push({
         paneKey: "transcript",
-        // A row the "One word away" filter has hidden has no element to scroll to
-        // and no mark to light up, so counting its matches would mean a find bar
-        // reading "5 of 27" and, on some of those, doing nothing at all. Blanked
-        // rather than dropped, so the indices still line up with the rendered rows.
         rows:
           withinReachOnly && ranking
             ? transcriptLines.map((text, index) =>
@@ -910,7 +728,11 @@ export function TranscriptViewerPage({
             : transcriptLines,
       });
     }
-    if (viewMode !== "transcript" && activeTranslation && !activeTranslation.missing) {
+    if (
+      viewMode !== "transcript" &&
+      activeTranslation &&
+      !activeTranslation.missing
+    ) {
       panes.push({
         paneKey: "translation",
         rows: buildRows(activeTranslation, undefined).map((row) => row.text),
@@ -945,8 +767,6 @@ export function TranscriptViewerPage({
   ]);
 
   const matchCount = matches.length;
-  // Which match Enter / the arrows are sitting on. Null means "found them, not
-  // stepping through them yet", which is what a fresh query should look like.
   const [activeMatchIndex, setActiveMatchIndex] = useState<number | null>(null);
 
   useEffect(() => {
@@ -957,8 +777,6 @@ export function TranscriptViewerPage({
     if (matches.length === 0) {
       return;
     }
-    // Wraps, like every find bar: reaching the end and being told "no more" when
-    // there are matches above you is a dead end, not an answer.
     const next =
       activeMatchIndex === null
         ? direction === 1
@@ -971,16 +789,14 @@ export function TranscriptViewerPage({
     const row = document.querySelector(
       `[data-segment="${match.paneKey}-${match.index}"]`,
     );
-    // `center` rather than `nearest`: a match one row below the fold would
-    // otherwise scroll just barely into view at the very bottom, which reads as
-    // nothing having happened.
     row?.scrollIntoView({ block: "center", behavior: "smooth" });
     if (match.paneKey === "transcript") {
       setActiveSegmentIndex(match.index);
     }
   };
 
-  const activeMatch = activeMatchIndex === null ? null : matches[activeMatchIndex];
+  const activeMatch =
+    activeMatchIndex === null ? null : matches[activeMatchIndex];
 
   const metaText = [
     formatDuration(recording.durationMs),
@@ -997,9 +813,6 @@ export function TranscriptViewerPage({
 
   const trimmedQuery = query.trim();
 
-  // An older transcript with text but no timed segments can be backfilled by a
-  // forced re-transcribe. Gated on local audio existing (nothing to re-run
-  // without it) and on the transcript view being visible.
   const canEnablePerSentence =
     onReTranscribe !== undefined &&
     !recording.audioDeleted &&
@@ -1009,27 +822,17 @@ export function TranscriptViewerPage({
     activeTranscript.text.trim().length > 0 &&
     activeTranscript.segments.length === 0;
 
-  // Re-run the (whole-document) translation, overwriting the existing sidecar.
-  // Sits beside the re-transcribe action in the same bar.
   const canReTranslate =
     onReTranslate !== undefined && recording.translationPath !== null;
 
-  // First-time translation for a recording that has never been translated. The
-  // two are mutually exclusive on `translationPath`: an untranslated recording
-  // shows "Translate" (force: false), a translated one shows "Re-translate".
   const canTranslate =
     onReTranslate !== undefined && recording.translationPath === null;
 
-  // The keyboard shortcuts act on timed, mineable sentences with local audio, so
-  // the hint only shows when they can actually do something.
   const showKeyboardHint =
     viewMode !== "translation" &&
     !recording.audioDeleted &&
     editedSegments.length > 0;
 
-  // A general re-transcribe (force) for a recording that already has a timed transcript —
-  // e.g. to redo it after switching Audio type to Music. The untimed case is handled by
-  // `canEnablePerSentence`, so the two never both show.
   const canReTranscribe =
     onReTranscribe !== undefined &&
     !recording.audioDeleted &&
@@ -1093,9 +896,6 @@ export function TranscriptViewerPage({
               One word away
             </button>
           ) : null}
-          {/* Only offered with the filter on. "Mine all" while looking at the whole
-              transcript reads as "mine everything", and the number beside it is the
-              only thing that says otherwise. */}
           {withinReachOnly && !recording.audioDeleted ? (
             <button
               type="button"
@@ -1138,8 +938,6 @@ export function TranscriptViewerPage({
                 if (event.key !== "Enter") {
                   return;
                 }
-                // The box keeps focus so the next Enter steps again — the whole
-                // point of a find bar is not having to click back into it.
                 event.preventDefault();
                 stepMatch(event.shiftKey ? -1 : 1);
               }}
@@ -1204,8 +1002,6 @@ export function TranscriptViewerPage({
         />
       )}
 
-      {/* Why the transcript below is empty, when the last run did not produce one. A
-          cancel and a crash otherwise look identical to "never transcribed". */}
       {!isReTranscribing && lastTranscriptionOutcome ? (
         <p
           className={`transcript-run-outcome${
@@ -1254,13 +1050,6 @@ export function TranscriptViewerPage({
                   />
                 </div>
               </div>
-              {/* The same cancel the Library queue offers, so a long run started
-                  here does not have to be abandoned by navigating away. It kills
-                  the whisper process; the item resolves "cancelled" and the queue
-                  moves on. */}
-              {/* `ghost`, not the accent action style the Re-transcribe/Translate
-                  buttons use in this same row: stopping something is not the
-                  affirmative action, and it matches the Library queue's Cancel. */}
               {onCancelTranscription ? (
                 <button
                   type="button"
@@ -1346,14 +1135,6 @@ export function TranscriptViewerPage({
           </div>
         </div>
       ) : isReTranscribing ? (
-        // Sentences arriving from the running whisper pass. They replace the reading
-        // panes for the duration: the transcript underneath is about to be overwritten
-        // anyway, and watching it rebuild is the whole point. The reload-on-completion
-        // effect above swaps the saved transcript back in the moment the run ends.
-        //
-        // Shown for the WHOLE run, not just once sentences exist — gating on a non-empty
-        // list made the screen flip old transcript → live → skeleton → new transcript.
-        // Its own waiting state covers the decode before the first sentence lands.
         <div className="transcript-viewer-body is-single">
           <LiveTranscriptPane segments={liveSegments} />
         </div>

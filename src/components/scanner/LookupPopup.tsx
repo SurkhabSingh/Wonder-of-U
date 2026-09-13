@@ -3,18 +3,6 @@ import core from "../../lib/scannerCore";
 import type { LookupEntry, LookupResult } from "../../types";
 
 // The dictionary popup, built against the Anki add-on's own markup.
-//
-// Every class name here is one `popup.css` already styles — that stylesheet is vendored
-// unchanged at `src/styles/lookupPopup.css`, is scoped entirely under `.anki-lookup-popup`,
-// and carries no Anki-specific selectors. Matching its DOM rather than inventing our own is
-// what makes the popup look like the one the user already reads during review, and it means
-// restyling happens in one place for both.
-//
-// Positioned by hand rather than with a popover library because the anchor is a `DOMRect`
-// measured from a text Range at hover time, not a mounted element — the one thing every
-// popover primitive assumes it has. `core.popupPosition` does the flip-and-clamp, shared
-// with the add-on.
-
 const MARGIN = 12;
 const GAP = 8;
 const WIDTH = 360;
@@ -42,15 +30,8 @@ export function LookupPopup({
   fontFamily: string;
   fontSizePx: number;
   onClose: () => void;
-  /// Makes a card for the word this popup is showing, with the line it came from and
-  /// that line's audio. Absent whenever there is nothing to make one from — no
-  /// recording open, or a line with no moment behind it — so the button is offered
-  /// only where it can work rather than appearing and then failing.
   onMine?: (word: string) => void | Promise<void>;
-  /// Live while a mine is in flight, so the button can say so and refuse a second.
   isMining?: boolean;
-  /// This line already has a card — mined just now, or found to be in the deck
-  /// already when a mine was refused as a duplicate.
   isMined?: boolean;
 }) {
   const panelRef = useRef<HTMLElement | null>(null);
@@ -129,16 +110,11 @@ export function LookupPopup({
         width: WIDTH,
         maxHeight: MAX_HEIGHT,
         display: "flex",
-        // The add-on sets these two inline on the popup root; the whole stylesheet is
-        // em-relative off the font size, so one value rescales everything.
         ["--anki-lookup-font-family" as string]: fontFamily || "inherit",
         ["--anki-lookup-font-size" as string]: `${fontSizePx}px`,
       }}
     >
       <header className="anki-lookup__header">
-        {/* Only when there is a word to mine and somewhere to mine it from. The term
-            comes from the add-on, so it is the DEINFLECTED form — mining 出会える
-            makes a card for 出会う, which is the word you would look up. */}
         {onMine && result?.term ? (
           <button
             type="button"
@@ -146,9 +122,6 @@ export function LookupPopup({
               isMined ? " anki-lookup__mine--done" : ""
             }`}
             onClick={() => void onMine(result.term)}
-            // Disabled rather than left clickable to explain itself: a card for
-            // this line exists, so the only thing a second press could do is fail
-            // as a duplicate. The label says so, and the tooltip says why.
             disabled={isMining || isMined}
             title={
               isMined
@@ -261,8 +234,6 @@ function EntryView({ entry }: { entry: LookupEntry }) {
         </div>
       ) : null}
 
-      {/* Why a conjugated form matched: 食べた came from 食べる, rather than asking the
-          reader to take the match on trust. */}
       {entry.inflectionReasons.length > 0 ? (
         <div className="anki-lookup__inflection">
           <span className="anki-lookup__inflection-icon" aria-hidden="true" />
@@ -277,8 +248,6 @@ function EntryView({ entry }: { entry: LookupEntry }) {
         </div>
       ) : null}
 
-      {/* Rendered as text, deliberately: the add-on's own popup uses `textContent` for
-          definitions, so text is the format they are actually in. */}
       <ol className="anki-lookup__definitions">
         {entry.definitions.map((definition, index) => (
           <li key={index}>{definition}</li>

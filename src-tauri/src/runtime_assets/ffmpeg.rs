@@ -96,9 +96,6 @@ pub(crate) fn verify_ffmpeg_binary(executable_path: &Path) -> Result<(), String>
 
 pub(crate) fn detect_local_ffmpeg(settings: &AppSettings) -> FfmpegDetection {
     let asset_directory = PathBuf::from(&settings.asset_directory);
-    // Managed binary: trust its presence (a non-empty file the app installed and
-    // verified at download time) instead of spawning `ffmpeg -version` on every
-    // app-snapshot emit — see `managed_binary_is_present`.
     if let Some(managed_path) = collect_managed_ffmpeg_candidates(&asset_directory)
         .into_iter()
         .find(|candidate| managed_binary_is_present(candidate))

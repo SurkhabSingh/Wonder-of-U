@@ -1,15 +1,9 @@
 import { useEffect } from "react";
 import { JimakuSearchPanel } from "./JimakuSearchPanel";
 
-/**
- * A shell around the existing Jimaku panel so searching happens over the library rather than
- * pushing the list down the page.
- *
- * Hand-rolled on the same shape as `ConfirmDialog` — overlay, centred panel, Escape to close,
- * click-outside to close — because this app has no Radix Dialog and one popup does not earn a
- * new dependency. The panel inside is untouched: it already takes the video path and reports
- * the downloaded file.
- */
+//A shell around the existing Jimaku panel so searching happens over the library rather than
+// pushing the list down the page.
+
 export function JimakuDialog({
   videoPath,
   hasApiKey,

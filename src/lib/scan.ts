@@ -1,15 +1,4 @@
 // Finding which character of a subtitle line the pointer is on.
-//
-// The obvious implementation — one `<span>` per character carrying its index — is
-// rejected on cost. The subtitle list renders every cue in the file (400-1500 rows) and
-// re-renders on the player's 250 ms poll; a span per character would multiply that DOM by
-// the length of a line. The caret APIs answer the same question against a single text
-// node, so scanning adds no elements at all until something is actually matched.
-
-/// JavaScript counts UTF-16 code units; Rust's `chars()` counts code points. They agree on
-/// every character in ordinary Japanese, and disagree on the ones outside the BMP — 𠮟る,
-/// 𩸽, emoji — where a DOM offset would land the backend a character to the right. Convert
-/// before crossing the boundary rather than hoping subtitles stay inside the BMP.
 export function codePointOffset(text: string, utf16Offset: number): number {
   let index = 0;
   let position = 0;
@@ -138,11 +127,6 @@ function rectHasPoint(rect: DOMRect | null, x: number, y: number): boolean {
 }
 
 /// The index of the character under the pointer, or null if the pointer is not on text.
-///
-/// The caret APIs snap to the nearest position *between* characters, so a click on the
-/// right half of a character reports the offset after it — which would look up the next
-/// word. Rather than trusting the snap, measure the character it names and its neighbour
-/// and keep whichever actually contains the point.
 export function characterOffsetFromPoint(
   container: HTMLElement,
   x: number,

@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
 // The subtitle offset, as one typeable field.
-//
-// mpv owns the value and the watch page re-reads it four times a second, so the field
-// cannot simply be bound to it — the poll would overwrite whatever was half-typed. It
-// mirrors mpv while unfocused and holds its own draft while being edited, committing on
-// Enter or blur. That is also why the commit is absolute rather than a delta: the player is
-// the source of truth, and sending "+100" against a stale reading would compound.
 export function SubtitleOffsetField({
   delayMs,
   onCommit,

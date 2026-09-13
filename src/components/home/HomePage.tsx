@@ -83,8 +83,6 @@ export function HomePage({
   onView,
   onOpenLibrary,
 }: {
-  // A slot rather than the card's own props: this page renders the setup card, it does not
-  // need to learn anything about downloads to do it.
   setupCard: ReactNode;
   elapsedMs: number;
   phase: RecorderPhase;
@@ -119,16 +117,10 @@ export function HomePage({
   onOpenLibrary: (filter?: RecordingFilter) => void;
 }) {
   const recent = recentRecordings.slice(0, 5);
-  // A rejected drop or a failed picker has to say so. Silently doing nothing is
-  // the one outcome the drop zone must never have.
   const [importNote, setImportNote] = useState<string | null>(null);
-  // An import must not be queued behind another one, and no import should start
-  // while the recorder or another batch job is mid-flight.
   const importDisabled = isImporting || anyBusy;
   const [youtubeUrl, setYoutubeUrl] = useState("");
 
-  // Queuing is decoupled from `importDisabled` on purpose: you can keep adding
-  // links while a fetch runs. The queue itself serializes the downloads.
   const handleAddYoutube = useCallback(() => {
     const trimmed = youtubeUrl.trim();
     if (trimmed.length === 0) {
@@ -177,7 +169,6 @@ export function HomePage({
           filters: [
             {
               name: "Audio & video",
-              // Same list the drop filter gates on — they cannot drift.
               extensions: [...IMPORT_MEDIA_EXTENSIONS],
             },
           ],

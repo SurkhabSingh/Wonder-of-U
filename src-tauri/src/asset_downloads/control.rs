@@ -6,34 +6,11 @@ use super::asset::{paused_message, AssetKind};
 use super::transfer::update_model_download_snapshot;
 
 /// Statuses that mean the download is over, whatever happens next.
-///
-/// Pause and cancel check `control.active` and *then* write the snapshot, and those are two
-/// different locks taken at two different moments. A download that finishes in the gap resets
-/// the control slot and writes its own final status — and the pause write, already past its
-/// check, would land on top of it. The card then showed "Paused the alass download." at 100%
-/// with live Resume and Cancel buttons over a download that had already finished and released
-/// the slot, so pressing either could only answer "There is no active model download".
-///
-/// Rather than widen the locking, the rule is that a terminal status is final: the closure
-/// below runs while the snapshot lock is held, and the worker's completed/failed/cancelled
-/// write takes that same lock, so whichever arrives second sees the other and the pause simply
-/// declines. Silently — a pause that arrives after the thing it would pause has finished is
-/// not a failure worth telling anyone about.
 fn is_terminal(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled" | "idle")
 }
 
 /// What to call the download currently in the slot.
-///
-/// Both commands here act on whichever download is running — they take no argument — so the
-/// only way to name it is to read the snapshot. That lookup used to be a `match` on a bare
-/// string, written twice with *different* arms: one returned "Runtime"/"Model", the other
-/// "runtime"/"model", and neither listed alass or dictionary, so cancelling either of those
-/// announced "Cancelling the model download". Going through `AssetKind` makes a missing arm
-/// a compile error instead of a wrong sentence.
-///
-/// The fallback is for the genuinely empty slot only. Callers have already checked
-/// `control.active`, so in practice a kind is always present by the time this runs.
 fn active_download_label<R: Runtime>(app: &AppHandle<R>) -> Result<&'static str, String> {
     let kind = app
         .state::<ModelDownloadState>()
@@ -73,13 +50,6 @@ pub(crate) fn toggle_whisper_model_download_pause_inner<R: Runtime>(
         } else {
             "downloading".into()
         };
-        // Both phrasings put the name mid-sentence, which is why one label can serve them.
-        // The previous wording started the paused message with the name and so needed a
-        // second, lowercased copy for the resumed one — the copy that read "ffmpeg".
-        //
-        // The paused sentence goes through  because the download thread
-        // writes it too, the moment it notices; two spellings of it made the card flicker
-        // between them.
         snapshot.message = if is_paused {
             paused_message(download_label)
         } else {
@@ -91,12 +61,6 @@ pub(crate) fn toggle_whisper_model_download_pause_inner<R: Runtime>(
 }
 
 /// Cancels the running download, which also ends the queue.
-///
-/// Ending the queue is not done here, and that is deliberate rather than an omission: setting
-/// `cancel_requested` makes the active transfer fail with `Cancelled`, and the queue worker
-/// abandons everything waiting the moment a download fails. One button, one meaning — stop
-/// downloading — with the queue's own failure path doing the work, so there is no second place
-/// that has to remember to clear it.
 pub(crate) fn cancel_whisper_model_download_inner<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(), String> {
@@ -118,8 +82,6 @@ pub(crate) fn cancel_whisper_model_download_inner<R: Runtime>(
     let download_label = active_download_label(app)?;
 
     update_model_download_snapshot(app, |snapshot| {
-        // Same race as pause: a cancel pressed as the download finishes must not reopen a
-        // finished card into a "cancelling" one that never resolves.
         if is_terminal(&snapshot.status) {
             return;
         }

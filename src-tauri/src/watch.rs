@@ -1,17 +1,3 @@
-//! Watch & Mine: drive an external mpv and read what it is showing.
-//!
-//! The app does not render video itself. WebView2 plays H.264/AAC MP4 and VP9/Opus WebM
-//! and nothing else — not MKV, H.265, AC3 or 10-bit, which is most of what anyone would
-//! actually want to mine from. mpv plays all of it, renders `.srt`/`.ass` natively, and
-//! exposes its state over a JSON IPC socket, so the app reads the player rather than
-//! being one.
-//!
-//! Verified against mpv v0.41.0 before this was written (see the Slice 0 spike):
-//! round-trip on a Windows named pipe is 0.3–0.5ms while playing, and `sub-text` /
-//! `sub-start` / `sub-end` report the on-screen line and its bounds to the millisecond.
-//! That last part is why there is no subtitle parser here — mpv has already done the
-//! parsing, the timing and the sync, including embedded tracks and odd encodings.
-
 use std::{
     io::{BufRead, BufReader, Write},
     path::Path,
@@ -38,18 +24,11 @@ pub(crate) mod window;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// How long to wait for mpv to create its IPC endpoint after launch. The spike connected
-/// on the first attempt, but the pipe genuinely does not exist for a few milliseconds
-/// after spawn, so this retries rather than racing.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Ceiling on a single request. Reads are sub-millisecond in practice; this only exists
-/// so a wedged player cannot hang a command thread forever.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The IPC endpoint. A Windows named pipe, a filesystem socket elsewhere. The process id
-/// is in the name so two app instances never fight over one endpoint.
 fn ipc_endpoint() -> String {
     #[cfg(target_os = "windows")]
     {
@@ -64,32 +43,23 @@ fn ipc_endpoint() -> String {
     }
 }
 
-/// What mpv is currently showing. Everything is optional because mpv answers `null` for
-/// a property that has no value right now — no file loaded, or no subtitle on screen —
-/// and that is a normal state, not a failure.
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WatchSnapshot {
-    /// True while an mpv process is running and answering.
     pub(crate) connected: bool,
     pub(crate) path: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) position_ms: Option<u64>,
     pub(crate) duration_ms: Option<u64>,
     pub(crate) paused: bool,
-    /// The subtitle line on screen right now, and its exact bounds. These three are what
-    /// mining reads: no parsing, no sync, no guessing which cue the user meant.
     pub(crate) subtitle_text: Option<String>,
     pub(crate) subtitle_start_ms: Option<u64>,
     pub(crate) subtitle_end_ms: Option<u64>,
-    /// mpv's own subtitle offset, in milliseconds. Settable, so nudging out-of-sync subs
-    /// costs one IPC call rather than a reimplementation.
     pub(crate) subtitle_delay_ms: i64,
 }
 
-/// Seconds (mpv's unit) to whole milliseconds (ours). Negative times are clamped to zero:
-/// mpv can report a slightly negative `time-pos` while a file is still loading, and a
-/// negative position is meaningless to every caller here.
+
 fn seconds_to_ms(seconds: f64) -> u64 {
     if seconds.is_finite() && seconds > 0.0 {
         (seconds * 1000.0).round() as u64
@@ -98,8 +68,7 @@ fn seconds_to_ms(seconds: f64) -> u64 {
     }
 }
 
-/// Signed variant, for `sub-delay`, where a negative value is meaningful (subtitles
-/// ahead of the audio rather than behind).
+
 fn seconds_to_signed_ms(seconds: f64) -> i64 {
     if seconds.is_finite() {
         (seconds * 1000.0).round() as i64
@@ -108,34 +77,23 @@ fn seconds_to_signed_ms(seconds: f64) -> i64 {
     }
 }
 
-/// A live mpv process and the connection to it.
+
 struct MpvSession {
     child: Child,
     connection: MpvConnection,
 }
 
-/// The single running session, if any. Watch & Mine is deliberately one-player-at-a-time:
-/// "mine the line I am hearing" has no meaning with two videos open.
 static SESSION: Mutex<Option<MpvSession>> = Mutex::new(None);
 
-/// mpv's process id, mirrored outside the session mutex.
-///
-/// The scanner overlay's tracker asks for this 60 times a second to find mpv's window, and
-/// it must never block: it owns click-through, so a stall there leaves the overlay taking
-/// the mouse when it should not — or refusing it when it should. Reading it through
-/// `SESSION` would do exactly that, because `watch_snapshot` holds that lock across NINE
-/// blocking IPC round trips, each able to wait out `REQUEST_TIMEOUT` if mpv stops
-/// answering. Zero means no session.
+
 static SESSION_PID: AtomicU32 = AtomicU32::new(0);
 
-/// Kept in lockstep with `SESSION` — every place that assigns the session assigns this.
+
 fn set_session_pid(pid: Option<u32>) {
     SESSION_PID.store(pid.unwrap_or(0), Ordering::Relaxed);
 }
 
 impl MpvSession {
-    /// Kills mpv and drops the connection. Called on stop, and on any launch so a stale
-    /// session can never linger behind a new one.
     fn shut_down(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -147,7 +105,6 @@ mod transport {
     use super::*;
     use std::fs::OpenOptions;
 
-    /// On Windows the IPC endpoint is a named pipe, which opens as an ordinary file.
     pub(super) struct Pipe {
         reader: BufReader<std::fs::File>,
         writer: std::fs::File,
@@ -223,8 +180,6 @@ mod transport {
     }
 }
 
-/// The platform-specific half of the connection, kept behind a trait so the request loop
-/// below is written once.
 trait Transport: Send {
     fn write_line(&mut self, line: &str) -> Result<(), String>;
     fn read_line(&mut self, buffer: &mut String) -> Result<usize, String>;
@@ -232,8 +187,6 @@ trait Transport: Send {
 
 struct MpvConnection {
     transport: Box<dyn Transport>,
-    /// Monotonic id so a reply can be matched to its request. mpv echoes `request_id`
-    /// back, which is what makes this safe to use while mpv is also emitting events.
     next_request_id: u64,
 }
 
@@ -260,16 +213,8 @@ impl MpvConnection {
         }
     }
 
-    /// Sends one command and returns its `data`.
-    ///
-    /// mpv interleaves asynchronous events with replies on the same channel, so lines are
-    /// read until one carries OUR `request_id`. Matching on the id rather than "the next
-    /// line" is what keeps a property read from accidentally consuming an event — the
-    /// bug this design would otherwise have.
+ 
     fn request(&mut self, command: &[&str]) -> Result<serde_json::Value, String> {
-        // Every existing caller sends strings, and mpv coerces them, so the string form
-        // stays the front door and simply widens into the JSON one. Keeping it means the
-        // verified mine path is not touched by adding a setter.
         let command = command
             .iter()
             .map(|part| serde_json::Value::String((*part).to_string()))
@@ -277,8 +222,6 @@ impl MpvConnection {
         self.request_json(&command)
     }
 
-    /// The same exchange, but with arbitrary JSON arguments — `set_property` needs a real
-    /// boolean for `sub-visibility`, not the string "no".
     fn request_json(&mut self, command: &[serde_json::Value]) -> Result<serde_json::Value, String> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
@@ -300,7 +243,6 @@ impl MpvConnection {
                 continue;
             };
             if message.get("request_id").and_then(serde_json::Value::as_u64) != Some(request_id) {
-                // An event, or a reply to something else. Not ours.
                 continue;
             }
             let error = message
@@ -308,9 +250,6 @@ impl MpvConnection {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("success");
             if error != "success" {
-                // A property that has no value right now reports `property unavailable`.
-                // That is a normal state (nothing loaded, no subtitle on screen), so it
-                // comes back as null rather than as an error.
                 if error == "property unavailable" {
                     return Ok(serde_json::Value::Null);
                 }
@@ -392,10 +331,7 @@ pub(crate) fn start_watch_session(
     command.creation_flags(CREATE_NO_WINDOW);
     command
         .arg(format!("--input-ipc-server={endpoint}"))
-        // Keep the window open at end of file rather than exiting, so the session does
-        // not vanish underneath the app the moment the episode finishes.
         .arg("--keep-open=yes")
-        // mpv's own terminal output is noise here; the app is the interface.
         .arg("--no-terminal")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -407,10 +343,6 @@ pub(crate) fn start_watch_session(
         }
     }
     if let Some(start_at_ms) = start_at_ms {
-        // Seconds, which is the unit mpv's own `--start` takes. Pinned to three decimals so
-        // the argument is always a plain `seconds.milliseconds` however large the offset —
-        // `{}` would also be parseable, but its length varies with the value, and a fixed
-        // shape is one less thing for a reader to check when this ends up in a bug report.
         command.arg(format!("--start={:.3}", start_at_ms as f64 / 1000.0));
     }
     command.arg(video_path);
@@ -450,7 +382,6 @@ pub(crate) fn watch_snapshot() -> Result<WatchSnapshot, String> {
         return Ok(WatchSnapshot::default());
     };
 
-    // The user closing mpv is the normal way to stop watching.
     if matches!(session.child.try_wait(), Ok(Some(_))) {
         set_session_pid(None);
         *session_guard = None;
@@ -480,8 +411,6 @@ pub(crate) fn watch_snapshot() -> Result<WatchSnapshot, String> {
             .unwrap_or(0),
     };
 
-    // A snapshot that answered nothing at all means the channel died even though the
-    // process is alive; drop the session so the UI stops claiming to be connected.
     if snapshot.path.is_none() && snapshot.position_ms.is_none() && snapshot.duration_ms.is_none() {
         session.shut_down();
         set_session_pid(None);
@@ -493,9 +422,6 @@ pub(crate) fn watch_snapshot() -> Result<WatchSnapshot, String> {
 }
 
 /// Jumps the player to `position_ms`.
-///
-/// Clicking a line in the subtitle list is the whole point of having the list, and it is
-/// the one thing the read-only snapshot cannot do.
 pub(crate) fn seek_watch_session(position_ms: u64) -> Result<(), String> {
     let mut session_guard = SESSION
         .lock()
@@ -511,11 +437,6 @@ pub(crate) fn seek_watch_session(position_ms: u64) -> Result<(), String> {
 }
 
 /// Hands mpv's own subtitle rendering on or off.
-///
-/// Off is what makes the scanner overlay possible: mpv draws subtitles with libass, which
-/// exposes no glyph positions, so a word can only be hovered if we draw the line ourselves.
-/// Verified in the spike: `sub-text`, `sub-start` and `sub-end` keep reporting normally
-/// while visibility is off, so hiding mpv's layer costs us nothing but the `.ass` styling.
 pub(crate) fn set_watch_subtitle_visibility(visible: bool) -> Result<(), String> {
     let mut session_guard = SESSION
         .lock()
@@ -530,14 +451,6 @@ pub(crate) fn set_watch_subtitle_visibility(visible: bool) -> Result<(), String>
 }
 
 /// Shifts the subtitles against the audio by `delay_ms`, positive meaning "show later".
-///
-/// This is mpv's own `sub-delay`, so it costs one property write and applies to whatever
-/// mpv is rendering — sidecar or embedded track — with no file rewritten. It is the right
-/// tool for the common failure, where a subtitle file is off by a constant: alass exists
-/// for the harder case where the drift varies across the episode.
-///
-/// mpv measures the property in **seconds**, so the millisecond figure the UI works in is
-/// converted here rather than at the call site.
 pub(crate) fn set_watch_subtitle_delay(delay_ms: i64) -> Result<(), String> {
     let mut session_guard = SESSION
         .lock()
@@ -556,16 +469,6 @@ pub(crate) fn set_watch_subtitle_delay(delay_ms: i64) -> Result<(), String> {
 }
 
 /// Hands mpv a subtitle file and selects it, replacing whatever it was showing.
-///
-/// Needed because syncing writes a NEW file: without this, alass would produce a corrected
-/// subtitle that the player never loads, and the user would watch the old one while the app
-/// claimed success. `sub-add` with `select` both adds and switches in one command.
-/// Load a subtitle into the player if one is running, and say whether it landed.
-///
-/// Returns `false` rather than an error when nothing is playing, because for its one caller
-/// that is an ordinary outcome: realigning a subtitle from the video library happens with mpv
-/// closed. The caller has already written the file and recorded the pairing; a player that
-/// is not there to be updated should not undo either.
 pub(crate) fn add_watch_subtitle_file_if_playing(subtitle_path: &str) -> bool {
     let Ok(mut session_guard) = SESSION.lock() else {
         return false;
@@ -580,12 +483,6 @@ pub(crate) fn add_watch_subtitle_file_if_playing(subtitle_path: &str) -> bool {
 }
 
 /// mpv's process id, for finding its window.
-///
-/// Returned rather than the window handle itself because the handle is not stable — mpv
-/// owns several top-level windows and the video one is identified by class and visibility
-/// at the moment it is asked for, not once at launch.
-///
-/// Lock-free by design; see [`SESSION_PID`].
 pub(crate) fn watch_session_pid() -> Option<u32> {
     match SESSION_PID.load(Ordering::Relaxed) {
         0 => None,
@@ -712,8 +609,6 @@ mod tests {
 
     #[test]
     fn a_loading_players_negative_or_absent_time_reads_as_zero() {
-        // mpv can report a slightly negative time-pos while a file is still loading, and
-        // a negative position is meaningless to every caller.
         assert_eq!(seconds_to_ms(-0.5), 0);
         assert_eq!(seconds_to_ms(f64::NAN), 0);
         assert_eq!(seconds_to_ms(f64::INFINITY), 0);
@@ -721,7 +616,6 @@ mod tests {
 
     #[test]
     fn subtitle_delay_keeps_its_sign() {
-        // Unlike a position, a negative delay is meaningful: subtitles ahead of the audio.
         assert_eq!(seconds_to_signed_ms(-1.25), -1250);
         assert_eq!(seconds_to_signed_ms(0.2), 200);
         assert_eq!(seconds_to_signed_ms(f64::NAN), 0);
@@ -729,7 +623,6 @@ mod tests {
 
     #[test]
     fn the_ipc_endpoint_is_unique_per_process() {
-        // Two app instances must not fight over one control channel.
         let endpoint = ipc_endpoint();
         assert!(endpoint.contains(&std::process::id().to_string()));
     }

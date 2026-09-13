@@ -2,9 +2,6 @@ import { formatDuration } from "../../lib/format";
 import type { RecorderPhase } from "../../types";
 import { TooltipBadge } from "../ui/Tooltip";
 
-// A phase with no label here falls back to `statusText`, which both callers also put in the
-// element's `title`. That fallback is why an unlabelled phase printed a raw filesystem path as
-// the visible status during a download.
 const RECORDER_STATUS_LABEL: Record<string, string> = {
   idle: "Ready",
   recording: "Recording",

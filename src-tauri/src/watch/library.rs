@@ -1,12 +1,3 @@
-//! The video library: which videos the user has added, and which subtitle each is paired with.
-//!
-//! Kept apart from the recording library on purpose. A video is watched, subtitled and realigned;
-//! a recording is transcribed, translated and mined. They share no actions, so sharing a list
-//! would only mean one of them constraining the other.
-//!
-//! Every mutation goes through `upsert_watched_video` so there is exactly one place that decides
-//! what identity means and one place that writes. Identity is the video's own path.
-
 use std::{
     fs,
     path::Path,
@@ -25,13 +16,9 @@ use crate::{
 };
 
 /// Where in the video to grab the thumbnail from, as a fraction of its length.
-///
-/// Not the first frame: films, episodes and rips almost all open on black or a logo card, so
-/// frame zero is the one moment guaranteed to say nothing about the video.
 const THUMBNAIL_AT_FRACTION: f64 = 0.10;
 
-/// Cheap insurance for a video whose duration could not be probed (`probe_duration_ms` answers
-/// 0 on failure): 10% of nothing is still frame zero, so fall back to a fixed offset instead.
+/// Cheap insurance for a video whose duration could not be probed.
 const THUMBNAIL_FALLBACK_MS: u64 = 30_000;
 
 pub(crate) fn thumbnail_at_ms(duration_ms: u64) -> u64 {
@@ -49,22 +36,11 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 /// Where a subtitle came from, for the chip in the list.
-///
-/// Deliberately a plain string rather than an enum crossing the wire: it labels a chip and
-/// nothing more, and a value the frontend does not recognise must degrade to "no chip" rather
-/// than to a parse error that costs the mapping.
 pub(crate) const ORIGIN_PICKED: &str = "picked";
 pub(crate) const ORIGIN_JIMAKU: &str = "jimaku";
 pub(crate) const ORIGIN_GENERATED: &str = "generated";
 pub(crate) const ORIGIN_SYNCED: &str = "synced";
 
-/// Keep a stored origin to the four the chip knows how to draw.
-///
-/// The frontend supplies this for a picked or downloaded subtitle, so without a gate here the
-/// stored value would be whatever it happened to send — and "degrades to no chip" would be a
-/// claim rather than a behaviour. Anything unrecognised becomes `None`, which renders as no
-/// chip and never as a broken one. The mapping itself is untouched either way: the path is the
-/// feature, the origin is decoration.
 pub(crate) fn normalize_origin(origin: Option<String>) -> Option<String> {
     let origin = origin?;
     [ORIGIN_PICKED, ORIGIN_JIMAKU, ORIGIN_GENERATED, ORIGIN_SYNCED]
@@ -73,28 +49,12 @@ pub(crate) fn normalize_origin(origin: Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Below this, there is nothing to come back to. Reopening at 12 seconds is not resuming, it
-/// is the beginning with extra steps — and it would put a "resume at 0:12" on the row of a
-/// video the user has effectively not watched.
+/// Below this, there is nothing to come back to.
 const MINIMUM_RESUME_MS: u64 = 30_000;
 
 /// Past this fraction of the video, treat it as finished.
-///
-/// Without it, watching an episode to the end leaves a resume point in the credits, so every
-/// later open lands there — the papercut this feature exists to remove, reintroduced at the
-/// other end. Credits and endings run long, so the cut is generous rather than exact.
 const FINISHED_AFTER_FRACTION: f64 = 0.95;
 
-/// The position worth returning to, or `None` when there is not one.
-///
-/// The whole judgement lives here, and is applied where the position is *written*. Storing an
-/// already-judged value is what keeps the player and the library row honest with each other:
-/// there is no second copy of this rule for one of them to get wrong, and "the row shows a
-/// resume point" and "opening resumes" cannot disagree.
-///
-/// `duration_ms` comes from mpv rather than from the stored entry, because mpv is playing the
-/// file and knows. A duration of 0 means it did not answer; the finished check is skipped
-/// rather than guessed, since dividing by an unknown length would decide "finished" at random.
 pub(crate) fn resume_point_ms(position_ms: u64, duration_ms: u64) -> Option<u64> {
     if position_ms < MINIMUM_RESUME_MS {
         return None;
@@ -106,11 +66,6 @@ pub(crate) fn resume_point_ms(position_ms: u64, duration_ms: u64) -> Option<u64>
 }
 
 /// Insert or update the entry for `video_path`, then persist and broadcast.
-///
-/// `mutate` receives the existing entry when there is one and a fresh entry when there is not,
-/// so a caller never has to ask which case it is in — the difference between "remember this new
-/// video" and "update the one I already have" is not something four call sites should each get
-/// right.
 pub(crate) fn upsert_watched_video<R: Runtime, F>(
     app: &AppHandle<R>,
     video_path: &str,
@@ -144,8 +99,6 @@ where
                     ..WatchedVideo::default()
                 };
                 mutate(&mut video);
-                // Newest first, matching how the list reads: the video just added is the one
-                // being looked for.
                 persisted.watched_videos.insert(0, video);
             }
         }
@@ -158,10 +111,6 @@ where
     Ok(())
 }
 
-/// Forget a video, and delete the thumbnail we made for it.
-///
-/// The user's video is never touched. Only the entry and the still frame this app generated are
-/// ours to remove, and the confirm copy in the UI says so.
 pub(crate) fn remove_watched_video<R: Runtime>(
     app: &AppHandle<R>,
     video_path: &str,
@@ -186,7 +135,6 @@ pub(crate) fn remove_watched_video<R: Runtime>(
     };
 
     write_persisted_data(app, &snapshot)?;
-    // After the write, so a failed removal cannot leave the entry pointing at a deleted file.
     if let Some(thumbnail) = thumbnail {
         let _ = fs::remove_file(thumbnail);
     }
@@ -195,13 +143,6 @@ pub(crate) fn remove_watched_video<R: Runtime>(
 }
 
 /// Grab a still for the list, into the asset directory rather than the user's video folder.
-///
-/// Reuses the miner's frame capture rather than repeating its ffmpeg arguments: that one already
-/// seeks with `-ss` before `-i` (near-instant), downscales without ever upscaling, and verifies
-/// ffmpeg actually wrote bytes — ffmpeg can exit 0 having written nothing.
-///
-/// Returns `None` on any failure. A missing thumbnail is a film icon in the list; it must never
-/// be the reason a video cannot be added.
 pub(crate) fn capture_thumbnail<R: Runtime>(
     app: &AppHandle<R>,
     ffmpeg_path: &Path,
@@ -298,7 +239,6 @@ mod tests {
     fn finishing_a_video_leaves_no_resume_point() {
         assert_eq!(resume_point_ms(EPISODE_MS, EPISODE_MS), None);
         assert_eq!(resume_point_ms(1_400_000, EPISODE_MS), None);
-        // Just inside the cut still counts as unfinished.
         assert_eq!(resume_point_ms(1_360_000, EPISODE_MS), Some(1_360_000));
     }
 
@@ -306,7 +246,6 @@ mod tests {
     #[test]
     fn an_unknown_duration_keeps_the_position_rather_than_guessing() {
         assert_eq!(resume_point_ms(754_000, 0), Some(754_000));
-        // The minimum still applies: that rule needs no duration.
         assert_eq!(resume_point_ms(12_000, 0), None);
     }
 
@@ -332,7 +271,6 @@ mod tests {
     /// Frame zero is black on almost every real video, so the grab is a tenth of the way in.
     #[test]
     fn the_thumbnail_is_taken_past_the_opening_frames() {
-        // A 24-minute episode.
         assert_eq!(thumbnail_at_ms(1_440_000), 144_000);
         assert_eq!(thumbnail_at_ms(60_000), 6_000);
         assert!(thumbnail_at_ms(1_440_000) > 0);

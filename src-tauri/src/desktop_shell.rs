@@ -110,9 +110,6 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
         HotkeyAction::Start => start_recording_inner(app, None),
         HotkeyAction::Stop => stop_recording_inner(app),
         HotkeyAction::ShowWindow => show_main_window(app).map_err(|error| error.to_string()),
-        // Mining reads mpv fresh, so the card is made from the line being heard right
-        // now. Doing nothing when no video is playing is correct rather than an error:
-        // the hotkey is global and will get pressed by accident.
         HotkeyAction::Mine => match mine_watched_line_from_player(app) {
             Ok(()) => Ok(()),
             Err(error) if error == NO_WATCH_SESSION => Ok(()),
@@ -130,22 +127,11 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
                 "message": error
             }),
         );
-        // How a failure is shown depends on what failed, because `phase` and the fields
-        // beside it describe the RECORDING and nothing else.
         match action {
-            // A hotkey-triggered start or stop fails while the window is hidden, so the
-            // in-app toast never surfaces — flash the global pill instead.
             HotkeyAction::Start | HotkeyAction::Stop => {
                 signal_recording_indicator(app, IndicatorSignal::Failed);
                 let _ = update_shell_snapshot(app, |shell| {
-                    // Always safe: it reports what happened and owns nothing.
                     shell.status_text = error.clone();
-                    // Only when nothing owns the phase. Stamping "error" over a phase
-                    // somebody else set steals it — the download queue holds
-                    // "downloading-model" for its whole run — and clears `started_at_ms` and
-                    // `current_recording_name`, which during "recording" or "saving" belong to
-                    // audio still being captured. The `Mine` branch below learned this against
-                    // a different owner; this is the branch that still had the bug.
                     if recorder_phase_is_free(&shell.phase) {
                         shell.phase = "error".into();
                         shell.started_at_ms = None;
@@ -153,34 +139,19 @@ fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcu
                     }
                 });
             }
-            // Says what happened, and touches nothing else. Mining ran the recording
-            // branch before this: a mine that found no subtitle on screen would put the
-            // RECORDER into an error state and forget the name and start time of a
-            // recording that was still running. This app captures system audio, so
-            // recording while watching something is ordinary rather than exotic.
-            //
-            // The status line is the only surface a hotkey can reach anyway — the window
-            // is behind mpv — and the success path already reports there and only there.
             HotkeyAction::Mine => {
                 let _ = update_shell_snapshot(app, |shell| {
                     shell.status_text = error.clone();
                 });
             }
-            // Showing a window has nothing to say about recording, and its failure has
-            // nowhere useful to say it.
             HotkeyAction::ShowWindow => {}
         }
     }
 }
 
-/// The one "failure" that is really just "nothing to do", so the hotkey can stay silent
-/// rather than logging an error every time it is pressed outside a watch session.
 const NO_WATCH_SESSION: &str = "No video is playing.";
 
 /// Mines whatever line mpv has on screen right now.
-///
-/// Reads the player rather than any cached UI state: the user presses the key because of
-/// what they are hearing, and the watch panel's poll can be a quarter-second behind.
 fn mine_watched_line_from_player<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let snapshot = watch_snapshot()?;
     if !snapshot.connected {
@@ -323,11 +294,6 @@ pub(crate) fn configure_desktop_shell<R: Runtime>(
                 // destroyed by this button — everything below is about where it goes instead.
                 api.prevent_close();
                 if let Err(error) = hide_main_window(&app_handle) {
-                    // Discarding this was why the button could look simply dead: the close was
-                    // already prevented, so a failed hide left the window exactly where it was
-                    // with nothing logged and nothing shown. Minimising is not the same thing,
-                    // but a button that always does something beats one that intermittently
-                    // does nothing, and now the next occurrence leaves evidence.
                     log_event(
                         &app_handle,
                         "WARN",

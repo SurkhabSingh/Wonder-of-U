@@ -1,7 +1,5 @@
 import type { Measured } from "../../types";
 
-/// The only component allowed to paint a number here: one `?? 0` at a call site would put
-/// a confident zero on screen for a reading that never happened.
 export function MeasuredValue({
   value,
   unit,

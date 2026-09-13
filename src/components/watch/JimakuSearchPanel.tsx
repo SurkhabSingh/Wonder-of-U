@@ -5,16 +5,6 @@ import { fileNameFromPath } from "../../lib/format";
 import type { JimakuEntry, JimakuFile } from "../../types";
 
 // Finding Japanese subtitles for the video you are about to watch.
-//
-// Two steps, because Jimaku's API is two steps: search a title, then list its files.
-//
-// There is deliberately no episode box. Jimaku derives the episode from free-form filenames
-// and misses whenever a title is numbered per-season against an absolute number, so the
-// filter needed a retry-unfiltered fallback to be usable at all. Every file is listed and
-// the filename picks one — which is what a user reads regardless.
-
-/// Jimaku returns a long tail of loose matches; past this, scrolling costs more than it
-/// finds. Stated in the UI when it bites, rather than truncating silently.
 const MAX_VISIBLE_ENTRIES = 25;
 
 /// The name most people will recognise, falling back through what Jimaku actually returns.

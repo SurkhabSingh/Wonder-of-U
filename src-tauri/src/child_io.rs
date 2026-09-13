@@ -1,31 +1,6 @@
-//! Reading the pipes of a child process.
-
 use std::io::{BufRead, BufReader, Read};
 
 /// Reads a child pipe line by line, and never stops early on a decode error.
-///
-/// Both obvious spellings of this loop are wrong, in opposite directions, and both are
-/// wrong in the same expensive way: the thread that drains stdout usually owns the EOF
-/// signal, so how this iterator ends decides whether the run ends at all.
-///
-/// `lines().map_while(Result::ok)` ends the whole iterator at the first line that is not
-/// valid UTF-8 — and one non-ASCII byte is enough, since these children report a console
-/// codepage rather than UTF-8. The drain then reports EOF while the child is still
-/// writing: nothing drains the pipe, the child blocks on a full one, and `wait()` blocks
-/// on the child — after the loop that polls for Cancel has already been left, so the run
-/// cannot even be cancelled.
-///
-/// `lines().filter_map(Result::ok)` fixes that and breaks the other end. A decode error
-/// has already consumed its line, so skipping it does advance; but a pipe in a genuine
-/// error state returns the same error without consuming anything, and the loop spins on
-/// it forever. The thread never returns, its sender is never dropped, and the same wedge
-/// arrives with a burned core attached.
-///
-/// So the decision is removed instead of made. Splitting on newline bytes never decodes,
-/// so there is no `InvalidData` to handle; the only `Err` left is the pipe itself
-/// failing, and ending the drain there is simply correct. A bad byte becomes `U+FFFD` in
-/// the text rather than costing the line, which matters because these lines are what a
-/// failure gets explained from.
 pub(crate) fn drain_lines(pipe: impl Read) -> impl Iterator<Item = String> {
     BufReader::new(pipe)
         .split(b'\n')

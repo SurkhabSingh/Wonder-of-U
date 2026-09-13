@@ -31,9 +31,6 @@ fn clear_managed_model_override<R: Runtime>(app: &AppHandle<R>) -> Result<(), St
 }
 
 /// Which model the user has chosen, read in the same lock as the asset directory.
-///
-/// One read rather than two: both answers describe where the download is going, and taking
-/// them a moment apart is how the path and the model it is named for end up disagreeing.
 fn chosen_model<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperModelSpec, String> {
     let persisted_state = app.state::<SharedPersistedState>();
     let persisted = persisted_state
@@ -44,10 +41,6 @@ fn chosen_model<R: Runtime>(app: &AppHandle<R>) -> Result<WhisperModelSpec, Stri
 }
 
 /// The two files one model download provisions.
-///
-/// The VAD model is not an extra: whisper.cpp's segmentation needs it, and it lives beside the
-/// transcription model so a single download leaves the engine usable. It is under a megabyte
-/// against the model's hundreds, which is why it is fetched silently rather than announced.
 struct ModelPaths {
     model: PathBuf,
     vad: PathBuf,
@@ -82,8 +75,6 @@ pub(super) fn whisper_model_plan<R: Runtime>(
 
     Ok(AssetDownloadPlan {
         kind: AssetKind::Model,
-        // Deliberately not the "Another download..." the other five use. Preserved rather
-        // than unified, because unifying it would reword a message nobody asked to change.
         slot_busy_message: "A model download is already in progress.".into(),
         shell_start_text,
         starting_message: format!("Preparing the {} model download...", model_spec.label),
@@ -95,14 +86,6 @@ pub(super) fn whisper_model_plan<R: Runtime>(
         success_log_event: "whisper.model_downloaded",
         failure_log_event: "whisper.model_download_failed",
         install: Box::new(move |context| {
-            // TWO transfers under one slot, which is the reason phase G is a closure and
-            // not a `download_url` field: the shape of the work differs here, not just its
-            // parameters. Both report as `AssetKind::Model`, so the card shows one download
-            // that happens to fetch two files.
-            //
-            // Skip-if-EXISTS, not skip-if-runnable as ffmpeg and the runtime use. A model
-            // is data, not an executable — there is nothing to run to prove it — so its
-            // only cheap test is presence.
             if !paths.model.exists() {
                 context.fetch(
                     model_spec.download_url,
@@ -110,8 +93,6 @@ pub(super) fn whisper_model_plan<R: Runtime>(
                     &format!("the {} Whisper model", model_spec.label),
                 )?;
             }
-            // The engine also needs whisper.cpp's built-in Silero VAD model (tiny). Fetch
-            // it into the same models directory so one download provisions both.
             if !paths.vad.exists() {
                 context.fetch(
                     WHISPER_VAD_MODEL_URL,
@@ -120,11 +101,6 @@ pub(super) fn whisper_model_plan<R: Runtime>(
                 )?;
             }
 
-            // Bare, and NOT wrapped in `verify_managed_binary_or_remove` the way every
-            // other asset's verification is — so a model that fails this check is left on
-            // disk, and detection, which tests existence, keeps reporting it ready.
-            // Preserved exactly as it was: changing it would delete a user's model file,
-            // which is a decision to take on its own rather than inside a refactor.
             verify_whisper_model(&paths.model)?;
             clear_managed_model_override(context.app())?;
             let detection = refresh_whisper_detection_state(context.app())?;
@@ -153,18 +129,6 @@ pub(super) fn whisper_model_plan<R: Runtime>(
 }
 
 /// Fetches **only** the speech-detector model, never the transcription model.
-///
-/// This exists because the repair offered in Settings has to be safe to press, and the full
-/// model download is not. That download writes to `<asset_dir>/models/` and skips only what is
-/// already *there* — but detection accepts a managed model in six different places (the models
-/// directory, three runtime directories, and two beside the CLI), and a manual override can put
-/// it anywhere at all. So "the model is installed" does not imply "the model is at the path the
-/// download would write to", and a repair built on the full download could quietly start a
-/// multi-gigabyte transfer for someone whose model simply lives somewhere else.
-///
-/// Reusing `AssetKind::Model` is deliberate rather than a shortcut: this *is* part of
-/// provisioning the model, and it belongs in the same progress card. Every sentence the user
-/// reads comes from the plan below, so nothing claims to be downloading the model itself.
 pub(super) fn whisper_vad_model_plan<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<AssetDownloadPlan<R>, String> {
@@ -195,8 +159,6 @@ pub(super) fn whisper_vad_model_plan<R: Runtime>(
         success_log_event: "whisper.vad_model_downloaded",
         failure_log_event: "whisper.vad_model_download_failed",
         install: Box::new(move |context| {
-            // One file, and the only one. There is no branch here that could reach the
-            // transcription model, which is the whole point of this being separate.
             if !vad_path.exists() {
                 context.fetch(
                     WHISPER_VAD_MODEL_URL,
@@ -204,8 +166,6 @@ pub(super) fn whisper_vad_model_plan<R: Runtime>(
                     "the speech-detector (VAD) model",
                 )?;
             }
-            // Detection stores its result rather than re-deriving it per snapshot, so
-            // without this the interface would keep offering a repair already done.
             let detection = refresh_whisper_detection_state(context.app())?;
 
             Ok(Installed {

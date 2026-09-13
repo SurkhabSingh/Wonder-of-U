@@ -77,9 +77,6 @@ fn hide_command_window(command: &mut Command) {
     }
 }
 
-/// A managed binary is trusted by existence — it lives where the app installed it and
-/// was verified at download time — so a non-empty regular file there is ready without
-/// spawning it. The non-empty check still rejects a truncated download.
 pub(crate) fn managed_binary_is_present(candidate: &Path) -> bool {
     candidate
         .metadata()
@@ -90,8 +87,6 @@ pub(crate) fn managed_binary_is_present(candidate: &Path) -> bool {
 pub(crate) fn verify_mpv_binary(executable_path: &Path) -> Result<(), String> {
     let mut command = Command::new(executable_path);
     hide_command_window(&mut command);
-    // `--no-config` so a user's mpv.conf cannot make a version probe fail (or, worse,
-    // make it hang waiting on something).
     let output = command
         .arg("--no-config")
         .arg("--version")
@@ -108,18 +103,8 @@ pub(crate) fn verify_mpv_binary(executable_path: &Path) -> Result<(), String> {
 }
 
 /// Finds mpv, preferring one the user already installed.
-///
-/// This is the opposite order to yt-dlp, deliberately. mpv is a video player people
-/// configure — scripts, shaders, key bindings — and someone who has tuned theirs would
-/// be annoyed to find the app quietly using a stock copy instead. The managed download
-/// is the fallback for someone who has no mpv at all.
 pub(crate) fn detect_local_mpv(settings: &AppSettings) -> MpvDetection {
     for candidate in system_mpv_candidates() {
-        // Presence, not a launch. This runs inside the app snapshot, which is rebuilt on
-        // every emit — several times a second during a download — and spawning a player to ask
-        // whether it starts is far too expensive to repeat at that rate. The managed candidates
-        // below are already trusted the same way, and a binary that is present but broken fails
-        // at watch-start with mpv's own error rather than silently.
         if managed_binary_is_present(&candidate) {
             return MpvDetection {
                 status: "ready".into(),

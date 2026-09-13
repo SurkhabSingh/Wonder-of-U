@@ -43,8 +43,6 @@ fn selected_untranscribed_recordings<R: Runtime>(
         persisted
             .recent_recordings
             .iter()
-            // `force` re-runs even recordings that already have this language, so a
-            // segments sidecar can be backfilled onto an existing transcript.
             .filter(|recording| force || !recording.has_transcript_for_language(language))
             .cloned()
             .collect()
@@ -65,11 +63,6 @@ fn selected_untranscribed_recordings<R: Runtime>(
 }
 
 /// Record what Silero VAD found, and warn when it found nothing it should have.
-///
-/// The regions are scraped from whisper's stderr, which is an INFO log rather than an API, and
-/// the runtime is user-upgradable — so a rename in a future build would take the cue-end clamp
-/// with it. Everything degrades to whisper's own ends in that case, which is exactly the old
-/// behaviour and therefore invisible. This WARN is the only thing that would say so out loud.
 fn log_speech_regions<R: Runtime>(
     app: &AppHandle<R>,
     speech_regions: &[SpeechRegion],
@@ -113,19 +106,6 @@ pub(crate) struct WhisperEngine {
 }
 
 /// Everything transcription cannot run without, and whether each is there.
-///
-/// **One list, two readers.** Transcription refuses on the first unready entry; the Setup
-/// checklist marks exactly these required. They used to be separate opinions, and they
-/// disagreed: the checklist called FFmpeg optional — "Install FFmpeg for optional MP3
-/// conversion" — while this function would not proceed without it. A new user finished every
-/// required step, pressed Transcribe, and was sent to fetch a large "optional" component.
-///
-/// Ordered as the user should fix them: no model is worth fetching before the runtime that
-/// reads it. The messages live beside the conditions so the sentence a user sees and the check
-/// that produced it cannot drift apart.
-///
-/// Each entry also names the downloads that would satisfy it, so "what is missing" and "what
-/// fetches it" are one answer rather than two that can disagree. See `fixed_by`.
 pub(crate) fn transcription_requirements(
     settings: &crate::app_types::AppSettings,
     whisper: &crate::app_types::WhisperDetection,
@@ -134,15 +114,8 @@ pub(crate) fn transcription_requirements(
     use crate::app_types::TranscriptionRequirement;
     use crate::asset_downloads::QueuedDownload;
 
-    // Readiness folds the CLI and the model into one entry, but detection reports them
-    // separately — so ask only for the half that is actually absent. Requesting both would
-    // re-fetch whichever is already installed, and the model is the larger of the two.
     let mut whisper_downloads = Vec::new();
     if !whisper.cli_ready {
-        // The version the user is pinned to, NOT the recommended constant. Detection resolves
-        // the CLI under this same sanitized value, and installing a runtime writes its version
-        // back over the setting and clears any manual path — so asking for the recommended one
-        // here would silently move a user off the runtime they chose.
         whisper_downloads.push(QueuedDownload::WhisperRuntime {
             version: crate::app_state::sanitize_runtime_version(&settings.whisper.runtime_version),
         });
@@ -152,8 +125,6 @@ pub(crate) fn transcription_requirements(
     }
 
     vec![
-        // Whisper's readiness already means "the CLI runs AND a model resolves", so this is one
-        // entry rather than two — splitting it would restate detection's rule, badly.
         TranscriptionRequirement::new(
             "whisper",
             whisper.status == "ready",
@@ -166,18 +137,12 @@ pub(crate) fn transcription_requirements(
             "FFmpeg is required for transcription. Download it from Settings.".to_string(),
             vec![QueuedDownload::Ffmpeg { reinstall: false }],
         ),
-        // Only speech mode uses the VAD model; music mode skips VAD entirely, so it is not a
-        // requirement at all when the user has chosen Music. Reported as satisfied rather than
-        // omitted, so the list keeps one shape whatever the setting.
         TranscriptionRequirement::new(
             "vad",
             settings.whisper.audio_type == "music"
                 || whisper_vad_model_path(Path::new(&settings.asset_directory)).exists(),
             "The speech-detector (VAD) model has not been downloaded yet. Download it from Settings."
                 .to_string(),
-            // One model download provisions both files, so when the model is coming anyway this
-            // needs nothing of its own. Naming it again would queue a second request that finds
-            // the file already there.
             if whisper.model_ready {
                 vec![QueuedDownload::WhisperVadModel]
             } else {
@@ -188,14 +153,6 @@ pub(crate) fn transcription_requirements(
 }
 
 /// Every download this install still needs before it can transcribe, in the order they run.
-///
-/// Derived from the requirement list rather than from the asset set: `AssetKind` knows six
-/// assets and three of them — yt-dlp, alass, the dictionary — satisfy nothing transcription
-/// asks for. The only place that decides what "essential" means is the list above.
-///
-/// No de-duplication step, because no two entries can name the same request: a satisfied
-/// requirement carries none, and the one real overlap — the model download provisioning the
-/// speech detector — is resolved where the overlap lives, in the `"vad"` entry.
 pub(crate) fn missing_essential_downloads(
     settings: &crate::app_types::AppSettings,
     whisper: &crate::app_types::WhisperDetection,
@@ -208,11 +165,6 @@ pub(crate) fn missing_essential_downloads(
 }
 
 /// Starts the downloads a fresh install still needs, from one press.
-///
-/// Reports a failure only when NOTHING started. The queue drains on its own schedule, so a
-/// worker can retire between two of these calls and the next one becomes the queue starter —
-/// which re-runs the busy check and can refuse. Failing the whole command then would tell the
-/// user nothing was started while the first asset was already streaming bytes.
 pub(crate) fn download_missing_essentials_inner<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(), String> {
@@ -250,13 +202,6 @@ pub(crate) fn download_missing_essentials_inner<R: Runtime>(
 }
 
 /// Resolve the engine, or say exactly what is missing.
-///
-/// The engine decodes with ffmpeg, then runs whisper-cli with its built-in Silero VAD, so the
-/// managed runtime + ggml model, ffmpeg, and the VAD model must all be present.
-///
-/// Shared so the library batch and the watch-session generator cannot drift into two different
-/// answers to "is Whisper ready" — the batch reports these as an `unavailable` result, the
-/// generator as a plain error, but the checks and their wording are one thing.
 pub(crate) fn resolve_whisper_engine<R: Runtime>(
     app: &AppHandle<R>,
     settings: &crate::app_types::AppSettings,
@@ -264,8 +209,6 @@ pub(crate) fn resolve_whisper_engine<R: Runtime>(
     let whisper_detection = refresh_whisper_detection_state(app).map_err(|error| error.to_string())?;
     let ffmpeg_detection = detect_local_ffmpeg(settings);
 
-    // The three checks that used to sit here inline now live in one list, because the Setup
-    // checklist has to describe the same three and was getting one of them wrong.
     if let Some(missing) = transcription_requirements(settings, &whisper_detection, &ffmpeg_detection)
         .into_iter()
         .find(|requirement| !requirement.ready)
@@ -281,11 +224,6 @@ pub(crate) fn resolve_whisper_engine<R: Runtime>(
         })?;
     let vad_model_path = whisper_vad_model_path(Path::new(&settings.asset_directory));
 
-    // Detection only reports "ready" when both of these are present, so this is the invariant
-    // restated rather than a new check — but restated where it is USED. `unwrap_or_default()`
-    // stood here before, and an empty PathBuf is not a missing value to anything downstream:
-    // whisper would have been spawned with "" and the user told the CLI produced no stdout.
-    // If that invariant ever moves, this says which piece is gone instead of guessing.
     let cli_path = whisper_detection
         .executable_path
         .map(PathBuf::from)
@@ -310,10 +248,6 @@ pub(crate) fn resolve_whisper_engine<R: Runtime>(
 }
 
 /// Whether the transcript for `language` carries per-sentence timings.
-///
-/// Asks about THAT language rather than whether ANY transcript has segments. A recording can
-/// hold a Japanese transcript with timings and a Korean one without, and "any" would report
-/// the Korean one as fine — which is exactly the blindness `hasSegments` was added to remove.
 fn transcript_has_segments(transcripts: &[RecordingTranscript], language: &str) -> bool {
     transcripts
         .iter()
@@ -332,27 +266,12 @@ fn apply_transcription_result_to_recording<R: Runtime>(
 ) -> Result<RecentRecording, String> {
     let language = transcript_language_key(requested_language);
     let audio_path = PathBuf::from(&recording.file_path);
-    // A recording that already carries a transcript is being transcribed into an
-    // additional language. Keep the audio file and its name untouched so the
-    // recording's identity (and any current selection or pending Anki push that
-    // references `file_path`) stays valid, and store this language's transcript
-    // beside the audio under a language-tagged name.
     let already_transcribed =
         !recording.transcripts.is_empty() || recording.transcript_path.is_some();
 
-    // Only a fresh mic capture (which has no meaningful title) gets a name derived
-    // from its transcript; every imported/downloaded recording keeps its original.
-    // Imported/downloaded media carries a meaningful title (a podcast/video name), so
-    // for those we only place the transcript beside the untouched audio, exactly like
-    // an additional language. Source values: "recording" (mic), "import", "youtube";
-    // legacy recordings with no source fall on the preserve side too.
     let is_mic_capture = recording.source.as_deref() == Some("recording");
     let preserve_audio_name = already_transcribed || !is_mic_capture;
 
-    // A transcript is only ever persisted from *inside* the recording's own folder — the
-    // transcript viewer sandboxes its reads there, so a path left in the temp dir would read
-    // back as "missing". Every branch below therefore ends at a beside-the-audio path or fails
-    // the transcription outright; the raw `transcript_path` (a temp file) is never stored.
     let final_transcript_path = if preserve_audio_name {
         store_additional_language_transcript(&audio_path, &transcript_path, &language).map_err(
             |error| {
@@ -369,8 +288,6 @@ fn apply_transcription_result_to_recording<R: Runtime>(
             },
         )?
     } else {
-        // First transcript for this recording: derive friendly file names from the
-        // transcript text and rename both the audio and transcript to match.
         match rename_recording_outputs_from_transcript(
             &audio_path,
             &transcript_path,
@@ -389,9 +306,6 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                 renamed_transcript
             }
             Err(error) => {
-                // The friendly rename failed. Do NOT fall back to the temp path — place the
-                // transcript beside the (un-renamed) audio so it stays inside the sandbox and is
-                // readable; only a failure of that safe placement fails the transcription.
                 log_event(
                     app,
                     "ERROR",
@@ -422,11 +336,6 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     recording.transcript_language =
         derive_transcript_language_from_path(&final_transcript_path, requested_language);
 
-    // Parse whisper's per-segment json and drop a clean `{stem}.{lang}.segments.json`
-    // sidecar beside the audio so playback can jump per sentence. `recording.file_path`
-    // is now the final audio path (renamed for the first transcript, unchanged for
-    // additional languages), so its stem is exactly the one to mirror. Losing the timings
-    // still never fails transcription — but every way of losing them now says so.
     let segments_path =
         match store_segments_sidecar(
             &recording.file_path,
@@ -450,8 +359,6 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                 }
                 Some(sidecars.segments_path.display().to_string())
             }
-            // The branch that used to be silent. A recording keeps its transcript and
-            // loses per-sentence playback, which is worth a line either way.
             Ok(SegmentsOutcome::Skipped(reason)) => {
                 log_event(
                     app,
@@ -499,8 +406,6 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     Ok(recording)
 }
 
-/// Move a freshly generated transcript for an additional language next to the
-/// audio file without renaming the audio. Returns the stored transcript path.
 fn store_additional_language_transcript(
     audio_path: &Path,
     transcript_path: &Path,
@@ -517,8 +422,6 @@ fn store_additional_language_transcript(
         .and_then(|value| value.to_str())
         .ok_or_else(|| "The saved recording path did not have a file name.".to_string())?;
     let language_tag = sanitize_language_tag(language);
-    // Deterministic per-language name so re-transcribing the same language
-    // overwrites its previous transcript instead of leaving orphans behind.
     let target = parent.join(format!("{stem}.{language_tag}.transcript.txt"));
     move_file(transcript_path, &target)?;
     Ok(target)
@@ -527,18 +430,10 @@ fn store_additional_language_transcript(
 /// What a successful transcription left beside the audio.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct TranscriptSidecars {
-    /// `{stem}.{lang}.segments.json`, the per-sentence timings the viewer and miner read.
     pub(crate) segments_path: PathBuf,
-    /// `{stem}.{lang}.srt`, for mpv and alass. `None` when only this file could not be
-    /// written, which never fails the transcription.
     pub(crate) subtitle_path: Option<PathBuf>,
 }
 
-/// Parse whisper's `--output-json` sidecar into the clean segment array and write
-/// `{stem}.{lang}.segments.json` beside the audio, mirroring how the transcript sidecar is
-/// named/placed. `Skipped` carries WHY nothing was written — it used to be a bare `None`
-/// that logged nothing, so a recording could lose every timestamp silently. `Err` is
-/// reserved for the sidecar itself failing to write.
 pub(crate) fn store_segments_sidecar(
     audio_file_path: &str,
     json_path: &Path,
@@ -552,7 +447,6 @@ pub(crate) fn store_segments_sidecar(
         Err(reason) => return Ok(SegmentsOutcome::Skipped(reason)),
     };
 
-    // Repair whisper's runaway repetition and out-of-bounds tails before persisting.
     let raw_len = raw.len();
     let segments = clean_segments(raw, duration_ms, CueTiming::TrimToSpeech(envelope));
     if segments.is_empty() {
@@ -573,18 +467,11 @@ pub(crate) fn store_segments_sidecar(
         .and_then(|value| value.to_str())
         .ok_or_else(|| "The saved recording path did not have a file name.".to_string())?;
     let language_tag = sanitize_language_tag(language);
-    // Deterministic per-language name so re-transcribing the same language
-    // overwrites its previous segments sidecar instead of leaving orphans behind.
     let target = parent.join(format!("{stem}.{language_tag}.segments.json"));
     let serialized =
         serde_json::to_string(&segments).map_err(|error| error.to_string())?;
     fs::write(&target, serialized).map_err(|error| error.to_string())?;
 
-    // If cleaning removed segments (a repetition loop, or a hallucinated tail past the
-    // audio end), the whisper `.txt` still holds that junk — rewrite it from the cleaned
-    // segments so the displayed transcript, translation input, and whole-recording Anki
-    // push all match the sidecar. Left untouched when nothing was removed, so a normal
-    // transcript keeps whisper's exact text. Best-effort: a failed rewrite is ignored.
     if segments.len() != raw_len {
         let cleaned_text = segments
             .iter()
@@ -596,21 +483,9 @@ pub(crate) fn store_segments_sidecar(
     }
 
     // A subtitle file beside the audio, from the same cleaned segments.
-    //
-    // Written for every transcription because it costs nothing and is the only form the
-    // rest of the world reads: mpv can load it with `--sub-file`, and alass can be pointed
-    // at it. Deterministically named like the sidecar, so a re-transcribe overwrites rather
-    // than accumulating.
-    //
-    // Best-effort on purpose. Timestamps and mining depend on the sidecar above; a subtitle
-    // file that could not be written must not fail a transcription that otherwise succeeded.
     let subtitle_target = parent.join(format!("{stem}.{language_tag}.srt"));
     let subtitle_path = match fs::write(&subtitle_target, segments_to_srt(&segments)) {
         Ok(()) => Some(subtitle_target),
-        // Reported to the caller rather than returned as an error: the segments above are
-        // what timestamps and mining depend on, and they are already written. But it is not
-        // swallowed either, or a missing subtitle file would look like a feature that never
-        // ran rather than one that failed.
         Err(_) => None,
     };
 
@@ -620,20 +495,6 @@ pub(crate) fn store_segments_sidecar(
     }))
 }
 
-/// Repairs two whisper failure modes on non-vocal / trailing audio before the segments
-/// are persisted:
-/// 1. **Runaway repetition** — a run of `REPEAT_LIMIT`+ consecutive segments with the
-///    identical trimmed text (whisper looping one line over an instrumental) collapses
-///    to a single segment spanning the whole run.
-/// 2. **Out-of-bounds tails** — a segment starting at/after the audio end is dropped, and
-///    an overshooting `end_ms` is clamped to the duration (kills a trailing hallucination
-///    such as a "thanks for watching" line placed past the real end).
-///
-/// `duration_ms == 0` (unknown duration) skips the bounds pass but keeps the dedup pass.
-/// True when a segment's text is *only* a notorious Whisper hallucination — the phrases it
-/// emits over music/silence that a VAD region flagged as speech (a lone "thanks for
-/// watching", a subscribe plug). Matched whole (after trimming trailing punctuation) so a
-/// real sentence that merely contains such words is never dropped.
 fn is_whisper_hallucination(text: &str) -> bool {
     let normalized = text
         .trim()
@@ -653,77 +514,31 @@ fn is_whisper_hallucination(text: &str) -> bool {
 
 /// How much room to leave either side of the speech, so a trim never shaves the attack off a
 /// first syllable or the decay off a last one.
-///
-/// 150 ms rather than the 120 ms the old VAD clamp used: this one moves cue *starts* too, and
-/// the cost of being generous is a little dead air while the cost of being tight is a lost
-/// syllable.
 const CUE_EDGE_PAD_MS: u64 = 150;
 
 /// Pull each cue in to the speech it actually holds, at both edges.
-///
-/// Replaces a clamp that pulled the END back to the last Silero speech region inside the cue.
-/// That was wrong twice over. It trusted the VAD, which on Japanese ends a region before a
-/// devoiced sentence ending (です -> "des") and so cut real syllables; and it never touched the
-/// START, on the stated assumption that "starts are already exact", which measurement does not
-/// support — one recording carried 12.8 s of leading silence, including a five-second cue whose
-/// words did not begin until 3.7 s in.
-///
-/// Measured over that recording, against the audio's own speech energy:
-///
-/// ```text
-///                                 cues   cuts speech   dead air   leading silence
-///   VAD clamp (what this replaces) 153        20         74.8 s       12.8 s
-///   no clamp at all                153        11         93.3 s       12.8 s
-///   this                           153        11         72.1 s        2.6 s
-/// ```
-///
-/// Better than both on every count, and it keeps all 153 cues and all of their text — a
-/// tempting alternative, raising Silero's own speech padding to 300 ms, scored well on one
-/// sentence but merged the file down to 136 cues and dropped words out of them.
-///
-/// Interior silence is deliberately left alone. It is the larger share by far, but removing it
-/// would mean splitting the cue, and the text cannot be split with it without word timings — a
-/// sentence that no longer matches its own audio is worse than a long one.
 fn trim_cue_to_speech(
     start_ms: u64,
     end_ms: u64,
     envelope: Option<&SpeechEnvelope>,
     pad_ms: u64,
 ) -> (u64, u64) {
-    // No envelope (unreadable WAV, or audio with no dynamic range to measure): leave whisper's
-    // own timings exactly as they are, which is what every caller did before this existed.
     match envelope {
         Some(envelope) => envelope.trim(start_ms, end_ms, pad_ms),
         None => (start_ms, end_ms),
     }
 }
 
-/// How much room the VAD clamp leaves after the last speech region. Silero's own
-/// `--vad-speech-pad-ms` is 30, tight enough that a region edge lands on the tail of a vowel.
 const CUE_TAIL_PAD_MS: u64 = 120;
 
 /// Pull a cue's end back to the last Silero speech region inside it.
-///
-/// This is the older rule, and it is kept for exactly one caller: generating subtitles for a
-/// watch session. It is not better — it cuts devoiced Japanese sentence endings, which is why
-/// the recording library no longer uses it. It is here because that path is verified working
-/// and the user asked for it frozen, and because the alternatives are both worse for it: the
-/// waveform trim moves cue STARTS, which is the one thing that would disturb subtitle sync,
-/// and dropping the rule entirely leaves each cue running to the next one, which bloats every
-/// card mined from a video.
-///
-/// Do not "unify" these two by deleting this. The divergence is the decision.
 fn clamp_end_to_vad_regions(start_ms: u64, end_ms: u64, speech_regions: &[SpeechRegion]) -> u64 {
-    // Every region is scanned rather than stopping at the first past the cue: the log arrives
-    // in order today, but nothing here should depend on that.
     let last_speech_end = speech_regions
         .iter()
         .filter(|region| region.start_ms < end_ms && region.end_ms > start_ms)
         .map(|region| region.end_ms)
         .max();
 
-    // No regions at all (music mode, or a runtime that stopped printing them), or a cue
-    // covering no speech: leave whisper's own end exactly as it was.
     match last_speech_end {
         Some(speech_end) => end_ms.min(speech_end.saturating_add(CUE_TAIL_PAD_MS)),
         None => end_ms,
@@ -731,16 +546,8 @@ fn clamp_end_to_vad_regions(start_ms: u64, end_ms: u64, speech_regions: &[Speech
 }
 
 /// Which rule decides a cue's boundaries.
-///
-/// An enum rather than an `Option` or a bool so the two callers have to say which they mean,
-/// and so the reason they differ has somewhere to live. They are NOT interchangeable: see
-/// `clamp_end_to_vad_regions` for why the watch path keeps the older one.
 pub(crate) enum CueTiming<'a> {
-    /// Pull both edges in to the speech in the waveform. What the recording library uses,
-    /// because a mined card is listened to and a few hundred ms of dead air is audible.
     TrimToSpeech(Option<&'a SpeechEnvelope>),
-    /// Pull the end back to the last VAD region. What a watch session's generated subtitles
-    /// use, frozen deliberately.
     ClampToVadRegions(&'a [SpeechRegion]),
 }
 
@@ -753,8 +560,6 @@ pub(crate) fn clean_segments(
 
     let bounded: Vec<RecordingSegment> = segments
         .into_iter()
-        // Drop a segment that is only a stock Whisper hallucination phrase (emitted on a
-        // non-speech stretch the VAD flagged as speech).
         .filter(|segment| !is_whisper_hallucination(&segment.text))
         .filter_map(|mut segment| {
             if duration_ms > 0 {
@@ -767,9 +572,6 @@ pub(crate) fn clean_segments(
             }
             Some(segment)
         })
-        // Trimmed after the bounds pass so a cue already cut to the file's end is measured
-        // against the speech inside its real span, and before the repeat collapse so a
-        // collapsed run inherits trimmed members rather than whisper's padded ones.
         .map(|mut segment| {
             match timing {
                 CueTiming::TrimToSpeech(envelope) => {
@@ -799,7 +601,6 @@ pub(crate) fn clean_segments(
             run_end += 1;
         }
         if run_end - index >= REPEAT_LIMIT {
-            // Keep one segment spanning the whole repeated run.
             let mut merged = bounded[index].clone();
             merged.end_ms = bounded[run_end - 1].end_ms;
             cleaned.push(merged);
@@ -811,15 +612,9 @@ pub(crate) fn clean_segments(
     cleaned
 }
 
-/// Read whisper's json and convert its `transcription[].offsets.{from,to}` (ms)
-/// plus text into the clean segment array. Returns `None` for a missing or
-/// unparseable file so the caller can degrade to no segments.
 pub(crate) fn parse_whisper_segments(
     json_path: &Path,
 ) -> Result<Vec<RecordingSegment>, SegmentsSkip> {
-    // `read_external_text`, never `read_to_string`: whisper can end a segment on a
-    // truncated multi-byte character, and a strict read throws away every timestamp in
-    // the file over that one byte. See `text_files`.
     let raw = crate::text_files::read_external_text(json_path)
         .map_err(|_| SegmentsSkip::JsonUnreadable)?;
     let parsed: WhisperJson =
@@ -840,25 +635,15 @@ pub(crate) fn parse_whisper_segments(
 }
 
 /// Why no segments sidecar was written.
-///
-/// These were one `Ok(None)` before, indistinguishable from each other AND from success:
-/// nothing was logged on that path at all, so a recording could lose every timestamp and
-/// leave no evidence anywhere. Each arm is a genuinely different problem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SegmentsSkip {
-    /// The json whisper was asked to write is absent or could not be opened.
     JsonUnreadable,
-    /// It was read, but it is not the `--output-json` shape.
     JsonNotWhisperShaped,
-    /// Valid json, but it carried no transcription entries.
     JsonHeldNoSegments,
-    /// Whisper produced segments and cleaning removed all of them — every one was a stock
-    /// hallucination phrase, or started past the end of the audio.
     CleaningRemovedEverything,
 }
 
 impl SegmentsSkip {
-    /// Stable id for the log, so these can be counted across users.
     pub(crate) fn id(self) -> &'static str {
         match self {
             SegmentsSkip::JsonUnreadable => "json_unreadable",
@@ -884,7 +669,6 @@ impl SegmentsSkip {
     }
 }
 
-/// What `store_segments_sidecar` did. Replaces `Option`, which could not say why.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SegmentsOutcome {
     Written(TranscriptSidecars),
@@ -928,9 +712,6 @@ fn sanitize_language_tag(language: &str) -> String {
     }
 }
 
-/// Move a file, tolerating a pre-existing destination (Windows `rename` fails on
-/// an existing target) and cross-device moves (temp dir on a different volume
-/// than the output directory) by falling back to copy + delete.
 fn move_file(source: &Path, target: &Path) -> Result<(), String> {
     if target.exists() {
         fs::remove_file(target).map_err(|error| error.to_string())?;
@@ -946,11 +727,6 @@ fn move_file(source: &Path, target: &Path) -> Result<(), String> {
 }
 
 /// Owns the batch transcription's `transcription-cancel` listener for the whole run.
-///
-/// Registered before the recordings loop so a Cancel clicked at any point during the batch —
-/// including while a long whisper-cli pass is mid-flight — reaches the flag. Mirrors the
-/// yt-dlp import's `CancelListener`: `Drop` unregisters the `once` handler so a batch that
-/// finished normally never leaves it (and the `Arc` it pins) registered for the session.
 pub(crate) struct CancelListener<R: Runtime> {
     app: AppHandle<R>,
     event_id: EventId,
@@ -1002,11 +778,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     };
     let language = transcript_language_key(&settings.whisper.language);
 
-    // Claim the one whisper slot before doing anything. This batch used to check nothing at
-    // all, so starting the video library's subtitle generation and then pressing Transcribe
-    // ran two whisper-cli processes at once — each asking for the full thread count, and both
-    // listening to the one cancel event. Reported as `unavailable` rather than an error,
-    // because that is what the queue already knows how to show.
     let _whisper_slot = match WhisperSlotGuard::acquire(
         "Subtitles are being generated for a video. Wait for that to finish, or cancel it first.",
     ) {
@@ -1044,16 +815,10 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     let total = recordings.len();
     let mut items = Vec::new();
 
-    // Register the Cancel listener before the loop so a Cancel clicked at any point during
-    // the batch — including mid-pass — reaches the flag; `Drop` unregisters it on return.
     let cancel_listener = CancelListener::register(app);
-    // The CPU-usage preference does not change during a batch, so resolve the whisper-cli
-    // thread count once and reuse it for every recording.
     let thread_count = transcription_thread_count(&settings.whisper.cpu_usage);
 
     for (index, recording) in recordings.into_iter().enumerate() {
-        // A Cancel that arrived (during a previous item's pass, or before this one started)
-        // stops the batch here: mark this item cancelled and leave the rest unprocessed.
         if cancel_listener.is_cancelled() {
             items.push(RecordingActionItem {
                 file_path: recording.file_path,
@@ -1091,8 +856,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
         let app_progress = app.clone();
         let app_segment = app.clone();
         let streaming_file_path = original_file_path.clone();
-        // Named rather than inlined twice: the region warning must fire on exactly the runs
-        // that enabled VAD, and two copies of one condition is how that drifts apart.
         let music_mode = settings.whisper.audio_type == "music";
         let result = run_whisper_transcription(
             &WhisperTranscriptionRequest {
@@ -1110,15 +873,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
             move |percent| {
                 let _ = app_progress.emit("transcription-progress", percent);
             },
-            // Each sentence as whisper decodes it, so the viewer fills in live instead of
-            // staying blank behind a progress bar. The file path rides along because the
-            // queue runs recordings back to back and only the viewed one should render.
-            //
-            // Hallucinations are filtered here for the same reason `clean_segments` drops
-            // them from the saved transcript: a stock "thanks for watching" would otherwise
-            // flash on screen and then vanish when the run finished. The run-collapse half
-            // of that filter needs the whole list, so a runaway repetition can still appear
-            // live and be collapsed at the end.
             move |start_ms, end_ms, text| {
                 if is_whisper_hallucination(&text) {
                     return;
@@ -1153,9 +907,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                     app,
                     "INFO",
                     "transcription.saved",
-                    // `hasSegments` so "does this recording have per-sentence playback"
-                    // is answerable from the log alone. Without it the only way to tell
-                    // was listing the user's folder.
                     serde_json::json!({
                         "audioPath": updated_recording.file_path,
                         "transcriptPath": updated_recording.transcript_path,
@@ -1170,8 +921,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                     "Transcript created. WAV audio was kept for transcription accuracy."
                         .to_string();
 
-                // The audio is renamed when its first transcript lands, so the
-                // updated path is the one that still resolves in history.
                 if settings.features.translate_after_transcription {
                     if let Some(note) =
                         auto_translate_after_transcription(app, &updated_recording.file_path)
@@ -1188,8 +937,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
                 });
             }
             Err(error) => {
-                // A cancellation surfaces as this exact error from the engine: treat it as a
-                // clean stop (not a failure), mark the item, and leave the rest unprocessed.
                 if error == TRANSCRIPTION_CANCELLED {
                     items.push(RecordingActionItem {
                         file_path: original_file_path,
@@ -1221,11 +968,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     let success_count = items.iter().filter(|item| item.status == "success").count();
     let skipped_count = items.iter().filter(|item| item.status == "skipped").count();
     let failed_count = items.iter().filter(|item| item.status == "failed").count();
-    // Counted, because it was not. A cancelled item landed in none of the three counters, so a
-    // run the user stopped reported "0 created, 0 skipped, 0 failed" — indistinguishable from a
-    // batch that ran and had nothing to do — and, with no failures, a status of "completed".
-    // This string is also what the shell writes into `status_text`, which the frontend shows in
-    // a toast, so an unnamed cancel became a green success notification.
     let cancelled_count = items.iter().filter(|item| item.status == "cancelled").count();
 
     let message = if cancelled_count > 0 {
@@ -1245,7 +987,6 @@ pub(crate) fn transcribe_recordings_inner<R: Runtime>(
     })?;
 
     Ok(RecordingBatchResult {
-        // A stop the user asked for is its own outcome, not a completion and not a failure.
         status: if cancelled_count > 0 {
             "cancelled"
         } else if failed_count == 0 {
@@ -1371,11 +1112,6 @@ mod tests {
     }
 
     /// The bug this file's lossy read exists for, in the shape it actually arrived in.
-    ///
-    /// whisper ended a segment on a truncated multi-byte character — "농" (EB 86 8D) emitted
-    /// as its first two bytes. `fs::read_to_string` rejects the whole file for that one byte,
-    /// so a 22-minute Korean recording kept its transcript and lost all 164 of its
-    /// timestamps, with nothing logged. Re-transcribing reproduced it exactly.
     #[test]
     fn a_truncated_character_in_whispers_json_still_yields_every_other_segment() {
         use super::{parse_whisper_segments, SegmentsSkip};
@@ -1592,10 +1328,6 @@ mod tests {
     }
 
     /// A fresh install asks for exactly three things, runtime first.
-    ///
-    /// The speech detector is NOT among them even though its requirement is unmet: the model
-    /// download provisions both files, so naming it here would queue a second request that
-    /// finds the file already there.
     #[test]
     fn a_fresh_install_asks_for_the_runtime_then_the_model_then_ffmpeg() {
         use crate::asset_downloads::QueuedDownload;
@@ -1619,10 +1351,6 @@ mod tests {
     }
 
     /// The first-run press must never ask for a reinstall.
-    ///
-    /// A reinstall re-fetches over a working copy. "What is still missing" is by definition
-    /// about what is absent, so a reinstall here would re-download an FFmpeg the user already
-    /// has — the same class of mistake as the repair button that could have fetched 3 GB.
     #[test]
     fn the_essential_set_never_asks_for_a_reinstall() {
         use crate::asset_downloads::QueuedDownload;
@@ -1646,11 +1374,6 @@ mod tests {
     }
 
     /// The version a user is pinned to, never the recommended constant.
-    ///
-    /// Detection resolves the CLI under the sanitized setting, and installing a runtime writes
-    /// its version back over that setting and clears any manual path. Asking for the
-    /// recommended version here would silently move a user off the runtime they chose — from a
-    /// button whose copy says nothing about versions.
     #[test]
     fn the_runtime_requested_is_the_one_the_settings_are_pinned_to() {
         use crate::asset_downloads::QueuedDownload;
@@ -1703,8 +1426,6 @@ mod tests {
 
         let requests = missing_essential_downloads(
             &settings_pinned_to("v1.8.4"),
-            // "ready" would be wrong here: whisper resolves, but the detector file does not
-            // exist under an asset directory that does not exist.
             &whisper_parts("ready", true, true),
             &ffmpeg_detection(true),
         );
@@ -1793,7 +1514,6 @@ mod tests {
 
         assert_eq!(first_stored, second_stored);
         assert_eq!(fs::read_to_string(&second_stored).unwrap(), "new text");
-        // Only one transcript file exists for the language.
         let transcripts = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
@@ -1920,9 +1640,6 @@ Bonjour le monde
         assert!(!dir.path().join("hola_100.fr.segments.json").exists());
     }
 
-    /// Builds an envelope from a voiced/silent sketch: each char is one 10 ms frame,
-    /// `#` voiced and `.` silent. Keeps these tests about the rule rather than about WAV
-    /// parsing, which `transcription.rs` covers separately.
     fn envelope(sketch: &str) -> SpeechEnvelope {
         SpeechEnvelope::from_frames(sketch.chars().map(|frame| frame == '#').collect())
     }
@@ -1980,10 +1697,6 @@ Bonjour le monde
     }
 
     /// The watch path's rule, pinned separately because it is deliberately NOT the library's.
-    ///
-    /// Generating subtitles keeps the old VAD clamp: it is verified working and frozen on
-    /// request. This test exists so that "why are there two of these" is answered by a failing
-    /// test rather than by someone deleting one of them.
     #[test]
     fn the_watch_path_still_clamps_to_vad_regions() {
         let segments = vec![RecordingSegment {

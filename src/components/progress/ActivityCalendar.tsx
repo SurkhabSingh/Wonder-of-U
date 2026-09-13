@@ -1,7 +1,5 @@
 import type { ActivityDay } from "../../types";
 
-// A full year. The column count decides cell size in a stretched grid, and a year shows
-// the start of the library as empty space rather than cropping it out.
 const WEEKS = 53;
 const DAYS_IN_WEEK = 7;
 
@@ -12,8 +10,6 @@ function level(items: number): number {
   return 3;
 }
 
-/// Labels are dates, not instants. UTC arithmetic keeps them dates; local time would shift
-/// the grid by a day for anyone west of UTC.
 function stepBack(day: string, byDays: number): string {
   const at = new Date(`${day}T00:00:00Z`);
   at.setUTCDate(at.getUTCDate() - byDays);

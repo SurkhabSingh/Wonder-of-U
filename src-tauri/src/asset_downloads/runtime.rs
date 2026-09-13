@@ -60,18 +60,6 @@ fn find_existing_managed_cli_path(
 }
 
 /// A managed whisper-cli that will not run does not count as one we have.
-///
-/// The download skipped itself whenever the file merely existed, and existence is a
-/// weak claim for an executable: antivirus can quarantine one of the DLLs beside it,
-/// an extraction can be cut short, a disk can fill. Verification did run — and then
-/// returned the error, leaving the file exactly where it was. So every retry found it
-/// again, failed again, and there was no way out through the interface; the one action
-/// that would have replaced the file was the action being refused.
-///
-/// Failing candidates are removed, because detection tests existence too
-/// (`detect_local_whisper`) and would otherwise keep reporting the runtime ready while
-/// nothing could transcribe. If the download that follows also fails, "not installed"
-/// is the truthful state to be left in.
 fn find_runnable_managed_cli_path(
     asset_directory: &Path,
     runtime_version: &str,
@@ -83,10 +71,6 @@ fn find_runnable_managed_cli_path(
 }
 
 /// Where a given runtime version stages its archive and unpacks to.
-///
-/// Version-scoped on both halves, which is why the skip-if-runnable check below can never
-/// suppress a download of a *different* version: each lives in its own directory and is
-/// searched by its own name.
 struct RuntimePaths {
     archive: PathBuf,
     install: PathBuf,
@@ -132,8 +116,6 @@ pub(super) fn whisper_runtime_plan<R: Runtime>(
         shell_start_text,
         starting_message: "Preparing the Whisper runtime download...".into(),
         starting_target_path,
-        // The snapshot and the shell genuinely disagree here — "Runtime" against "Whisper
-        // runtime" — which is why the plan carries four strings rather than two.
         cancelled_message: "Runtime download cancelled.".into(),
         cancelled_shell_text: "Whisper runtime download cancelled.".into(),
         failed_message_prefix: "Runtime download failed".into(),
@@ -142,7 +124,6 @@ pub(super) fn whisper_runtime_plan<R: Runtime>(
         failure_log_event: "whisper.runtime_download_failed",
         install: Box::new(move |context| {
             let cli_path = match find_runnable_managed_cli_path(&asset_directory, &runtime_version) {
-                // Already run by the search, so nothing to check again here.
                 Some(existing_cli_path) => existing_cli_path,
                 None => {
                     context.fetch(
@@ -158,16 +139,11 @@ pub(super) fn whisper_runtime_plan<R: Runtime>(
                                 "The runtime downloaded, but whisper-cli.exe was not found."
                                     .to_string()
                             })?;
-                    // A fresh download that cannot run is reported, not kept: leaving it
-                    // would have detection call the runtime ready on the next launch.
                     verify_managed_binary_or_remove(&downloaded_cli_path, verify_whisper_cli)?;
                     downloaded_cli_path
                 }
             };
 
-            // The two steps that make this more than a file fetch: point the settings at
-            // the version just installed, then re-read readiness so the sentence below can
-            // tell the truth about it.
             activate_managed_runtime_version(context.app(), &runtime_version)?;
             let detection = refresh_whisper_detection_state(context.app())?;
 
@@ -183,8 +159,6 @@ pub(super) fn whisper_runtime_plan<R: Runtime>(
                     "Whisper runtime {} downloaded and activated.",
                     runtime_version
                 ),
-                // This is what `Installed` returning sentences buys: a fetch can succeed
-                // and Whisper still not be usable, and only the install knows that.
                 shell_success_text: if detection.status == "ready" {
                     format!(
                         "Whisper runtime {} is ready at {}",

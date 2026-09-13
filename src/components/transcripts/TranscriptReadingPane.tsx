@@ -16,10 +16,6 @@ type ReadingRow = {
   endMs: number | null;
 };
 
-// `segmentsOverride` lets the transcript pane render from an in-session edited
-// copy of the timed segments (merge/split) instead of the document's own. When
-// absent or empty, rows fall back to the document's segments, then to untimed
-// lines split from the plain text.
 export function buildRows(
   document: RecordingTextDocument,
   segmentsOverride: RecordingSegment[] | undefined,
@@ -81,57 +77,28 @@ export function TranscriptReadingPane({
   isCjk: boolean;
   document: RecordingTextDocument | null;
   query: string;
-  // Shown when there is no transcript document at all (never transcribed).
   emptyLabel: string;
-  // Shown when a transcript document exists but carries no text — i.e. transcription
-  // ran and the recording had no detectable speech (a silent capture). Defaults to
-  // `emptyLabel` for panes (like translation) where the distinction does not apply.
   noSpeechLabel?: string;
   missingLabel: string;
   selectedSegment: string | null;
   onSelectSegment: (key: string | null) => void;
-  // Positional link shared across both panes: the row at this index is
-  // highlighted in every pane that has one. See TranscriptViewerPage for why
-  // this pairing is positional rather than semantic.
   activeSegmentIndex: number | null;
   onActivateSegment: (index: number | null) => void;
-  // The segment currently playing through the shared viewer player, used to
-  // light up the matching timed row. `undefined` onPlaySegment means playback
-  // is unavailable (e.g. the local audio was deleted).
   activeSegment: ActiveSegment | null;
   onPlaySegment: ((startMs: number, endMs: number) => void) | undefined;
-  // Sentence-mining + merge/split affordances, only wired for the transcript
-  // pane. When `editable` is false (the translation pane), none of these render.
   editable?: boolean;
   segmentsOverride?: RecordingSegment[];
-  // Undefined when mining is unavailable for the recording (local audio gone);
-  // the Mine button is then omitted while merge/split stay available.
   onMineSegment?: (index: number) => void;
   onMergeSegment?: (index: number) => void;
   onSplitSegment?: (index: number) => void;
-  // Content keys of rows mined during this session (their Mine button is spent), of
-  // rows whose sentence already exists in the deck (flagged but still mineable), and
-  // the row currently mining. Any in-flight mine disables the other rows' Mine buttons.
   minedKeys?: Set<string>;
   deckMinedKeys?: Set<string>;
   miningKey?: string | null;
   isMining?: boolean;
-  // Non-null when Anki isn't usable; becomes the disabled Mine button's tooltip.
   mineDisabledReason?: string | null;
-  // How new each line is. Built from the same `buildRows` call the viewer makes, so
-  // entry N describes row N; null when nothing has ranked this pane.
   ranking?: TranscriptRanking | null;
-  // Narrows the pane to the lines a single word away. Rows are hidden, never
-  // reordered — the order IS the recording, and reading along while listening
-  // depends on it.
   withinReachOnly?: boolean;
-  // Why a batch mine could not make a card of a row, keyed the same way mined rows
-  // are. Keyed rather than indexed so a merge or split drops the marker with the
-  // sentence it belonged to instead of moving it onto a neighbour.
   mineFailures?: Map<string, string>;
-  // The match being stepped to, when it is in THIS pane. The viewer owns the
-  // ordered list of matches across both panes; a pane only needs to know whether
-  // one of its own rows is the current one.
   activeMatch?: { index: number; occurrence: number } | null;
 }) {
   const rows = document ? buildRows(document, segmentsOverride) : [];
@@ -166,9 +133,6 @@ export function TranscriptReadingPane({
           </p>
         ) : (
           rows.map((row, index) => {
-            // Filtered rows are skipped rather than removed from the list, so
-            // `index` stays the index the sidecar, the mine action and the paired
-            // pane all agree on.
             if (withinReachOnly && ranking) {
               const line = ranking.lines[index];
               if (!line || !isWithinReach(line)) {
@@ -183,7 +147,6 @@ export function TranscriptReadingPane({
               row.endMs !== null &&
               row.startMs === activeSegment.startMs &&
               row.endMs === activeSegment.endMs;
-            // Merge/split edit only timed rows; the untimed fallback stays plain.
             const rowEditable = editable && timed;
             const mineKey = timed
               ? `${row.startMs}:${row.endMs}:${row.text}`
@@ -220,7 +183,6 @@ export function TranscriptReadingPane({
                 mined={mined}
                 minedInDeck={minedInDeck}
                 mineBusy={mineBusy}
-                // A mine in flight elsewhere blocks a second concurrent request.
                 mineDisabled={mineDisabledReason !== null || (isMining && !mineBusy)}
                 mineDisabledReason={mineDisabledReason}
                 onMerge={

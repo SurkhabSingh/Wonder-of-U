@@ -20,10 +20,6 @@ use super::{
     find_recent_recording, parse_translation_language, selected_recordings, update_recent_recording,
 };
 
-/// Where a translation job is headed: the extension provider that will run it, and
-/// the language it translates into. Both come from Settings and are always read
-/// together, and passing them as two bare `&str` in a row is one argument swap away
-/// from sending `"en"` as the provider — so they travel as one value.
 struct TranslationTarget {
     provider: String,
     language: String,
@@ -38,9 +34,6 @@ impl TranslationTarget {
     }
 }
 
-/// Long enough to cover a chunked transcript (the extension translates a long
-/// transcript in several passes) plus one lease requeue if the extension dies
-/// mid-job. See `translation_bridge::LEASE_TIMEOUT`.
 const TRANSLATION_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn remove_recording_from_history(
@@ -54,14 +47,6 @@ fn remove_recording_from_history(
     Ok(recordings.remove(index))
 }
 
-/// True when `candidate` resolves to a location inside `root`. Both sides are
-/// canonicalized (resolving `..`, symlinks, and Windows verbatim prefixes) so no
-/// stored path can name a file outside the recordings folder by spelling. A side
-/// that cannot be canonicalized is treated as outside — refused, not deleted.
-///
-/// Deliberately a copy of `import::path_is_within` rather than a shared helper:
-/// that one guards where yt-dlp may WRITE, this one guards what we may UNLINK, and
-/// the two must be able to tighten independently.
 fn path_is_within(root: &Path, candidate: &Path) -> bool {
     match (root.canonicalize(), candidate.canonicalize()) {
         (Ok(root), Ok(candidate)) => candidate.starts_with(&root),
@@ -70,17 +55,6 @@ fn path_is_within(root: &Path, candidate: &Path) -> bool {
 }
 
 /// Unlinks a removed entry's files, refusing anything outside the recordings folder.
-///
-/// `reconcile_recording_history` adopts every audio file it finds in the recordings
-/// folder, and that folder is a user-picked one: point it at a music library and
-/// those tracks become entries. Nothing here can tell an adopted file from one we
-/// created, and there is no recycle bin behind `remove_file` — so the containment
-/// check is what bounds the blast radius of a stale entry, a hand-edited state file,
-/// or an `output_directory` that has since moved, to the folder the user pointed us
-/// at.
-///
-/// A path that is already gone is not an error (the delete has nothing to do) and
-/// is not confined either — there is nothing left to protect.
 fn delete_recording_files(
     recording: &RecentRecording,
     recordings_directory: &Path,
@@ -102,9 +76,6 @@ fn delete_recording_files(
             .iter()
             .map(|transcript| transcript.file_path.clone()),
     );
-    // The per-sentence timings that go with each transcript. Stored on the transcript itself,
-    // so this needs no guessing — it was simply never collected, and a delete left a
-    // `.segments.json` for every language behind in the user's own recordings folder.
     paths.extend(
         recording
             .transcripts
@@ -137,27 +108,6 @@ fn delete_recording_files(
 }
 
 /// Every `{stem}.translation.*.txt` sitting beside the recording's audio.
-///
-/// `translation_path` names only the language translated most recently, so once the
-/// target language can change, the earlier languages' sidecars are files nothing
-/// references any more — deleting the entry would strand them on disk forever.
-///
-/// This widens WHAT may be unlinked, never WHERE: the names are built from the
-/// recording's own stem in the recording's own folder, and each one is returned as a
-/// plain candidate that `delete_recording_files` puts through the same containment
-/// check as the audio itself. A folder that cannot be read yields nothing rather than
-/// failing the delete — a translation left behind is recoverable, a failed delete of
-/// the audio is what the user actually asked for.
-/// The `.srt` files written beside a transcript, found by sweeping rather than by lookup.
-///
-/// Unlike the segments sidecar, a subtitle's path is not stored on the recording — nothing
-/// reads it back, so nothing kept it. That makes it invisible to a delete built from stored
-/// paths, and one was left behind per language every time a recording was removed.
-///
-/// Swept by prefix for the same reason `sibling_translation_paths` is: the language tag is not
-/// knowable from the recording alone once several languages exist. Every candidate still goes
-/// through the containment check below, so a sweep can only ever propose a path — it cannot
-/// widen what is allowed to be deleted.
 fn sibling_subtitle_paths(recording: &RecentRecording) -> Vec<String> {
     sibling_paths_with(recording, |name, stem| {
         name.starts_with(&format!("{stem}.")) && name.ends_with(".srt")
@@ -171,10 +121,6 @@ fn sibling_translation_paths(recording: &RecentRecording) -> Vec<String> {
 }
 
 /// Files beside the audio whose name `matches`, given the audio's own stem.
-///
-/// One implementation for both sweeps so they cannot drift into different ideas of "beside" —
-/// which directory counts, what a stem is, and that an unreadable directory yields nothing
-/// rather than failing a delete the user asked for.
 fn sibling_paths_with(
     recording: &RecentRecording,
     matches: impl Fn(&str, &str) -> bool,
@@ -216,13 +162,6 @@ pub(crate) fn playback_path(recording: &RecentRecording) -> Result<PathBuf, Stri
 }
 
 /// Why translation cannot run right now, phrased as whatever is actually wrong.
-///
-/// These are two different faults that used to share one sentence. If the bridge never
-/// claimed its port — another program holds 8791, or the previous instance had not released
-/// it yet — then there is nothing for the extension to connect TO, and telling the user to go
-/// fix the extension sends them to the one place the problem is not. The extension's own UI
-/// says "the app is not running", which is true from where it sits, so both halves pointed
-/// away from the app that failed.
 fn translation_unavailable_reason(bridge: &TranslationBridge) -> &'static str {
     if bridge.is_listening() {
         "The browser extension is not connected. Open it and select \"App Support\" mode, then try again."
@@ -250,14 +189,6 @@ fn translation_output_path(audio_path: &str, language: &str) -> PathBuf {
     directory.join(format!("{stem}.translation.{language}.txt"))
 }
 
-/// Translates a freshly created transcript, for the "translate after transcription"
-/// setting. Returns a short note for the caller to append to its own message, or
-/// `None` when there was nothing to say.
-///
-/// Translation is an optional extra here, never a reason for transcription to
-/// fail: if the extension is not connected we skip immediately rather than block
-/// the caller for the full translation timeout waiting for a worker that is not
-/// there.
 pub(crate) fn auto_translate_after_transcription<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
@@ -273,12 +204,6 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
 
     // The audio is renamed when its first transcript lands, so the caller's path
     // is the only one that still resolves.
-    //
-    // Reported rather than dropped. `None` from this function means "skipped, and there is
-    // nothing worth saying" — it is what an already-translated recording and a skipped job
-    // both answer. Returning it here would file a failure under the same heading as a
-    // success, so a caller passing the pre-rename path would silently stop translating
-    // everything and read as if it had nothing to do.
     let recording = match find_recent_recording(app, file_path) {
         Ok(recording) => recording,
         Err(error) => {
@@ -299,8 +224,6 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
         return None;
     }
 
-    // The translate-after-transcription path never forces a re-translate; `force`
-    // is only for the manual re-translate command.
     let item = translate_single_recording(
         app,
         bridge,
@@ -317,9 +240,6 @@ pub(crate) fn auto_translate_after_transcription<R: Runtime>(
     }
 }
 
-/// The translation provider the user picked in Settings, sent with every job so
-/// the extension routes on it. Falls back to the default if the settings lock is
-/// somehow poisoned rather than failing the translation.
 fn configured_translation_provider<R: Runtime>(app: &AppHandle<R>) -> String {
     app.state::<SharedPersistedState>()
         .0
@@ -339,20 +259,12 @@ fn configured_translation_target_language<R: Runtime>(app: &AppHandle<R>) -> Str
 }
 
 /// Whether the translation already on disk can stand in for the configured target.
-///
-/// "Already translated" is not a property of the recording, it is a property of the
-/// recording AND the target language: the sidecar's name is the only record of which
-/// language it holds, so a transcript translated to English before the user switched
-/// to Spanish has no Spanish translation and must be re-translated, not skipped.
 fn translation_matches_target(translation_path: Option<&str>, target_language: &str) -> bool {
     translation_path
         .map(|path| parse_translation_language(Path::new(path)) == target_language)
         .unwrap_or(false)
 }
 
-/// The transcription language from Settings — the single answer to "which transcript?",
-/// shared by the viewer, a push, and a translate. Falls back to auto-detection rather than
-/// to a specific language, so an unset value never silently means English.
 fn configured_transcription_language<R: Runtime>(app: &AppHandle<R>) -> String {
     app.state::<SharedPersistedState>()
         .0
@@ -367,12 +279,8 @@ fn translate_single_recording<R: Runtime>(
     recording: RecentRecording,
     force: bool,
     target: &TranslationTarget,
-    // Which transcript to translate FROM — the configured transcription language, the same
-    // one the viewer displays and a push sends.
     source_language: &str,
 ) -> RecordingActionItem {
-    // `force` re-translates even recordings that already have a translation in the
-    // target language, deterministically overwriting {stem}.translation.{lang}.txt.
     if !force && translation_matches_target(recording.translation_path.as_deref(), &target.language)
     {
         return RecordingActionItem {
@@ -383,18 +291,10 @@ fn translate_single_recording<R: Runtime>(
         };
     }
 
-    // Fail fast when no worker is connected: otherwise submit() queues a job that
-    // no browser ever claims and await_result() blocks for the full 180s timeout,
-    // leaving the UI stuck on the busy overlay. The auto-translate path already
-    // guards this way; the manual/re-translate path must too.
     if !bridge.is_connected() {
         return failed_translation_item(&recording, translation_unavailable_reason(bridge));
     }
 
-    // The variant for the CONFIGURED language, not whichever was transcribed last. Reading
-    // `transcript_path` meant re-translate sent whatever the most recent pass produced —
-    // a Czech transcript for a recording being read in Japanese — while the viewer showed
-    // something else entirely.
     let (transcript_path, source_lang) = match recording.transcript_source_for(&source_language) {
         Some((path, language)) => (path.to_string(), language),
         None => {
@@ -474,8 +374,6 @@ pub(crate) fn delete_recording_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
 ) -> Result<(), String> {
-    // The recordings folder is read under the same lock that removes the entry, so
-    // the containment check below cannot be racing a settings change.
     let (removed_recording, recordings_directory) = {
         let persisted_state = app.state::<SharedPersistedState>();
         let mut persisted = persisted_state
@@ -548,28 +446,6 @@ pub(crate) fn delete_recordings_inner<R: Runtime>(
 }
 
 /// Opens a path in the user's default application, passing it to Win32 as DATA.
-///
-/// This used to be `cmd /C start "" <path>`, which was the only place in the app
-/// where an argv element was handed back to a shell to re-parse. The name in that
-/// path is attacker-chosen — the app records system audio, so a video the user
-/// plays writes the transcript that `derive_transcript_stem` turns into the
-/// filename — and Rust only quotes a Windows argv element that contains a space or
-/// tab, so a stem like `a&calc&` reached `cmd` live and `calc` ran. Only the
-/// default recordings folder having a space in its name stopped that today.
-///
-/// `ShellExecuteW` takes the path as one counted string and never parses it, so the
-/// whole class is gone rather than one more character being added to a denylist.
-/// It resolves the default verb exactly as `start` did, returns as soon as the
-/// player is launched, and involves no console to hide.
-///
-/// A null `lpOperation` is what `start` uses: the file type's own default verb,
-/// rather than an "open" that a type may not register.
-///
-/// COM: `ShellExecuteW` can delegate to a Shell extension that expects an
-/// initialized apartment, and a Tauri command is not guaranteed to run on the
-/// already-initialized main thread. `RPC_E_CHANGED_MODE` means this thread is
-/// already in a different apartment — fine to proceed on, and it must NOT be
-/// balanced with a `CoUninitialize`, which is why the flag is tracked.
 #[cfg(target_os = "windows")]
 fn open_with_default_application(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
@@ -795,14 +671,6 @@ mod tests {
     }
 
     /// The sidecars a transcript writes beside the audio go with it.
-    ///
-    /// Both were missed until this was audited, and neither is visible from the app: deleting
-    /// a recording left a `.segments.json` and a `.srt` per language sitting in the user's own
-    /// recordings folder, referenced by nothing and cleaned up by nothing.
-    ///
-    /// They are found two different ways on purpose. The segments path is stored on the
-    /// transcript, so it is read. The subtitle path is stored nowhere at all — nothing reads it
-    /// back, so nothing kept it — and has to be swept for.
     #[test]
     fn the_segments_and_subtitle_sidecars_are_deleted_with_the_recording() {
         let dir = tempfile::tempdir().unwrap();
@@ -957,10 +825,7 @@ mod tests {
             Some("lesson.translation.en.txt"),
             "es"
         ));
-        // A sidecar with no language tag is English by convention, as the reader
-        // view already assumes.
         assert!(translation_matches_target(Some("lesson.translation.txt"), "en"));
-        // Never translated: nothing can stand in.
         assert!(!translation_matches_target(None, "en"));
     }
 

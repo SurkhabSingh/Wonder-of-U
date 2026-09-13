@@ -42,32 +42,10 @@ export function AnkiMappingSettingsPage({
   onUpdateSettings: (update: SettingsUpdate) => void;
   settingsDraft: AppSettings;
 }) {
-  // Creates the app's "Wonder of U Listening" note type over AnkiConnect (a listening
-  // card: audio on the front, transcript/translation on the back), then auto-maps our
-  // roles onto its fields so mining works with zero manual setup. The transcript maps
-  // to the Sentence field (field 1, so Anki dedup still works); furigana has no separate
-  // field — it is written into that same Sentence field as Anki bracket notation
-  // (漢字[かんじ]) and rendered by the template's {{furigana:}} filter.
-  //
-  // Re-running this on a note type that already exists UPDATES it rather than skipping,
-  // which is how an older note type picks up the furigana filter and hover styling.
-  // The dictionaries the add-on can answer from. Loaded only while the feature is
-  // on: it is an HTTP call to Anki, and a page nobody is configuring should not make
-  // one. Null means the answer has not arrived yet — every other outcome, Anki being
-  // closed included, arrives as a listing carrying its own message, so "still asking"
-  // is never mistaken for "asked, and this is what came back".
   const [dictionaries, setDictionaries] = useState<LookupDictionaries | null>(
     null,
   );
-  // The last listing that actually answered, kept across re-checks. Without it,
-  // pressing Refresh Anki emptied a working chooser for as long as the new request
-  // took — up to the full listing budget if Anki was mid-import — leaving the section
-  // less usable after pressing the button than before.
   const [installed, setInstalled] = useState<LookupDictionary[] | null>(null);
-  // Bumped by Refresh Anki. Without it the listing was fetched once per mount and
-  // nothing on the page could re-ask: opening Anki and pressing the one button that
-  // looks like it should help left the stale answer on screen until the user
-  // navigated away and back.
   const [dictionaryReloads, setDictionaryReloads] = useState(0);
   const definitionsOn = settingsDraft.features.addDefinitionsToMinedCards;
   const chosenIds = settingsDraft.anki.definitionDictionaryIds ?? [];
@@ -76,8 +54,6 @@ export function AnkiMappingSettingsPage({
     if (!definitionsOn) {
       return;
     }
-    // Guards against two answers to two requests landing out of order, which would
-    // leave the page showing the older one.
     let cancelled = false;
     setDictionaries(null);
     void invoke<LookupDictionaries>("lookup_dictionaries")
@@ -86,17 +62,12 @@ export function AnkiMappingSettingsPage({
           return;
         }
         setDictionaries(listing);
-        // Only an answer that listed something replaces what we already knew.
         const answered = installedDictionaries(listing);
         if (answered !== null) {
           setInstalled(answered);
         }
       })
       .catch(() => {
-        // The add-on answered and reported its own failure, or the call itself broke.
-        // The rejection carries the backend's wording, which must never be rendered —
-        // every reason worth telling apart is named in Rust and arrives as an ordinary
-        // unavailable listing, so anything reaching here gets the one fixed sentence.
         if (!cancelled) {
           setDictionaries({
             status: "unavailable",
@@ -120,29 +91,16 @@ export function AnkiMappingSettingsPage({
     });
   };
 
-  // Only dictionaries holding terms can answer with a meaning. A kanji or
-  // pitch-accent dictionary has none, so listing it offers a choice that could not
-  // do anything if taken.
   const usableDictionaries =
     installed?.filter((entry) => entry.termCount > 0) ?? [];
   const hiddenCount = (installed?.length ?? 0) - usableDictionaries.length;
 
-  // Ids that were chosen and are no longer installed. Shown rather than dropped:
-  // updating a dictionary gives it a new id, so silently discarding these would mean
-  // card meanings quietly stopping the day a dictionary is updated.
   const missingIds = missingDictionaryIds(installed, chosenIds);
 
-  // The fields of the note type this page is SHOWING, which is not always the note
-  // type the catalog describes. Every sentence below names `settingsDraft.anki.noteType`,
-  // so reading the fields off anything else produces a confident description of a
-  // different note type — the exact mistake these warnings exist to catch.
   const noteTypeFields = fieldsForNoteType(
     displayedAnkiCatalog,
     settingsDraft.anki.noteType,
   );
-  // How the saved mapping lines up with that note type. Null while its real fields are
-  // unknown, so neither a closed Anki nor a refresh still in flight can accuse the user
-  // of mapping to fields that do not exist.
   const fieldCoverage = ankiFieldCoverage(
     noteTypeFields,
     settingsDraft.anki.fields,
@@ -206,11 +164,6 @@ export function AnkiMappingSettingsPage({
             type="button"
             className="secondary"
             onClick={() => {
-              // Re-ask for the dictionaries as well as the note types. These are two
-              // different services — note types come from AnkiConnect, dictionaries
-              // from the Lookup add-on's own bridge — so they can disagree, and one
-              // can answer while the other times out. Refreshing only the first left
-              // the section below it stale with no way to re-ask.
               setDictionaryReloads((count) => count + 1);
               void onRefreshAnkiCatalog(undefined, { notifySuccess: true });
             }}
@@ -453,10 +406,6 @@ export function AnkiMappingSettingsPage({
           onChange={onUpdateAnkiField}
         />
 
-        {/* Anki has no note type by this name — renamed or deleted since it was
-            chosen. Every field row above is empty because of that, and nothing else
-            on the page says so: the picker keeps offering the saved name, so the one
-            control that could fix this looks like it is already correct. */}
         {noteTypeIsGone ? (
           <p className="microcopy field-warning">
             Anki has no note type called {settingsDraft.anki.noteType} any more, so
@@ -464,10 +413,6 @@ export function AnkiMappingSettingsPage({
           </p>
         ) : null}
 
-        {/* Nothing mapped to the first field means every push fails, so this is
-            said above the rest and worded as the blocker it is. Anki reports it as
-            an "empty" card without naming the field, which is why it has to be
-            caught here instead. */}
         {fieldCoverage?.emptyFirstField ? (
           <p className="microcopy field-warning">
             Nothing is mapped to {fieldCoverage.emptyFirstField}, the first field on{" "}
@@ -510,8 +455,6 @@ export function AnkiMappingSettingsPage({
           <ThemedSelect
             value={String(settingsDraft.anki.clipPaddingMs ?? 250)}
             options={[
-              // Surface a hand-edited value that isn't one of the presets, so the
-              // dropdown reflects the active padding instead of an empty placeholder.
               ...([0, 100, 250, 500, 750].includes(
                 settingsDraft.anki.clipPaddingMs ?? 250,
               )
@@ -567,9 +510,6 @@ export function AnkiMappingSettingsPage({
           can&rsquo;t be found the card is still made, just without it &mdash;
           and the mine says so.
         </p>
-        {/* A toggle with nowhere to write is a toggle that does nothing, and from the
-            outside that is indistinguishable from a broken feature. Say it here rather
-            than letting every mined card be the thing that reports it. */}
         {definitionsOn && !settingsDraft.anki.fields.definition ? (
           <p className="microcopy field-warning">
             Map the definitions field above for this to have anywhere to write.
@@ -596,9 +536,6 @@ export function AnkiMappingSettingsPage({
             </p>
           ) : (
             <>
-              {/* Why there is no fresh listing, shown ABOVE anything already known
-                  rather than instead of it — a re-check that fails must not take the
-                  working chooser down with it. */}
               {dictionaries !== null && dictionaries.status !== "ready" ? (
                 <p className="microcopy">{dictionaries.message}</p>
               ) : null}

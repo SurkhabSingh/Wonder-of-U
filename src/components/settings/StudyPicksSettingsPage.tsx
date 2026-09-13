@@ -20,12 +20,6 @@ import { TooltipBadge } from "../ui/Tooltip";
 import type { SettingsUpdate } from "./settingsTypes";
 import { DownloadProgressCard } from "./DownloadProgressCard";
 
-/**
- * How long a word has to have stuck before it counts. 21 days is Anki's own
- * "mature" line and the default MorphMan and AnkiMorphs both settled on; the
- * others are here because how long something has to stick before you would say
- * you know it is a genuinely personal call.
- */
 const INTERVAL_CHOICES = [7, 14, 21, 30, 60, 90];
 
 function intervalLabel(days: number): string {
@@ -35,10 +29,6 @@ function intervalLabel(days: number): string {
   return days === 1 ? "1 day" : `${days} days`;
 }
 
-/**
- * Turns the timestamp into something worth reading. The exact minute matters
- * less than whether this list is from today or from before a month of study.
- */
 function builtAgo(builtAtMs: number | null): string | null {
   if (builtAtMs === null) {
     return null;
@@ -95,10 +85,6 @@ export function StudyPicksSettingsPage({
   const knownWords = bootstrap.knownWords;
   const builtWhen = builtAgo(knownWords.builtAtMs);
 
-  // Each row picks its own note type, so each row needs THAT note type's fields —
-  // the catalog only carries the fields of the one note type mining pushes to.
-  // Cached per note type: a row re-rendering must not mean another round trip to
-  // Anki, and two rows on the same note type should cost one.
   const [fieldsByNoteType, setFieldsByNoteType] = useState<
     Record<string, string[]>
   >({});
@@ -112,17 +98,7 @@ export function StudyPicksSettingsPage({
         const catalog = await invoke<AnkiCatalog>("load_anki_catalog", {
           noteType,
         });
-        // Only an answer that reached Anki is cached. An offline catalog resolves
-        // rather than failing, carrying an empty field list because nobody was
-        // asked — and caching that MARKED THE NOTE TYPE AS ASKED. The cache key is
-        // the gate below, so nothing asked again for as long as the page stayed
-        // mounted, and opening Anki changed nothing until it was left and
-        // re-entered. The empty dropdown itself was not the damage: it is empty
-        // either way while Anki is down. Losing the retry was.
         const fields = fieldsForNoteType(catalog, noteType);
-        // Anki answered, and has no note type by this name. That is a real answer, so
-        // it is cached like any other: the gate below is "have we asked", and asking
-        // again cannot produce a different one while the note type stays deleted.
         const answered =
           fields ?? (noteTypeMissingFromAnki(catalog, noteType) ? [] : null);
         if (answered === null) {
@@ -133,18 +109,6 @@ export function StudyPicksSettingsPage({
           [noteType]: answered,
         }));
       } catch {
-        // The catalog REJECTED rather than resolving — Anki answered its health
-        // check and then failed the real call, which is what "collection is not
-        // available" looks like while a profile is closed or a sync is running.
-        // Nothing is cached, so the gate below stays open; but the only retry
-        // signal is the catalog's status string, and that does not change across
-        // this window. So a rejection inside a "ready" plateau still leaves the
-        // dropdown holding only its saved value until the page is re-entered.
-        // Known gap, same shape as the bug above, left rather than fixed here:
-        // making it retry needs a per-note-type outcome, and an outcome written
-        // into the state the effect depends on is a render loop waiting to happen.
-        // The row keeps whatever field is already saved and shows it as a plain
-        // option below, so nothing is silently blanked either way.
       }
     },
     [],
@@ -152,17 +116,6 @@ export function StudyPicksSettingsPage({
 
   // Fetches the fields for note types already chosen, so re-opening settings shows
   // real dropdowns rather than only the saved value.
-  //
-  // Skipped only when Anki is KNOWN to be down, and re-run when that changes.
-  // "idle" — the catalog before its first load — still asks, so a page opened with
-  // Anki already running fills its dropdowns without waiting on the shared catalog.
-  // The status is a dependency because it is the signal that asking is worth it
-  // again: without it, an offline first visit left the dropdowns empty until the
-  // page was unmounted and rebuilt.
-  //
-  // `.status` and not the catalog object: the poll rebuilds that object every ten
-  // seconds, so depending on it would re-run this forever. The string is equal
-  // across ticks, so a steady Anki costs nothing.
   useEffect(() => {
     if (displayedAnkiCatalog.status === "offline") {
       return;
@@ -184,18 +137,12 @@ export function StudyPicksSettingsPage({
     const result = await onScanVocabularySources();
     if (result) {
       setScan(result);
-      // The suggestions name note types not otherwise chosen, so their fields have
-      // not been fetched — do it now, or accepting one shows a dropdown with only
-      // the saved value in it.
       for (const suggestion of result.suggestions) {
         void loadFieldsFor(suggestion.noteType);
       }
     }
   };
 
-  // Compared against the live draft rather than the flag the scan came back with:
-  // a suggestion accepted a moment ago is already a source, and the scan's own
-  // answer is from before that.
   const isAlreadyASource = (suggestion: VocabularySuggestion) =>
     sources.some(
       (source) =>
@@ -214,11 +161,6 @@ export function StudyPicksSettingsPage({
   };
 
   // Fields this note type is already read from by another row.
-  //
-  // The same pair twice is not a bigger index — the sources are folded into one set, so a
-  // duplicate adds no word. What it does add is a second full walk of that note type on
-  // every refresh, over AnkiConnect, for a result already in hand. Offering a field that
-  // is spoken for is the only way one gets created, so it is not offered.
   const fieldsSpokenFor = (noteType: string, exceptIndex: number) =>
     new Set(
       sources
@@ -229,11 +171,6 @@ export function StudyPicksSettingsPage({
         .map((source) => source.field),
     );
 
-  // A row that has not been finished yet. An unfinished source is not broken — it is
-  // dropped before any query is built, so it costs nothing but the space it takes — and
-  // one is the ordinary state of a row being filled in. Several are not: the button that
-  // makes them asks nothing and reports nothing, so pressing it repeatedly used to leave a
-  // stack of identical empty rows with no way to tell which was being worked on.
   const lastSource = sources[sources.length - 1];
   const lastSourceUnfinished =
     lastSource !== undefined && (!lastSource.noteType || !lastSource.field);
@@ -246,12 +183,6 @@ export function StudyPicksSettingsPage({
     );
   };
 
-  // The one source the scan can never propose. It judges a field by how consistently
-  // it is filled, and the mined word field is empty on every card mined from a row
-  // rather than from the lookup popup — so any mixed collection scores it under the
-  // fill threshold and it is dropped before it reaches the suggestions. That test is
-  // right for someone else's deck and wrong for this one, where the mapping is not a
-  // guess: it is the setting the cards were pushed with, so it is offered outright.
   const minedNoteType = settingsDraft.anki.noteType;
   const minedWordField = settingsDraft.anki.fields.word;
   const minedWordsAreUncounted =
@@ -359,16 +290,9 @@ export function StudyPicksSettingsPage({
             }`}
           >
             <strong>{scan.message}</strong>
-            {/* Each row carries real values off the user's own cards. The scan can
-                tell a word field from a sentence field, but not a deck of single
-                kanji from a deck of words — and one look at the samples can. */}
             {scan.suggestions.map((suggestion) => (
               <div
                 className="suggestion-row"
-                // Separated by a character no Anki note type or field name can
-                // contain, so two suggestions cannot collide on one key. Written
-                // as an escape rather than typed: a raw NUL in the source makes
-                // the whole file binary to grep and every other text tool.
                 key={`${suggestion.noteType}\u0000${suggestion.field}`}
               >
                 <div className="suggestion-detail">
@@ -434,8 +358,6 @@ export function StudyPicksSettingsPage({
                 value={source.noteType}
                 options={[
                   { value: "", label: "Choose note type" },
-                  // A saved note type Anki has not listed (offline, or renamed)
-                  // stays selectable rather than silently resetting to blank.
                   ...(source.noteType &&
                   !displayedAnkiCatalog.noteTypes.includes(source.noteType)
                     ? [{ value: source.noteType, label: source.noteType }]
@@ -447,9 +369,6 @@ export function StudyPicksSettingsPage({
                 ]}
                 placeholder="Choose note type"
                 onChange={(noteType) => {
-                  // The field belongs to the old note type, so it cannot survive
-                  // the change — a stale name would read as a source that finds
-                  // nothing rather than as one that needs finishing.
                   updateSourceAt(index, { noteType, field: "" });
                   void loadFieldsFor(noteType);
                 }}
@@ -466,10 +385,6 @@ export function StudyPicksSettingsPage({
                   !(fieldsByNoteType[source.noteType] ?? []).includes(source.field)
                     ? [{ value: source.field, label: source.field }]
                     : []),
-                  // A row always offers the field it is already set to. Without that, two
-                  // rows that duplicate each other each hide the other's field, neither can
-                  // list its own value, and both dropdowns go blank — showing no field for
-                  // a source that has one, on exactly the rows that need correcting.
                   ...(fieldsByNoteType[source.noteType] ?? [])
                     .filter(
                       (field) =>
@@ -528,9 +443,6 @@ export function StudyPicksSettingsPage({
           <ThemedSelect
             value={String(settingsDraft.anki.knownWordIntervalDays ?? 21)}
             options={[
-              // A hand-edited value that is not one of the presets still shows,
-              // rather than the dropdown quietly claiming a number that is not
-              // the one in force.
               ...(INTERVAL_CHOICES.includes(
                 settingsDraft.anki.knownWordIntervalDays ?? 21,
               )

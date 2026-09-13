@@ -39,9 +39,6 @@ fn find_runnable_managed_mpv(asset_directory: &Path) -> Option<PathBuf> {
 }
 
 /// `reinstall` fetches a fresh copy even when a working one is installed.
-///
-/// The ordinary download skips in that case, which is right for "I have none" and wrong for
-/// "replace the one I have" — the second would report a download it never made.
 pub(super) fn mpv_plan<R: Runtime>(
     app: &AppHandle<R>,
     reinstall: bool,
@@ -72,10 +69,6 @@ pub(super) fn mpv_plan<R: Runtime>(
         success_log_event: "mpv.downloaded",
         failure_log_event: "mpv.download_failed",
         install: Box::new(move |context| {
-            // Skip when one is already runnable, as ffmpeg does — but only when the request
-            // is not a reinstall. A reinstall that skipped would return the success envelope
-            // below having fetched nothing, which is what the Settings button offering exactly
-            // that would have done.
             let installed = if reinstall {
                 None
             } else {
@@ -86,12 +79,8 @@ pub(super) fn mpv_plan<R: Runtime>(
                 None => {
                     context.fetch(MPV_RELEASE_URL, &paths.archive, "mpv")?;
 
-                    // Before unpacking, not after: a transfer that ends early still leaves a
-                    // file, and every other asset treats that file existing as proof it worked.
                     verify_sha256(&paths.archive, MPV_RELEASE_SHA256)?;
 
-                    // The debug symbols are four fifths of the archive and of no use to anyone
-                    // running the player.
                     extract_zip_archive_except(&paths.archive, &paths.install, |name| {
                         name.eq_ignore_ascii_case(MPV_SKIPPED_ENTRY)
                     })?;
@@ -100,8 +89,6 @@ pub(super) fn mpv_plan<R: Runtime>(
                         .into_iter()
                         .find(|candidate: &PathBuf| candidate.exists())
                         .ok_or_else(|| "mpv downloaded, but mpv.exe was not found.".to_string())?;
-                    // Detection trusts a managed binary by its presence, so one that will not
-                    // run has to go rather than keep reporting ready.
                     verify_managed_binary_or_remove(&downloaded_path, verify_mpv_binary)?;
                     downloaded_path
                 }

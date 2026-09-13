@@ -137,16 +137,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
                 definition: settings.anki.fields.definition.trim().to_string(),
                 word: settings.anki.fields.word.trim().to_string(),
             },
-            // Clamp the mined-clip padding to a sane ceiling so a hand-edited value can't
-            // produce a clip that swallows the neighbouring sentences.
             clip_padding_ms: settings.anki.clip_padding_ms.min(2000),
-            // Trimmed, and otherwise kept exactly as typed — INCLUDING half-filled
-            // rows. This used to drop them, on the reasoning that a row missing a
-            // half cannot be queried. True, but settings are also the thing the user
-            // is in the middle of editing: adding a source starts as an empty row,
-            // the autosave lands about a second later, and the row the user was
-            // filling in vanished under them. Which rows are usable is decided where
-            // they are USED, by `KnownWordsBuild::from_anki_settings`.
             vocabulary_sources: settings
                 .anki
                 .vocabulary_sources
@@ -156,11 +147,7 @@ pub(crate) fn normalize_settings<R: Runtime>(
                     field: source.field.trim().to_string(),
                 })
                 .collect(),
-            // Zero would make every word ever added "known"; the ceiling stops a hand-edited
-            // value from making the index permanently empty.
             known_word_interval_days: settings.anki.known_word_interval_days.clamp(1, 3650),
-            // De-duplicated with the order kept: the order chosen is the order the
-            // meanings appear in on the card.
             definition_dictionary_ids: {
                 let mut seen = std::collections::HashSet::new();
                 settings
@@ -194,8 +181,6 @@ pub(crate) fn normalize_settings<R: Runtime>(
             modifier: normalize_scan_modifier(&settings.scanner.modifier).into(),
             release_behavior: normalize_scan_release_behavior(&settings.scanner.release_behavior)
                 .into(),
-            // Above ~250 ms a held-modifier hover stops feeling like a lookup and starts
-            // feeling broken, so the range is capped rather than trusted.
             debounce_ms: settings.scanner.debounce_ms.min(250),
             font_family: normalize_font_family(&settings.scanner.font_family),
             font_size_px: settings.scanner.font_size_px.clamp(10, 32),
@@ -204,8 +189,6 @@ pub(crate) fn normalize_settings<R: Runtime>(
             reading_font_family: normalize_font_family(&settings.scanner.reading_font_family),
             reading_font_size_px: settings.scanner.reading_font_size_px.clamp(12, 32),
         },
-        // Format only, as with every other opaque credential-shaped value: trim it, cap it,
-        // and let Jimaku be the judge of whether it is valid.
         jimaku_api_key: settings.jimaku_api_key.trim().chars().take(200).collect(),
         theme: theme.into(),
         indicator_position: indicator_position.into(),
@@ -234,12 +217,6 @@ fn normalize_scan_release_behavior(behavior: &str) -> &str {
     }
 }
 
-/// Format only, never a whitelist.
-///
-/// This is a raw CSS `font-family` value and the UI owns which families it offers; checking
-/// it against a Rust-side list would mean a font added to the picker silently reverting.
-/// The cap exists so a corrupted state file cannot carry an unbounded string into a
-/// stylesheet, and quotes are dropped because the value is interpolated into one.
 fn normalize_font_family(family: &str) -> String {
     family
         .trim()
@@ -249,11 +226,6 @@ fn normalize_font_family(family: &str) -> String {
         .collect()
 }
 
-/// Keep the decoder-speed setting to the two values the engine branches on. Only
-/// `"fast"` drops whisper to greedy decoding; anything else, including a hand-edited
-/// value, means the untouched default beam. Case-insensitive because this is the kind of
-/// field a user edits in state.json by hand, and `"Fast"` silently reverting to Balanced
-/// with no explanation is the worst of both outcomes.
 fn normalize_decode_speed(decode_speed: &str) -> String {
     if decode_speed.trim().eq_ignore_ascii_case("fast") {
         "fast".to_string()
@@ -262,8 +234,6 @@ fn normalize_decode_speed(decode_speed: &str) -> String {
     }
 }
 
-/// Keep the persisted provider to the ids the extension actually routes on,
-/// falling back to the default for anything empty or unrecognized.
 fn normalize_translation_provider(provider: &str) -> String {
     match provider.trim() {
         "google-translate" => "google-translate".to_string(),
@@ -272,16 +242,6 @@ fn normalize_translation_provider(provider: &str) -> String {
     }
 }
 
-/// Force the target language into the one shape the extension's page providers can
-/// consume: this code is interpolated straight into a provider URL — Google's
-/// `?sl=..&tl=<code>` query and DeepL's `#<src>/<tgt>/<text>` fragment — so a
-/// stored `"JA"` or `" en "` loads a page that translates into nothing. Trimmed
-/// lowercase, falling back to English when empty.
-///
-/// Deliberately not validated against a language list: the UI owns which codes it
-/// offers, Rust owns the format. Same split as `whisper.language`, which is only
-/// normalized here as empty -> `"auto"` while the TS `LANGUAGE_OPTIONS` drives the
-/// picker.
 fn normalize_translation_target_language(language: &str) -> String {
     let normalized = language.trim().to_ascii_lowercase();
     if normalized.is_empty() {
@@ -306,20 +266,8 @@ fn normalize_directory_input(input: &str, fallback: &Path) -> PathBuf {
 }
 
 /// Longest name we let through, in characters.
-///
-/// This is only ever the START of a path: callers append `_{recording_id}`,
-/// `.transcript.txt`, `.translation.en.txt`, and a `_N` uniqueness suffix on top
-/// of a recordings folder the user chose and that may itself be deep. Windows
-/// caps a single component at 255 UTF-16 units and a whole path at 260 unless the
-/// long-path opt-in is active, so an uncapped `requested_name` from the start
-/// command builds a path that simply cannot be created. 80 leaves room for every
-/// suffix above and still fits a real transcript title.
 const MAX_RECORDING_NAME_CHARS: usize = 80;
 
-/// Names Windows resolves to a DOS device instead of a file, with or without an
-/// extension — `NUL.wav` is the device just as `NUL` is. A recording named after
-/// one either fails to create or writes into the device and is gone, so the name
-/// is pushed out of the reserved namespace rather than rejected.
 const WINDOWS_RESERVED_DEVICE_NAMES: [&str; 24] = [
     "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
     "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
@@ -334,17 +282,6 @@ fn is_windows_reserved_device_name(name: &str) -> bool {
         .any(|reserved| base.eq_ignore_ascii_case(reserved))
 }
 
-/// The single chokepoint every filename in the app passes through: recording
-/// stems, transcript-derived titles, imported and YouTube titles, and Anki media
-/// names.
-///
-/// `&`, `^`, `%`, `(`, `)` and `!` are stripped alongside the characters Windows
-/// forbids outright. They are legal in a filename, but the name is attacker-chosen
-/// — a recording is named after the transcript of whatever system audio was
-/// playing — and shell metacharacters in a filename have exactly one use. This is
-/// defense in depth only: nothing downstream may rely on it, and nothing does
-/// (`play_recording_inner` hands the path to Win32 as data, and every other
-/// spawn passes argv directly).
 pub(crate) fn sanitize_recording_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {

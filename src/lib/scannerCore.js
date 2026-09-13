@@ -1,16 +1,3 @@
-/* Vendored from the user's Anki add-on (`anki_lookup_dev/web/scanner-core.js`).
- *
- * The add-on already ships this as a UMD module with zero DOM access, zero Anki coupling
- * and no `pycmd` — it is the pure half of its popup: word segmentation, sentence and cloze
- * extraction, pitch morae and levels, popup geometry, and the lookup throttle. Reusing it
- * verbatim is what keeps the app's scanner and the add-on's from drifting on the details
- * that are easy to get subtly wrong (small-kana mora merging, sentence sanitisation, the
- * "time since last lookup" debounce floor).
- *
- * Vendored rather than imported from the add-on directory so the app builds and runs with
- * Anki absent. Body below is byte-for-byte the add-on's; only this header and the ESM
- * export at the foot are added.
- */
 (function (root, factory) {
     const api = factory();
     if (typeof module === "object" && module.exports) {

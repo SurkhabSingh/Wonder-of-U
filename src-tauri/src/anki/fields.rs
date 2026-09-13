@@ -6,15 +6,9 @@ use crate::{
 };
 
 /// Which piece of a recording a media file holds.
-///
-/// Passed as data rather than read back out of a filename, because the whole defect this
-/// exists to prevent was the part that identifies a line being lost while the name still
-/// looked plausible.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum MediaPart {
-    /// The recording itself, pushed whole.
     WholeRecording,
-    /// One line's audio, still or video clip, identified by where the line starts.
     Line { label: &'static str, start_ms: u64 },
 }
 
@@ -28,21 +22,6 @@ impl MediaPart {
 }
 
 /// Names the file Anki stores, from parts, so the piece that makes it unique cannot be lost.
-///
-/// The title is capped, the suffix never is. That ordering is the entire fix. Previously this
-/// took the temp clip's path — whose stem already ended in `_seg{start_ms}` — and ran the lot
-/// through `sanitize_recording_name`, which caps at 80 characters by truncating the END. The
-/// end is where the timestamp lives.
-///
-/// Found on a real library: `…XdmYsZnYXRI]_seg514420.mp3` reached Anki as `…_seg51442.mp3`,
-/// one digit short at 81 characters against the cap. Worse further up — a source stem of 88
-/// characters left no room for the suffix at all, so every clip from that video AND the whole
-/// recording resolved to one identical name, and `storeMediaFile` overwrote each with the next.
-/// Confirmed: one media file on disk serving every card mined from an entire video, each one
-/// playing the last sentence mined rather than its own.
-///
-/// Truncating a title is fine — two recordings sharing a name is cosmetic. Truncating the
-/// suffix silently destroys cards, so the two can no longer be truncated by the same rule.
 pub(super) fn anki_media_file_name(source_path: &Path, part: MediaPart, extension: &str) -> String {
     let suffix = part.suffix();
     let title = source_path
@@ -52,17 +31,8 @@ pub(super) fn anki_media_file_name(source_path: &Path, part: MediaPart, extensio
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "recording".into())
         .replace(' ', "_")
-        // Anki ends a `[sound:...]` reference at the FIRST `]`, so a bracket in the
-        // media filename truncates the tag and the card plays nothing. YouTube imports
-        // are always named `Title [id]`, so their mined clips carry brackets — strip
-        // both from this Anki-facing name. The on-disk source keeps its brackets; only
-        // the media reference is sanitized, and it stays consistent with storeMediaFile
-        // (which is given this same name), so the stored file and the tag still match.
         .replace(|character: char| character == '[' || character == ']', "_");
 
-    // Leave the suffix room before capping, rather than capping and hoping it fits. A title
-    // long enough to consume the whole budget yields a short title and an intact suffix, which
-    // is the right way round: the suffix is what keeps two cards apart.
     let room = MAX_ANKI_TITLE_CHARS.saturating_sub(suffix.chars().count());
     let capped: String = title.chars().take(room).collect();
     let capped = capped.trim_end_matches('.').trim_end_matches('_');
@@ -72,11 +42,6 @@ pub(super) fn anki_media_file_name(source_path: &Path, part: MediaPart, extensio
 }
 
 /// Budget for the title part of an Anki media name.
-///
-/// Matches `MAX_RECORDING_NAME_CHARS`, which this used to borrow by calling
-/// `sanitize_recording_name` and letting it cap. That function caps a *recording* name, where
-/// the end carries nothing; applying it here cost the timestamp. The number is the same and
-/// the meaning is not, so it is stated separately rather than shared.
 const MAX_ANKI_TITLE_CHARS: usize = 80;
 
 pub(super) fn html_escape(value: &str) -> String {
@@ -111,25 +76,6 @@ pub(super) fn user_friendly_anki_error(error: &str, settings: &AnkiSettings) -> 
         );
     }
 
-    // Anki refuses a note whose FIRST field is blank, and that one rule covers every way
-    // this error arrives. Three routes reach it:
-    //
-    //   * nothing is mapped to the first field. Our own note type puts the transcript
-    //     there, so this never happens on it — but on a note type built for reading,
-    //     the first field is usually the word, which nothing here writes.
-    //   * the mapped names are not on the note type. AnkiConnect drops a write to a
-    //     name it does not know without a word, so the first field ends up blank
-    //     along with the rest.
-    //   * something IS mapped to the first field and this card had nothing to put in
-    //     it — a recording that transcribed to silence, pushed with the transcript
-    //     mapped first, which is where our own note type puts it.
-    //
-    // Confirmed against a real collection: writing ONLY the 8th field of a note type is
-    // refused, writing only the 1st is accepted. The message used to name the transcript
-    // field and say it was missing, which is wrong on the first route and sends the user
-    // looking for a field that is right there. Telling them to map something to the first
-    // field is wrong on the third for the same reason, so the sentence offers the two
-    // settings to check and then says what it means if both are already right.
     if normalized.contains("empty") {
         return format!(
             "Anki rejected the card because the first field on '{}' was blank, and Anki refuses any note that starts empty. Check in Settings that something is mapped to that field and that the name still exists on the note type; if both are right, this card had nothing to put there.",
@@ -252,11 +198,6 @@ mod tests {
 
     #[test]
     fn the_empty_card_error_blames_the_first_field_not_the_transcript_field() {
-        // Anki refuses a note whose FIRST field is blank. Proven against a real
-        // collection: writing only Lapis's 8th field is refused, writing only its 1st
-        // is accepted. The message used to say the transcript field was no longer on
-        // the note type — false whenever that field exists and simply is not first,
-        // and it sent the user hunting for a field sitting in front of them.
         let message = user_friendly_anki_error(
             "cannot create note because it is empty",
             &settings_for("Lapis", "Sentence"),
@@ -297,7 +238,6 @@ mod tests {
         assert!(
             user_friendly_anki_error("deck was not found", &settings).contains("wonder of u")
         );
-        // Anything unrecognised still carries Anki's own words rather than a guess.
         assert!(user_friendly_anki_error("kaboom", &settings).contains("kaboom"));
     }
 

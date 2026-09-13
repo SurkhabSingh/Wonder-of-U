@@ -1,19 +1,3 @@
-//! One download at a time, but you can ask for several.
-//!
-//! Clicking Download on a second asset while one is running used to fail with "Another download
-//! is already in progress." It waits its turn now. First run needs the same thing — fetch the
-//! runtime, then the model, then ffmpeg, without anyone standing over it — so it is one
-//! mechanism rather than two.
-//!
-//! **Sequential, not parallel, and that is a deliberate limit.** Two transfers at once would
-//! share one connection, so total time barely moves unless the server rather than the link is
-//! the bottleneck — and six things would break: releasing the download slot is global, so the
-//! first to finish would clear `paused` for the rest; `shell.phase` is a single value; Pause and
-//! Cancel take no argument and so could not say which; one snapshot cannot describe two
-//! transfers; the emit cost multiplies; and the model and runtime each read-modify-write the
-//! whole persisted settings after installing, so running them together can lose one's change.
-//! A queue keeps exactly one download active, and every one of those stays true.
-
 use std::collections::VecDeque;
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -27,47 +11,21 @@ use super::asset::AssetKind;
 use super::envelope::{run_asset_download, AssetDownloadPlan};
 use super::transfer::update_model_download_snapshot;
 
-/// One thing the user has asked for.
-///
-/// Not a bare [`AssetKind`], and the reason is two assets that `AssetKind` cannot tell apart.
-/// The whisper runtime installs versions side by side, so "download the runtime" is an
-/// incomplete request — it has to say which. And the speech detector deliberately reports as
-/// `AssetKind::Model` so it shares the model's progress card, which would make `Model`
-/// ambiguous between two genuinely different downloads.
-///
-/// So this lists what can be *asked for*, while `AssetKind` stays what gets *reported*. Seven
-/// variants, one per real request, and `plan_for` matches all of them — a seventh asset will
-/// not compile until it is wired in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum QueuedDownload {
     WhisperModel,
     WhisperVadModel,
     WhisperRuntime { version: String },
-    /// `reinstall` fetches a fresh copy over one that is already installed and working.
-    ///
-    /// It exists because the ordinary download deliberately SKIPS when a runnable ffmpeg is
-    /// already present, which is right when the request means "I have none" and wrong when it
-    /// means "replace the one I have". Carrying the intent on the request keeps the skip honest
-    /// rather than adding a second way in — and the two are different requests to the queue, so
-    /// a reinstall is never mistaken for a duplicate of a pending first install.
-    ///
-    /// Safe ordering is a property of the plan, not of this flag: extraction clears the install
-    /// directory, so the working copy is only replaced once the new archive is on disk.
     Ffmpeg { reinstall: bool },
     Ytdlp,
     Alass,
     Dictionary,
-    /// `reinstall` carries the same meaning as it does for ffmpeg: fetch a fresh copy over one
-    /// that already works. Without it the Settings button that offers exactly that skips the
-    /// fetch and reports a download that never happened.
     Mpv { reinstall: bool },
 }
 
 impl QueuedDownload {
-    /// Which asset the progress card should attribute this to.
     pub(crate) fn kind(&self) -> AssetKind {
         match self {
-            // The detector is part of provisioning the model, and belongs in its card.
             QueuedDownload::WhisperModel | QueuedDownload::WhisperVadModel => AssetKind::Model,
             QueuedDownload::WhisperRuntime { .. } => AssetKind::Runtime,
             QueuedDownload::Ffmpeg { .. } => AssetKind::Ffmpeg,
@@ -79,11 +37,6 @@ impl QueuedDownload {
     }
 
     /// Refusal shown when the app is mid-task — recording, or transcribing.
-    ///
-    /// It lives with the request rather than being passed in by the command, because it names
-    /// the asset and everything that names an asset belongs in one place. It is emphatically
-    /// NOT "another download is already in progress": that is what the queue exists to stop
-    /// being an error, and saying it here would describe the wrong condition entirely.
     fn busy_message(&self) -> &'static str {
         match self {
             QueuedDownload::WhisperModel => {
@@ -107,19 +60,10 @@ impl QueuedDownload {
 }
 
 /// What is waiting, what is running, and whether anyone is working through it.
-///
-/// `running` sits beside `pending` under one lock on purpose. "Is a worker alive" and "is there
-/// anything left" have to be decided together — otherwise a worker that finds the queue empty
-/// can stop being the worker at the same moment an enqueue decides not to start one, and the
-/// request sits there forever.
 #[derive(Default)]
 pub(crate) struct DownloadQueue {
     pending: VecDeque<QueuedDownload>,
-    /// What the active download is, so a repeat press is recognised as a duplicate rather than
-    /// queued behind itself.
     active: Option<QueuedDownload>,
-    /// Whether a worker thread is alive. True *between* items too, when `active` is `None`,
-    /// which is why both fields exist.
     running: bool,
 }
 
@@ -130,9 +74,6 @@ impl DownloadQueue {
 }
 
 /// Refuses while the app is busy with something else.
-///
-/// Checked once per *queue*, not once per download: the phase is `"downloading-model"` for as
-/// long as the queue runs, so a per-download check would reject every item after the first.
 fn refuse_when_app_is_busy<R: Runtime>(app: &AppHandle<R>, busy_message: &str) -> Result<(), String> {
     let shell_state = app.state::<SharedShellState>();
     let shell = shell_state
@@ -146,9 +87,6 @@ fn refuse_when_app_is_busy<R: Runtime>(app: &AppHandle<R>, busy_message: &str) -
 }
 
 /// Adds a request to the queue, starting a worker if nothing is working yet.
-///
-/// Pressing the same button twice is harmless: a request already active or already waiting is
-/// ignored rather than queued behind itself.
 pub(crate) fn enqueue_download<R: Runtime>(
     app: &AppHandle<R>,
     request: QueuedDownload,
@@ -163,7 +101,6 @@ pub(crate) fn enqueue_download<R: Runtime>(
             return Ok(());
         }
         queue.pending.push_back(request.clone());
-        // Claiming the right to run happens in the same lock as observing that nobody has it.
         let should_start = !queue.running;
         if should_start {
             queue.running = true;
@@ -172,23 +109,15 @@ pub(crate) fn enqueue_download<R: Runtime>(
     };
 
     if !should_start {
-        // A worker is already going; it will pick this up when it finishes the current item.
         publish_queue_depth(app);
         return Ok(());
     }
 
-    // Only the request that starts the queue is subject to the busy check, and it is checked
-    // AFTER claiming the run so two simultaneous presses cannot both decide to start.
     if let Err(busy) = refuse_when_app_is_busy(app, request.busy_message()) {
-        // Claimed the right to run and cannot use it, so hand it straight back — otherwise the
-        // queue is left marked running with no worker, and every later request waits forever.
         abandon_queue(app);
         return Err(busy);
     }
 
-    // The worker owns the phase for the whole queue — set once here, cleared once when it
-    // drains. Doing it per download would flick to "idle" between items, and a recording
-    // started in that gap would make the next item fail the check above.
     update_shell_snapshot(app, |shell| {
         shell.phase = "downloading-model".into();
         shell.started_at_ms = None;
@@ -215,20 +144,13 @@ pub(crate) fn enqueue_download<R: Runtime>(
 /// What the worker should do next.
 enum NextRequest {
     Run(QueuedDownload),
-    /// Nothing left, and this worker has stopped being the worker.
     Drained,
 }
 
 /// Takes the next request, or retires.
-///
-/// Both outcomes happen under one lock, which is what makes the retirement safe: an enqueue
-/// arriving afterwards sees `running == false` and starts a fresh worker, and one arriving
-/// before is still in `pending` and comes back as `Run`.
 fn take_next<R: Runtime>(app: &AppHandle<R>) -> NextRequest {
     let state = app.state::<ModelDownloadQueueState>();
     let Ok(mut queue) = state.0.lock() else {
-        // A poisoned lock means the queue can no longer be trusted; stopping is the only
-        // honest option, and the shell phase is released by the caller either way.
         return NextRequest::Drained;
     };
     match queue.pending.pop_front() {
@@ -247,8 +169,6 @@ fn take_next<R: Runtime>(app: &AppHandle<R>) -> NextRequest {
 /// Empties the queue and retires the worker. Used when a download fails or is cancelled.
 fn abandon_queue<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<ModelDownloadQueueState>();
-    // `let … else` rather than `if let`: an `if let` scrutinee temporary outlives the `state`
-    // binding it borrows from, which the compiler refuses.
     let Ok(mut queue) = state.0.lock() else {
         return;
     };
@@ -258,10 +178,6 @@ fn abandon_queue<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Tells the card how many requests are still waiting, so it can say "2 more queued".
-///
-/// Read and released before writing, rather than writing under the queue lock: nothing else
-/// takes these two locks in the other order today, and keeping it that way is cheaper than
-/// remembering not to.
 fn publish_queue_depth<R: Runtime>(app: &AppHandle<R>) {
     let depth = {
         let state = app.state::<ModelDownloadQueueState>();
@@ -276,17 +192,6 @@ fn publish_queue_depth<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Puts the item about to run into the snapshot, before anything that can fail.
-///
-/// Two things went wrong without this. The card is shown for as long as the shell phase is held,
-/// but everything inside it reads the snapshot STATUS — so between one item completing and the
-/// next reporting, the card announced "Download in progress" over a finished bar with no Cancel
-/// button. And `report_queue_error` writes "failed" directly when `plan_for` fails, with no
-/// non-terminal status in between, so a second press on the same broken condition was a
-/// "failed" to "failed" transition that the edge-triggered toast could not see: the button did
-/// nothing, twice, silently.
-///
-/// Claiming the snapshot here gives every item a real transition of its own, which fixes both
-/// without either surface needing a guard of its own.
 fn claim_snapshot_for<R: Runtime>(app: &AppHandle<R>, request: &QueuedDownload) {
     let depth = {
         let state = app.state::<ModelDownloadQueueState>();
@@ -322,10 +227,6 @@ fn drive_queue<R: Runtime>(app: &AppHandle<R>) {
             }
         };
 
-        // A failure stops the queue. Carrying on reads better in the abstract, but the next
-        // item's "starting" snapshot would immediately paint over the failure and the user
-        // would never learn what went wrong. Whatever did not run is simply still not
-        // downloaded, so retrying is one press.
         if run_asset_download(app, plan).is_err() {
             abandon_queue(app);
             break;
@@ -353,9 +254,6 @@ fn report_queue_error<R: Runtime>(app: &AppHandle<R>, kind: AssetKind, error: &s
 }
 
 /// Turns a request into the plan that performs it.
-///
-/// The one place that names every request, so `QueuedDownload`'s exhaustiveness is what forces
-/// a new asset to be wired in here before it can compile.
 fn plan_for<R: Runtime>(
     app: &AppHandle<R>,
     request: &QueuedDownload,
@@ -379,10 +277,6 @@ mod tests {
     use super::{AssetKind, DownloadQueue, QueuedDownload};
 
     /// The queue's own bookkeeping, without a Tauri app.
-    ///
-    /// `take_next` and `enqueue_download` need an `AppHandle` for the snapshot and the shell, so
-    /// what is tested here is the decision each of them makes: whether a request is already
-    /// wanted, and what a pop leaves behind. Those are where a queue goes wrong.
     fn queue_with(pending: &[QueuedDownload]) -> DownloadQueue {
         let mut queue = DownloadQueue::default();
         for request in pending {

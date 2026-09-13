@@ -100,12 +100,6 @@ fn recording_from_audio_path(audio_path: &Path, target_language: &str) -> Option
 }
 
 /// Resolve the one translation to show for an adopted recording.
-///
-/// A recording can have a sidecar per language the user has ever targeted, and the
-/// library shows a single translation — so picking whichever one `read_dir` happens
-/// to yield first makes the displayed language depend on directory order. Prefer the
-/// configured target, and fall back to any match so a recording translated before the
-/// setting existed still resolves instead of silently losing its translation.
 fn find_translation_path(directory: &Path, stem: &str, target_language: &str) -> Option<String> {
     let prefix = format!("{stem}.translation.");
     let candidates = fs::read_dir(directory)

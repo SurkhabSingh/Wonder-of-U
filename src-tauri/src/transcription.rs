@@ -18,39 +18,16 @@ use crate::{child_io::drain_lines, media_errors::stderr_indicates_no_audio};
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Cap a VAD speech region so whisper always gets a clip inside its 30 s window; longer
-/// continuous speech is auto-split by the VAD. Passed to `--vad-max-speech-duration-s`.
 const VAD_MAX_SPEECH_SECONDS: &str = "20";
 
-/// The error string a transcription returns once it has been cancelled. Callers compare
-/// against it to treat a Cancel as a clean stop rather than a failure.
 pub const TRANSCRIPTION_CANCELLED: &str = "transcription cancelled.";
 
 /// The one whisper-cli slot, and the single fact that decides whether a run may start.
-///
-/// There are two entry points — the library batch and the video library's subtitle generator —
-/// and until this existed neither actually excluded the other. The generator READ `shell.phase`
-/// but never wrote it; the batch WROTE it but never read it. So starting a generation and then
-/// pressing Transcribe refused nothing: two whisper-cli processes, each asking for the full
-/// `-t` thread count, so the CPU-usage setting quietly doubled. Worse, both register a listener
-/// for the same global `transcription-cancel` event — Tauri's `once` means "fires once then
-/// unregisters", not "only one listener" — so one Cancel killed both runs.
-///
-/// A flag rather than a mutex because the answer wanted is "is one already running", not "wait
-/// until it is not": the second request is refused and told why, rather than parked on a lock
-/// where the UI would look frozen.
 static WHISPER_SLOT_BUSY: AtomicBool = AtomicBool::new(false);
 
-/// Claims the whisper slot for as long as it is alive.
-///
-/// Released on `Drop`, so every early return, `?`, and panic unwind puts it back — the failure
-/// this shape prevents is a refused claim that never gets released, which would wedge every
-/// later transcription until the app restarts. Mirrors `DownloadSlotGuard`, which owns the
-/// download slot for exactly the same reason.
 pub struct WhisperSlotGuard;
 
 impl WhisperSlotGuard {
-    /// Claims the slot, or reports what is already using it.
     pub fn acquire(busy_message: &str) -> Result<Self, String> {
         WHISPER_SLOT_BUSY
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -65,93 +42,43 @@ impl Drop for WhisperSlotGuard {
     }
 }
 
-/// How often the wait wakes to re-read the cancel flag while whisper-cli's pipes are silent.
-/// This bounds how long Cancel can appear to do nothing. Mirrors the yt-dlp downloader.
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct WhisperTranscriptionRequest {
     pub cli_path: PathBuf,
     pub model_path: PathBuf,
-    /// whisper.cpp's built-in Silero VAD ggml model. VAD segments the audio into speech
-    /// regions — drift-free absolute timestamps, and non-speech (music/silence) yields no
-    /// text — superseding the old overlapping-chunk approach.
     pub vad_model_path: PathBuf,
     pub audio_path: PathBuf,
     pub language: String,
-    /// ffmpeg, used to decode the recording to the 16 kHz mono WAV whisper + VAD require.
     pub ffmpeg_path: PathBuf,
-    /// whisper-cli worker-thread count (`-t`), derived from the user's CPU-usage preference
-    /// via `transcription_thread_count`. Bounds how much of the machine a long transcription
-    /// consumes so it never maxes out the box.
     pub thread_count: usize,
-    /// When true, transcribe in "music" mode: skip Silero VAD entirely so a full song
-    /// transcribes. VAD rejects sung vocals over backing music and stalls partway through a
-    /// song at any threshold; the cost is whisper's own, looser timestamps. False keeps the
-    /// normal VAD-anchored speech behaviour, unchanged.
     pub music_mode: bool,
-    /// When true, decode greedily (`-bs 1 -bo 1`) instead of with whisper's default beam
-    /// search. Measured on this app's own audio: 23% faster on conversation, 13% on sung
-    /// vocals, with differences that are lateral (kana vs kanji, punctuation, where a
-    /// sentence is split) rather than worse. False keeps whisper's defaults untouched.
     pub fast_decode: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct WhisperTranscriptionResult {
     pub transcript_path: PathBuf,
-    /// Expected path of whisper's `--output-json` sidecar carrying per-segment offsets. It
-    /// may not exist if whisper skipped writing it; callers parse it best-effort and never
-    /// fail transcription over a missing json.
     pub json_path: PathBuf,
-    /// The speech regions Silero VAD found, scraped from whisper's own stderr.
-    ///
-    /// Empty in music mode, which runs no VAD, and empty if a future runtime stops printing
-    /// the lines. Both must degrade to leaving cue ends exactly as whisper reported them.
     pub speech_regions: Vec<SpeechRegion>,
-    /// Where the audio is loud enough to be speech, measured from the decoded WAV.
-    ///
-    /// `None` when the WAV could not be read, which must leave every timestamp exactly as
-    /// whisper reported it.
     pub speech_envelope: Option<SpeechEnvelope>,
 }
 
 /// One bit per 10 ms of audio: was anyone speaking.
-///
-/// Deliberately measured from the waveform rather than taken from Silero. The VAD answers a
-/// harder question — *is this speech* — and on Japanese it answers "no" to a sentence-final
-/// です or ます, which are devoiced and quiet but are exactly the syllables a learner needs to
-/// hear. Loudness relative to this recording's own noise floor has no such opinion: it only
-/// asks whether there is signal, and a trailing syllable still has signal.
-///
-/// Used to pull a cue in to the speech it holds. It can only ever shrink a cue, so a wrong
-/// answer costs a little dead air, never a word.
 #[derive(Debug, Clone)]
 pub struct SpeechEnvelope {
-    /// One entry per `FRAME_MS` of audio, in order.
     voiced: Vec<bool>,
 }
 
-/// The resolution of the envelope. 10 ms is far finer than any boundary we move and keeps a
-/// ten-minute recording's envelope under 60 KB.
 const FRAME_MS: usize = 10;
 
 /// Where to put the speech/silence line between the noise floor and the speech level.
-///
-/// Low enough to keep a devoiced syllable on the speech side — that is the whole reason this
-/// exists — and high enough that room tone does not read as talking. Both ends are taken from
-/// the recording itself, so a quiet lapel mic and a loud rip get the same treatment.
 const SPEECH_FRACTION: f32 = 0.45;
 
 impl SpeechEnvelope {
-    /// Reads the 16 kHz mono WAV whisper was given and measures per-frame loudness.
-    ///
-    /// The file is the one `decode_to_wav_16k` just wrote, so its format is known rather than
-    /// guessed; anything unexpected returns `None` and leaves timings untouched.
     pub fn from_wav_16k_mono(path: &Path) -> Option<Self> {
         let bytes = fs::read(path).ok()?;
-        // Walk the RIFF chunks to `data` rather than assuming the 44-byte canonical header —
-        // ffmpeg writes a LIST/INFO chunk ahead of it often enough to matter.
         let mut offset = 12usize;
         let data = loop {
             if offset + 8 > bytes.len() {
@@ -163,7 +90,6 @@ impl SpeechEnvelope {
             if id == b"data" {
                 break bytes.get(body..(body + size).min(bytes.len()))?;
             }
-            // Chunks are word-aligned, so an odd size carries a pad byte.
             offset = body + size + (size & 1);
         };
 
@@ -188,8 +114,6 @@ impl SpeechEnvelope {
 
         let noise = percentile(&decibels, 0.10);
         let speech = percentile(&decibels, 0.85);
-        // A recording with no dynamic range at all — pure tone, pure silence — has no floor to
-        // measure against, and trimming it would be guesswork.
         if speech - noise < 6.0 {
             return None;
         }
@@ -200,19 +124,11 @@ impl SpeechEnvelope {
         })
     }
 
-    /// Builds an envelope directly from per-frame flags, for tests that are about the
-    /// trimming rule rather than about decoding a WAV.
     #[cfg(test)]
     pub fn from_frames(voiced: Vec<bool>) -> Self {
         Self { voiced }
     }
 
-    /// Pulls `[start_ms, end_ms]` in to the speech inside it, keeping `pad_ms` either side.
-    ///
-    /// Shrink-only and total: the result is always within the window it was given, so a cue
-    /// can never grow into its neighbour and the text can never lose audio it did not already
-    /// lack. A window holding no detected speech is returned untouched — a hallucination over
-    /// silence keeps whisper's own timings rather than collapsing to nothing.
     pub fn trim(&self, start_ms: u64, end_ms: u64, pad_ms: u64) -> (u64, u64) {
         if end_ms <= start_ms {
             return (start_ms, end_ms);
@@ -249,10 +165,7 @@ fn percentile(values: &[f32], fraction: f32) -> f32 {
     sorted[index.min(sorted.len() - 1)]
 }
 
-/// A fixed ASCII output base for whisper's `--output-file`. We deliberately do NOT derive it
-/// from the audio file stem: whisper-cli reads argv through the Windows ANSI code page, so a
-/// non-ASCII stem (e.g. a Japanese recording name) would be mangled into a "?"-filled path
-/// that whisper then fails to write.
+/// A fixed ASCII output base for whisper's `--output-file`. 
 fn transcript_output_base() -> PathBuf {
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -292,12 +205,6 @@ impl Drop for TempCleanup {
 
 /// True for whisper-cli's routine chatter — the load banner, VAD/timing tables, and the
 /// progress callback. Dropping it is what keeps a real `error:` line visible.
-///
-/// This matters because the app no longer passes `--no-prints` (that flag also suppressed
-/// the segment lines the live transcript is built from). Without filtering, the first
-/// lines of stderr are the banner on *every* run, so `cap_details` would report the
-/// banner instead of the failure, and the bounded sink would fill with noise long before
-/// a late error arrived.
 fn is_whisper_noise_line(line: &str) -> bool {
     const PREFIXES: [&str; 10] = [
         "load_backend:",
@@ -330,10 +237,6 @@ fn push_diagnostic_line(sink: &Arc<Mutex<String>>, line: &str) {
 
 /// Caps a stderr/stdout dump so a whisper usage/help splurge never surfaces as a giant
 /// user-facing error: the most explanatory 3 lines, then hard-limited to ~400 chars.
-///
-/// An explicit `error:` line is promoted to the front. whisper-cli reports some failures
-/// (an unreadable audio file, say) on a line well after other output *and still exits 0*,
-/// so taking the first lines positionally can report everything except the reason.
 fn cap_details(details: String) -> String {
     const MAX_CHARS: usize = 400;
     fn is_error(line: &str) -> bool {
@@ -365,10 +268,7 @@ fn hide_command_window(command: &mut Command) {
 }
 
 /// Maps the user's CPU-usage preference to a whisper-cli `-t` worker-thread count so a long
-/// transcription never has to max out the machine. `"high"` uses most cores but leaves a
-/// couple free, `"low"` uses about a quarter, and anything else (the `"balanced"` default)
-/// uses about half. Always at least one thread. whisper-cli defaults to 4 threads, which
-/// idles bigger CPUs, so we compute from the actual core count.
+/// transcription never has to max out the machine.
 pub(crate) fn transcription_thread_count(cpu_usage: &str) -> usize {
     let cores = std::thread::available_parallelism()
         .map(|c| c.get())
@@ -422,13 +322,6 @@ pub fn verify_whisper_vad_model(vad_model_path: &Path) -> Result<(), String> {
 
 /// Parse a whisper-cli segment line — `[00:00:06.830 --> 00:00:13.490]  text` — into
 /// absolute millisecond bounds and its text. Non-segment lines return `None`.
-///
-/// These are the same segments the `--output-json` sidecar ends up holding, printed as
-/// each one is decoded. Verified line-for-line against the sidecar on a VAD run (29/29,
-/// offsets and text identical), so a live row is never revised once the run finishes.
-/// Music mode skips VAD and was not part of that check — the stream is display-only, and
-/// the saved transcript is read from the sidecar either way, so a drift there would cost
-/// accuracy of the live preview only.
 fn parse_whisper_segment_line(line: &str) -> Option<(u64, u64, String)> {
     let inner = line.trim().strip_prefix('[')?;
     let (span, text) = inner.split_once(']')?;
@@ -455,10 +348,6 @@ fn parse_whisper_timestamp(value: &str) -> Option<u64> {
         return None;
     }
     let millis = millis.parse::<u64>().ok()?;
-    // Checked throughout: this parses a subprocess's stdout on the drain thread, where a
-    // debug-build overflow panic would kill the drain — and the drain owns the EOF signal
-    // the wait loop depends on, so the panic would present as a frozen, uncancellable run
-    // rather than an error. A nonsense hour count is simply not a timestamp.
     hours
         .checked_mul(60)?
         .checked_add(minutes)?
@@ -470,32 +359,19 @@ fn parse_whisper_timestamp(value: &str) -> Option<u64> {
 
 /// One region Silero VAD judged to be speech, in absolute milliseconds against the source
 /// audio.
-///
-/// This is the ground truth for where speech actually stops, which whisper's own cue ends do
-/// not give us. A cue end is the mapped position of a processed-timeline offset, so it lands
-/// on the last region the cue spans and quietly absorbs every silence in between: measured on
-/// real material, `大丈夫ですか?` occupied a 6.04 s cue holding 1.0 s of speech. Cue *starts*
-/// are exact, so only ends need this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpeechRegion {
     pub start_ms: u64,
     pub end_ms: u64,
 }
 
-/// Which of whisper's two VAD log lines a region came from. They describe the same regions,
-/// so mixing them would double every entry — see `VadRegionLog::into_regions`.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SpeechRegionSource {
-    /// `whisper_vad: vad_segment_info: orig_start: … orig_end: …`, printed by the consumer
-    /// after merging and filtering — the regions whisper actually decoded.
     Mapped,
-    /// `whisper_vad_segments_from_probs: VAD segment N: start = … end = …`, printed by the
-    /// detector before merging.
     Probe,
 }
 
-/// Both VAD region lists as they arrive on stderr, so the better one can be chosen at the end
-/// rather than guessed at while parsing.
 #[derive(Debug, Default)]
 struct VadRegionLog {
     mapped: Vec<SpeechRegion>,
@@ -510,9 +386,6 @@ impl VadRegionLog {
         }
     }
 
-    /// The mapped list wins when present: it survives merging and filtering, so it matches
-    /// what was decoded. The probe list is the fallback for a build that stops printing the
-    /// mapping — better a slightly pre-merge region list than none.
     fn into_regions(self) -> Vec<SpeechRegion> {
         if self.mapped.is_empty() {
             self.probe
@@ -522,20 +395,13 @@ impl VadRegionLog {
     }
 }
 
-/// Which way to break a tie finer than a millisecond.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Rounding {
-    /// For a region start: never later than the speech.
     Down,
-    /// For a region end: never earlier than the speech.
     Up,
 }
 
 /// Seconds as whisper prints them (`1.92`) → milliseconds.
-///
-/// Digit-wise rather than `f64 * 1000.0` deliberately. 1.92 has no exact binary float, so the
-/// product is 1919.999…, and flooring that to honour "a start never rounds later" would lose a
-/// millisecond off almost every region. Integer digits cannot drift.
 fn parse_vad_seconds(value: &str, round: Rounding) -> Option<u64> {
     let value = value.trim();
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
@@ -551,9 +417,6 @@ fn parse_vad_seconds(value: &str, round: Rounding) -> Option<u64> {
         0 => 0,
         _ => millis_digits.parse::<u64>().ok()? * 10u64.pow(3 - millis_digits.len() as u32),
     };
-    // Checked for the same reason `parse_whisper_timestamp` is: this runs on the drain thread
-    // that owns the EOF signal, so a debug-build overflow panic there would present as a
-    // frozen, uncancellable run rather than an error.
     let total = whole
         .parse::<u64>()
         .ok()?
@@ -568,7 +431,6 @@ fn parse_vad_seconds(value: &str, round: Rounding) -> Option<u64> {
     }
 }
 
-/// The digits immediately following `key`, so `orig_start: 1.92,` yields `1.92`.
 fn value_after<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let rest = line.split_once(key)?.1.trim_start();
     let end = rest
@@ -578,11 +440,6 @@ fn value_after<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Parse one of whisper's two VAD region lines into an absolute speech region.
-///
-/// Both forms are handled because this reads an INFO log, not an API, and the whisper runtime
-/// is user-upgradable (`download_whisper_runtime_version`) — a rename in either line must not
-/// silently take the clamp with it. `run_whisper_once`'s caller warns when VAD ran and no
-/// region parsed at all, which is the tripwire for exactly that.
 fn parse_vad_region_line(line: &str) -> Option<(SpeechRegionSource, SpeechRegion)> {
     let (source, start, end) = if line.contains("vad_segment_info:") {
         (
@@ -617,19 +474,11 @@ fn parse_whisper_progress_line(line: &str) -> Option<u8> {
     Some(value.min(100) as u8)
 }
 
-/// Shown when the media handed to transcription carries no audio track. Reached from
-/// the Video Library's "Generate subtitles", which passes the video itself as the
-/// audio — there is no gate between a silent file and this decode, and whisper has
-/// nothing to hear.
+/// Shown when the media handed to transcription carries no audio track.
 const NO_AUDIO_MESSAGE: &str = "This video has no sound, so there is nothing to transcribe.";
 
 /// What a failed decode reports. Kept pure so both branches can be asserted without
 /// spawning ffmpeg.
-///
-/// `-map 0:a:0` against a source with no audio track is the one failure here that is
-/// not a fault: the user handed over a silent video, which the Video Library accepts
-/// without probing for streams. Everything else keeps ffmpeg's own words, which are
-/// the only clue there is.
 fn decode_failure_message(stderr: &str) -> String {
     if stderr_indicates_no_audio(stderr) {
         NO_AUDIO_MESSAGE.to_string()
@@ -639,8 +488,7 @@ fn decode_failure_message(stderr: &str) -> String {
 }
 
 /// Decodes any recording to a 16 kHz mono s16le WAV at an ASCII temp path — the format
-/// whisper.cpp and its Silero VAD want. ffmpeg handles non-ASCII *input* paths on Windows,
-/// and the ASCII output name feeds whisper-cli cleanly.
+/// whisper.cpp and its Silero VAD want.
 fn decode_to_wav_16k(ffmpeg_path: &Path, input: &Path) -> Result<PathBuf, String> {
     let unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -669,10 +517,6 @@ fn decode_to_wav_16k(ffmpeg_path: &Path, input: &Path) -> Result<PathBuf, String
         .output()
         .map_err(|error| format!("Could not run ffmpeg to decode the recording: {error}"))?;
     if !result.status.success() {
-        // The caller's `TempCleanup` only starts tracking this path once the decode
-        // has returned Ok, so on the way out nothing else owns whatever ffmpeg left
-        // at it. (For the no-audio failure below there is nothing to remove — ffmpeg
-        // gives up while parsing the output options, before it opens the file.)
         let _ = fs::remove_file(&output);
         return Err(decode_failure_message(&String::from_utf8_lossy(
             &result.stderr,
@@ -703,26 +547,18 @@ pub fn run_whisper_transcription(
 ) -> Result<WhisperTranscriptionResult, String> {
     verify_whisper_cli(&request.cli_path)?;
     verify_whisper_model(&request.model_path)?;
-    // Music mode skips VAD, so it does not need the VAD model present.
     if !request.music_mode {
         verify_whisper_vad_model(&request.vad_model_path)?;
     }
 
-    // A Cancel that arrived before the decode started skips it entirely — there is no point
-    // decoding audio for a transcription that will never run.
     if cancel.load(Ordering::Relaxed) {
         return Err(TRANSCRIPTION_CANCELLED.into());
     }
 
-    // Decode to the 16 kHz mono WAV whisper + Silero VAD want. The decoded WAV is a tracked
-    // temp file cleaned up on every return path.
     let mut temps = TempCleanup::new();
     let wav_path = decode_to_wav_16k(&request.ffmpeg_path, &request.audio_path)?;
     temps.track(wav_path.clone());
 
-    // Measured from the WAV whisper is about to read, so the cue timings and the loudness
-    // they get pulled in to describe the same decode. Reading it here also means the file is
-    // still on disk — it is a tracked temp and is gone by the time the caller sees a result.
     let speech_envelope = SpeechEnvelope::from_wav_16k_mono(&wav_path);
 
     let mut result = run_whisper_once(
@@ -763,10 +599,6 @@ fn run_whisper_once(
     let transcript_path = PathBuf::from(format!("{}.txt", output_base.display()));
     let json_path = PathBuf::from(format!("{}.json", output_base.display()));
 
-    // whisper-cli receives argv via the Windows ANSI code page, so a non-ASCII audio path
-    // arrives as "?????.wav" and the file is "not found". When the path is not pure ASCII,
-    // stage an ASCII-named temp copy and hand whisper that. Our decoded WAV is already ASCII,
-    // so this is normally a no-op.
     let mut temp = TempCleanup::new();
     let audio_arg = if audio_path
         .to_str()
@@ -804,55 +636,16 @@ fn run_whisper_once(
         .arg("--output-json")
         .arg("--output-file")
         .arg(output_base)
-        // NOT `--no-prints`: that would also suppress the `[start --> end]  text` segment
-        // lines on stdout, which are what makes the transcript appear live instead of only
-        // when the run ends. The cost is whisper's banner and timing tables on stderr, which
-        // only ever reach the user through `cap_details` on an error.
-        //
-        // Emits `progress = N%` to stderr; streamed for the UI progress bar. The saved
-        // transcript is still read from the output files, so neither stream touches it.
         .arg("--print-progress");
 
-    // Worker-thread count from the user's CPU-usage preference (see
-    // `transcription_thread_count`): fewer threads keep the machine responsive during a long
-    // transcription, more finish it sooner. whisper-cli defaults to 4 threads, which idles
-    // bigger CPUs.
     command.arg("-t").arg(thread_count.to_string());
 
-    // Stop whisper's runaway repetition on non-vocal audio. `-mc 0` drops the cross-window
-    // text context that feeds the loop; `--suppress-nst` suppresses non-speech tokens.
     command.arg("-mc").arg("0").arg("--suppress-nst");
 
-    // Greedy decoding instead of whisper's default 5-wide beam. Measured on this app's own
-    // recordings: 23% faster on conversation, 13% on sung vocals, and where the text differs
-    // it differs laterally (「つきます」 vs 「付きます」, comma vs full stop, a sentence split
-    // one word earlier) rather than getting worse.
-    //
-    // `-bs 1` ONLY, deliberately. Pairing it with `-bo 1` looks natural and costs nothing at
-    // temperature 0 — whisper instantiates a single decoder under the greedy strategy, so
-    // `best_of` is never read and the output is byte-identical either way. But `best_of` IS
-    // read on the temperature-fallback re-decode, which is the mechanism that breaks a
-    // repetition loop: at t>0 whisper draws `best_of` samples and keeps the best-scoring one.
-    // `-bo 1` would leave it a single draw, making Faster *more* likely to emit a looped line
-    // on hard audio — a regression in the one place the setting must not cause one, and
-    // invisible in the timings because the fallback never fired on either test sample.
-    //
-    // There is no opposite setting. A WIDER beam (`-bs 8 -bo 8`) was measured the same way and
-    // earned nothing for its extra 7–13%: on conversation it recovered two filler words, and
-    // on hard audio it simply chose differently — 「大層じゃなくていいよ」 became
-    // 「愛想じゃなくていいよ」, which is worse. Whisper's temperature fallback never fired on
-    // either sample (`--no-fallback` produced byte-identical output), so the entropy and
-    // logprob thresholds that fallback depends on had nothing to tune either.
     if fast_decode {
         command.arg("-bs").arg("1");
     }
 
-    // Speech mode uses whisper.cpp's built-in Silero VAD: only detected speech regions are
-    // transcribed and their timestamps mapped back to the absolute timeline — drift-free on
-    // long audio, non-speech excluded. Music mode skips VAD entirely: Silero rejects sung
-    // vocals over instrumental backing and stalls partway through a song at ANY threshold, so
-    // a song only fully transcribes without VAD — at the cost of whisper's own, looser
-    // timestamps. `-mc 0` + `--suppress-nst` above still curb the resulting hallucination.
     if !music_mode {
         command
             .arg("--vad")
@@ -866,10 +659,6 @@ fn run_whisper_once(
         command.arg("--language").arg(language.trim());
     }
 
-    // Stream instead of `.output()`: whisper writes the transcript to files, so the only
-    // reason to read its pipes live is the progress bar. Each pipe is drained on its own
-    // thread — stderr also parses `progress = N%` → `on_progress` — into a bounded buffer the
-    // error branches read after the child exits. Mirrors the yt-dlp downloader.
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|error| error.to_string())?;
     let stdout = child
@@ -883,9 +672,6 @@ fn run_whisper_once(
 
     let stderr_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let stderr_sink = Arc::clone(&stderr_buffer);
-    // The VAD region table arrives here, before any decoding starts. Collected ahead of
-    // `push_diagnostic_line` on purpose: `is_whisper_noise_line` classifies every
-    // `whisper_vad` line as chatter and drops it, so there would be nothing to read back out.
     let region_log: Arc<Mutex<VadRegionLog>> = Arc::new(Mutex::new(VadRegionLog::default()));
     let region_sink = Arc::clone(&region_log);
     let stderr_thread = thread::spawn(move || {
@@ -913,9 +699,6 @@ fn run_whisper_once(
         let _done_sender = done_sender;
         for line in drain_lines(stdout) {
             if let Some((start_ms, end_ms, text)) = parse_whisper_segment_line(&line) {
-                // Stop painting rows the moment Cancel lands. The pipe still holds
-                // whatever whisper wrote before it died, and replaying that into the
-                // viewer would keep a stopped transcription visibly growing.
                 if !segment_cancel.load(Ordering::Relaxed) {
                     on_segment(start_ms, end_ms, text);
                 }
@@ -929,15 +712,9 @@ fn run_whisper_once(
     // stderr drain still parses progress on its own thread throughout.
     loop {
         match done_receiver.recv_timeout(CANCEL_POLL_INTERVAL) {
-            // The drain thread dropped its sender: stdout hit EOF, so whisper-cli has closed
-            // its pipes and `wait` below will reap it immediately.
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if cancel.load(Ordering::Relaxed) {
-                    // Sweep the tree first, then kill the child directly as the backstop that
-                    // cannot fail to land, so `wait` below always returns. whisper-cli spawns
-                    // no grandchildren, so `child.kill()` alone would suffice — `taskkill /T`
-                    // is the robust backstop.
                     kill_process_tree(child.id());
                     let _ = child.kill();
                     break;
@@ -952,8 +729,6 @@ fn run_whisper_once(
     let _ = stderr_thread.join();
     let _ = stdout_thread.join();
 
-    // A Cancel reached the child (killed in the loop above and reaped by `wait`): report the
-    // cancellation rather than whisper's non-zero exit status or a missing transcript file.
     if cancel.load(Ordering::Relaxed) {
         return Err(TRANSCRIPTION_CANCELLED.into());
     }
@@ -1017,10 +792,7 @@ fn run_whisper_once(
     })
 }
 
-/// Best-effort kill of the whole process tree rooted at `pid`. whisper-cli spawns no
-/// grandchildren, so a bare `child.kill()` already lands; `taskkill /T` is the robust
-/// backstop that also sweeps any child a future whisper build might spawn. Errors are
-/// swallowed: the process may already be gone, which is the desired end state.
+/// Best-effort kill of the whole process tree rooted at `pid`.
 #[cfg(target_os = "windows")]
 fn kill_process_tree(pid: u32) {
     let mut command = Command::new("taskkill");
@@ -1186,9 +958,7 @@ mod tests {
             Some(100)
         );
         assert_eq!(parse_whisper_progress_line("progress =   7%"), Some(7));
-        // A nonsensical over-100 value is clamped rather than overflowing a u8.
         assert_eq!(parse_whisper_progress_line("progress = 250%"), Some(100));
-        // Non-progress lines are ignored.
         assert_eq!(parse_whisper_progress_line("whisper_full_with_state: decode"), None);
         assert_eq!(parse_whisper_progress_line(""), None);
     }
@@ -1202,7 +972,6 @@ mod tests {
         let (source, region) = parse_vad_region_line(line).expect("mapped line parses");
 
         assert_eq!(source, SpeechRegionSource::Mapped);
-        // orig_*, not vad_* — the processed timeline is not where the audio lives.
         assert_eq!(region.start_ms, 2530);
         assert_eq!(region.end_ms, 3710);
     }
@@ -1215,7 +984,6 @@ mod tests {
 
         assert_eq!(source, SpeechRegionSource::Probe);
         assert_eq!(region.start_ms, 1920);
-        // The trailing "(duration: …)" must not be mistaken for part of the end value.
         assert_eq!(region.end_ms, 2240);
     }
 
@@ -1231,24 +999,19 @@ mod tests {
         }
     }
 
-    /// A start must never round later than the speech, nor an end earlier.
     #[test]
     fn seconds_convert_without_losing_a_millisecond() {
-        // 1.92 has no exact binary float; a naive `f64 * 1000.0` floors to 1919.
         assert_eq!(parse_vad_seconds("1.92", Rounding::Down), Some(1920));
         assert_eq!(parse_vad_seconds("1.92", Rounding::Up), Some(1920));
         assert_eq!(parse_vad_seconds("0.00", Rounding::Down), Some(0));
         assert_eq!(parse_vad_seconds("7", Rounding::Down), Some(7000));
         assert_eq!(parse_vad_seconds("1.5", Rounding::Down), Some(1500));
-        // Finer than a millisecond: the end grows, the start does not.
         assert_eq!(parse_vad_seconds("1.9204", Rounding::Down), Some(1920));
         assert_eq!(parse_vad_seconds("1.9204", Rounding::Up), Some(1921));
-        // Exact at millisecond precision, so there is nothing to round up to.
         assert_eq!(parse_vad_seconds("1.9200", Rounding::Up), Some(1920));
         assert_eq!(parse_vad_seconds("abc", Rounding::Down), None);
     }
 
-    /// The two log lines describe the same regions, so appending both would double every one.
     #[test]
     fn the_mapped_list_wins_when_both_were_printed() {
         let mut log = VadRegionLog::default();
@@ -1298,11 +1061,9 @@ mod tests {
         );
 
         drop(first);
-        // Released on drop, so a refused claim cannot wedge every later run until restart.
         WhisperSlotGuard::acquire("busy").expect("the slot is free again");
     }
 
-    /// An early return, a `?`, or a panic must all put the slot back.
     #[test]
     fn the_whisper_slot_is_released_by_a_panicking_run() {
         let _serialise = SLOT_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
@@ -1328,7 +1089,6 @@ mod tests {
                 "僕はドイツ人なんですけど、日本人の友達作りたいです。".to_string()
             ))
         );
-        // Hours carry, and text keeps its own internal spacing.
         assert_eq!(
             parse_whisper_segment_line("[01:02:03.004 --> 01:02:04.000]   the  cat sat  "),
             Some((3723004, 3724000, "the  cat sat".to_string()))
@@ -1337,17 +1097,12 @@ mod tests {
 
     #[test]
     fn parse_whisper_segment_line_ignores_everything_else() {
-        // Whisper's banner and timing tables share stdout/stderr with the segments.
         assert_eq!(parse_whisper_segment_line("whisper_init_from_file: loading"), None);
         assert_eq!(parse_whisper_segment_line(""), None);
-        // A blank segment carries no sentence to show.
         assert_eq!(parse_whisper_segment_line("[00:00:00.000 --> 00:00:01.000]   "), None);
-        // Malformed spans must not be guessed at.
         assert_eq!(parse_whisper_segment_line("[00:00:00.000 00:00:01.000] hi"), None);
         assert_eq!(parse_whisper_segment_line("[bad --> worse] hi"), None);
         assert_eq!(parse_whisper_segment_line("[00:00:99.000 --> 00:00:01.000] hi"), None);
-        // An absurd hour count must not overflow — this parses a subprocess's stdout on
-        // the drain thread, where a debug-build panic would wedge the run.
         assert_eq!(
             parse_whisper_segment_line("[1000000000000000:00:00.000 --> 00:00:01.000] hi"),
             None
@@ -1356,9 +1111,6 @@ mod tests {
 
     #[test]
     fn cap_details_surfaces_the_error_line_over_the_banner() {
-        // whisper-cli prints its load banner first and reports some failures many lines
-        // later (while still exiting 0), so position alone would report everything except
-        // the reason.
         let dump = [
             "whisper_model_load: loading model",
             "some other chatter",
@@ -1400,14 +1152,11 @@ mod tests {
         let low = transcription_thread_count("low");
         let balanced = transcription_thread_count("balanced");
         let high = transcription_thread_count("high");
-        // whisper-cli must always get at least one worker thread — never zero.
         assert!(low >= 1, "low must be at least 1, got {low}");
         assert!(balanced >= 1, "balanced must be at least 1, got {balanced}");
         assert!(high >= 1, "high must be at least 1, got {high}");
-        // More CPU budget never means fewer threads.
         assert!(low <= balanced, "low ({low}) must not exceed balanced ({balanced})");
         assert!(balanced <= high, "balanced ({balanced}) must not exceed high ({high})");
-        // Any unrecognized value falls back to the balanced mapping.
         assert_eq!(transcription_thread_count("nonsense"), balanced);
     }
 

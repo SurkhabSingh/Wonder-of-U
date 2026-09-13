@@ -1,15 +1,3 @@
-//! Works out which note types and fields hold vocabulary, by reading the collection.
-//!
-//! Setting this up by hand means choosing two things out of a list that can run to
-//! twenty-five field names per note type, where the wrong choice fails silently:
-//! index a sentence field and nothing ever matches a transcript word, so every line
-//! reads as entirely unknown and the feature looks broken rather than misconfigured.
-//!
-//! So this proposes rather than decides. Every suggestion comes back with real
-//! values from the user's own cards beside it, because the questions left after the
-//! tests below — is a deck of single kanji "words"? is this Basic deck vocabulary or
-//! trivia? — are ones a glance at 懺悔 | 妄想 answers instantly and no heuristic can.
-
 use std::{collections::HashSet, path::Path};
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -33,43 +21,23 @@ use super::{
     known_words::normalize_expression,
 };
 
-/// Below this, a note type is not a vocabulary deck worth indexing — it is a
-/// handful of one-off cards, and the sample would be too thin to judge anyway.
 const MIN_MATURE_NOTES: usize = 20;
 
-/// How many notes to read per note type. Large enough that a deck whose opening
-/// cards are unrepresentative cannot carry the vote; small enough to be one
-/// `notesInfo` call.
 const SAMPLE_SIZE: usize = 60;
 
-/// A word field is filled on essentially every note. Anything patchier is a note,
-/// a hint, or a field only some cards in the deck use.
 const MIN_FILL_PERCENT: usize = 90;
 
-/// How much of ONE value has to be Japanese for it to be a candidate word. Below
-/// this it is a version number, a frequency rank, a romaji reading, an English
-/// gloss — or a word with so much parenthetical attached that it is really a note.
 const MIN_JAPANESE_CHARS_PERCENT: usize = 70;
 
-/// How many of a field's values have to clear the bar above for the FIELD to be a
-/// candidate. Separate from it deliberately: they are different questions, and one
-/// constant answering both reads as a coincidence rather than a decision.
 const MIN_JAPANESE_VALUES_PERCENT: usize = 70;
 
-/// The test that does the real work. See `single_known_word_percent`.
 const MIN_WORD_PERCENT: usize = 80;
 
-/// Skip tokenizing anything longer than this. No word is 24 characters, and the
-/// fields being rejected here are definitions and example sentences that would
-/// otherwise cost a tokenizer pass each.
 const MAX_WORD_CHARS: usize = 24;
 
 /// How many real values ride along with each suggestion for the user to judge by.
 const SHOWN_SAMPLES: usize = 3;
 
-/// Field names that mean "the word" in the decks people actually use. Only ever a
-/// tie-break: a deck that calls it `Front` is still a vocabulary deck, and a field
-/// called `Word Reading` is still not the word.
 const WORD_FIELD_HINTS: [&str; 9] = [
     "word",
     "expression",
@@ -109,35 +77,12 @@ fn percent(part: usize, whole: usize) -> usize {
 }
 
 /// How often this field's contents are exactly one word the dictionary knows.
-///
-/// This is the test the whole scan turns on, and it is the one a name or a length
-/// cannot stand in for. A sentence field and a word field look alike by every cheap
-/// measure — both Japanese, both filled, both plausibly short in a deck of
-/// greetings — and differ completely here: 修理 is one token, 修理場から帰ったばっかりで is
-/// nine. It also rejects grammar decks, whose 〜あとで is three.
-///
-/// One token is not quite enough, so the token also has to be one IPADIC knows.
-/// A Heisig-style kanji deck is what showed the difference: 丨, 攵 and 昜 are each
-/// one token, entirely Japanese, on a fully filled field — and each comes back
-/// `known_to_dictionary: false`, because they are strokes and radicals rather than
-/// words.
-///
-/// **Measured caveat, so nobody re-derives it:** this does NOT exclude such a deck
-/// on its own, because most single kanji (本, 山) genuinely ARE dictionary words, so
-/// a 433-card kanji deck still clears the threshold below. That last step is the
-/// user's, off the samples — which is why suggestions carry them.
-///
-/// Not required of every sample: a real deck has an intro card, a stray note, a
-/// proper noun IPADIC has never heard of. The threshold is a majority, not
-/// unanimity.
 fn single_known_word_percent(values: &[String], dictionary_path: &Path) -> usize {
     let mut words = 0;
     for value in values {
         if value.chars().count() > MAX_WORD_CHARS {
             continue;
         }
-        // A tokenizer failure is "not a word", not an aborted scan: one unparseable
-        // value must not cost the user the whole suggestion.
         if matches!(
             tokenize_japanese(value, dictionary_path).as_deref(),
             Ok([token]) if token.known_to_dictionary
@@ -154,15 +99,6 @@ fn field_name_is_a_hint(field_name: &str) -> bool {
 }
 
 /// Reads one field across the sampled notes, as the index itself would read it.
-///
-/// Normalized through `normalize_expression` for the same reason the index is: a
-/// furigana'd or ruby-wrapped field has to be judged on the word it carries, not on
-/// the markup around it, or every such field scores as a long non-word and the
-/// decks most worth finding are the ones missed.
-/// Takes the notes rather than the reply they arrived in, so a reply that is not a list
-/// cannot be read here as a sample of no notes — which scored every field as unfilled and
-/// dropped the note type out of the suggestions without a word. The shape is checked once,
-/// where the reply arrives.
 fn sampled_field_values(notes: &[serde_json::Value], field_name: &str) -> Vec<String> {
     notes
         .iter()
@@ -177,9 +113,6 @@ fn sampled_field_values(notes: &[serde_json::Value], field_name: &str) -> Vec<St
         .collect()
 }
 
-/// The field names on the first sampled note. Empty for an empty sample, or for a note
-/// that arrived without a fields object — both of which are about the notes themselves,
-/// not about whether the reply could be read.
 fn field_names(notes: &[serde_json::Value]) -> Vec<String> {
     notes
         .first()
@@ -230,11 +163,6 @@ fn score_field(
 }
 
 /// Spreads the sample across the whole note type rather than taking the first N.
-///
-/// Note ids are creation timestamps, so the first sixty are the first sixty cards
-/// someone ever made — in a course deck, the greetings. Judging a sentence field on
-/// こんにちは and おはよう would pass it as a word field and index the entire deck's
-/// sentences. Every measurement here depends on the sample being representative.
 fn spread_sample(mut note_ids: Vec<i64>) -> Vec<i64> {
     note_ids.sort_unstable();
     if note_ids.len() <= SAMPLE_SIZE {
@@ -249,10 +177,6 @@ fn spread_sample(mut note_ids: Vec<i64>) -> Vec<i64> {
 }
 
 /// Quotes a note type into a search term, restricted to mature cards.
-///
-/// Deliberately the same shape as the index's own query, threshold included: a
-/// suggestion judged on cards the index would not read is a suggestion for a
-/// different feature.
 fn mature_notes_query(note_type: &str, mature_after_days: u32) -> String {
     let mut escaped = String::with_capacity(note_type.len());
     for character in note_type.chars() {
@@ -266,14 +190,6 @@ fn mature_notes_query(note_type: &str, mature_after_days: u32) -> String {
 
 /// `Ok(None)` is "no suggestion for this note type" — the ordinary answer for most of them.
 /// `Err` is a query that FAILED, which used to be the same `None` and so was invisible.
-///
-/// The two are told apart here and logged by the caller, which is the half that holds the
-/// app handle. Keeping this function free of one also keeps it callable from the collection
-/// test, which has no Tauri runtime to hand it.
-///
-/// Anki is known reachable by the time this runs — the caller's `modelNames` request would
-/// have failed the whole scan otherwise — so a failure here is unusual enough to be worth a
-/// line rather than a shrug.
 fn examine_note_type(
     note_type: &str,
     mature_after_days: u32,
@@ -290,9 +206,6 @@ fn examine_note_type(
     let reply = anki_notes_info(&sample).map_err(|error| format!("notesInfo: {error}"))?;
     let notes = json_array(&reply, "note list")?;
 
-    // Best single-token rate wins. The name is a tie-break only, and the field's own
-    // order breaks a remaining tie so the answer is stable across runs rather than
-    // following whatever order the fields came back in.
     let best = field_names(notes)
         .into_iter()
         .enumerate()
@@ -336,10 +249,6 @@ fn scan_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(u32, String, Vec<Voc
 }
 
 /// Looks through the collection for note types that hold vocabulary.
-///
-/// Reports how many note types were examined even when it finds nothing, because
-/// "no suggestions" and "nothing was looked at" are different answers and only one
-/// of them means the user should go on and choose by hand.
 pub(crate) fn scan_vocabulary_sources_inner<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<VocabularySuggestions, String> {
@@ -382,9 +291,6 @@ pub(crate) fn scan_vocabulary_sources_inner<R: Runtime>(
                 &already_configured,
             ) {
                 Ok(suggestion) => suggestion,
-                // Logged rather than dropped: with Anki already proven reachable, a note
-                // type failing its own query is worth knowing about, and a scan that
-                // quietly returns fewer decks than it examined explains nothing.
                 Err(message) => {
                     log_event(
                         app,
@@ -397,8 +303,6 @@ pub(crate) fn scan_vocabulary_sources_inner<R: Runtime>(
             }
         })
         .collect();
-    // Biggest first: the deck contributing the most words is the one whose
-    // suggestion is worth checking hardest.
     suggestions.sort_by_key(|suggestion| std::cmp::Reverse(suggestion.mature_note_count));
 
     let found = suggestions.len();
@@ -430,14 +334,10 @@ mod tests {
         assert_eq!(japanese_percent("修理"), 100);
         assert_eq!(japanese_percent("こんにちは"), 100);
         assert_eq!(japanese_percent("コーヒー"), 100);
-        // The fields this has to reject: a version number, a frequency rank, a
-        // romaji reading, an English gloss.
         assert_eq!(japanese_percent("14"), 0);
         assert_eq!(japanese_percent("9999999"), 0);
         assert_eq!(japanese_percent("konnichiha"), 0);
         assert_eq!(japanese_percent("walking stick"), 0);
-        // Mixed, as a word with a parenthetical gloss would be — still mostly
-        // Japanese, so still a candidate.
         assert!(japanese_percent("修理 (repair)") < 70);
     }
 
@@ -463,14 +363,10 @@ mod tests {
         assert!(field_name_is_a_hint("expression"));
         assert!(field_name_is_a_hint(" Vocabulary "));
         assert!(field_name_is_a_hint("単語"));
-        // A near miss that is emphatically not the word.
         assert!(!field_name_is_a_hint("Word Reading"));
         assert!(!field_name_is_a_hint("Sentence"));
     }
 
-    /// Note ids are creation timestamps, so an unspread sample is the first cards
-    /// someone made — in a course deck, the greetings, which look like words even
-    /// in a field full of sentences.
     #[test]
     fn the_sample_is_spread_across_the_whole_note_type() {
         let ids: Vec<i64> = (0..6000).collect();
@@ -478,8 +374,6 @@ mod tests {
 
         assert_eq!(sample.len(), SAMPLE_SIZE);
         assert_eq!(sample[0], 0);
-        // Reaching into the last tenth is the whole point: a deck's later cards are
-        // the ones that reveal a sentence field for what it is.
         assert!(
             *sample.last().unwrap() > 5000,
             "sample stopped at {:?}",
@@ -504,9 +398,6 @@ mod tests {
 
     #[test]
     fn field_values_are_read_the_way_the_index_reads_them() {
-        // Furigana and markup are stripped, exactly as `normalize_expression` does
-        // for the index — a field judged on its markup scores as a non-word and the
-        // decks most worth finding are the ones missed.
         assert_eq!(
             sampled_field_values(&notes_json(), "Word"),
             vec!["見る".to_string(), "食べる".to_string()]
@@ -515,9 +406,6 @@ mod tests {
 
     #[test]
     fn a_missing_field_reads_as_empty_rather_than_shifting_the_others() {
-        // Every note contributes one entry per field, present or not, so the fill
-        // rate is measured against the notes sampled and not against what happened
-        // to be there.
         let values = sampled_field_values(&notes_json(), "Sentence");
         assert_eq!(values.len(), 2);
         assert_eq!(values[1], "");
@@ -535,13 +423,6 @@ mod tests {
     }
 
     /// Prints how IPADIC analyses specific values.
-    ///
-    /// Kept because every threshold in this module was set by reading this output
-    /// against a real collection rather than by reasoning about it — twice, a
-    /// confident guess about what IPADIC would do turned out to be wrong. The next
-    /// person changing a threshold will want the same view.
-    ///
-    ///   WONDER_OF_U_IPADIC_DIR=<dir> cargo test explain_tokenization -- --ignored --nocapture
     #[test]
     #[ignore = "requires an installed dictionary"]
     fn explain_tokenization() {
@@ -552,7 +433,6 @@ mod tests {
             std::env::var("WONDER_OF_U_IPADIC_DIR")
                 .expect("set WONDER_OF_U_IPADIC_DIR to an extracted lindera-ipadic directory"),
         );
-        // Kanji-deck characters first, then real words, then a grammar pattern.
         for value in ["丨", "攵", "昜", "本", "私", "修理", "盗む", "あの", "〜あとで"] {
             let tokens = tokenize_japanese(value, &dictionary).unwrap();
             println!(
@@ -571,16 +451,6 @@ mod tests {
     }
 
     /// Runs the scan against a real collection and prints what it proposes.
-    ///
-    /// The tests above cover the filters in isolation, which is not the same
-    /// question as "does this pick the right field in a real deck". Only a real
-    /// collection answers that, and the failure this exists to catch — proposing a
-    /// sentence field, which fills the index with sentences and makes every
-    /// transcript line read as entirely unknown — is invisible in a unit test.
-    ///
-    /// Needs Anki open with AnkiConnect, and the dictionary installed. Run with:
-    ///   WONDER_OF_U_IPADIC_DIR=<extracted lindera-ipadic> \
-    ///     cargo test scan_a_real_collection -- --ignored --nocapture
     #[test]
     #[ignore = "requires a running Anki and an installed dictionary"]
     fn scan_a_real_collection() {
@@ -609,7 +479,6 @@ mod tests {
                     found.samples.join(" | ")
                 ),
                 Ok(None) => println!("  skip     {note_type}"),
-                // Previously indistinguishable from a skip, which is the whole point.
                 Err(message) => println!("  FAILED   {note_type}: {message}"),
             }
         }

@@ -23,17 +23,8 @@ type UseSetupActionsOptions = {
   resolvedModelPath: string;
   openSettingsSection: (section: SettingsSection) => void;
   setBusyAction: (busyAction: BusyAction) => void;
-  /**
-   * Reports a failure as a toast.
-   *
-   * Every failure in this hook is the outcome of one thing the user just pressed, so every
-   * one of them belongs here rather than in the app-wide error banner. The banner stays until
-   * something else replaces it, which is right for a condition the app is in ("settings could
-   * not be loaded") and wrong for an event that is already over: "There is no active model
-   * download to pause or resume" sat across the top of the window for the rest of the session,
-   * describing a download that had finished. The video library already drew this distinction;
-   * setup did not.
-   */
+
+  //Reports a failure as a toast.
   showError: (message: string) => void;
   setModelUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
   setRuntimeUpdateResult: (result: WhisperAssetUpdateResult | null) => void;
@@ -70,7 +61,10 @@ export function useSetupActions({
         openSettingsSection("whisper");
       } catch (error) {
         showError(
-          errorMessage(error, "The selected Whisper runtime could not be prepared."),
+          errorMessage(
+            error,
+            "The selected Whisper runtime could not be prepared.",
+          ),
         );
       } finally {
         setBusyAction(null);
@@ -90,19 +84,10 @@ export function useSetupActions({
     await downloadRuntimeVersion(RECOMMENDED_RUNTIME_VERSION);
   }, [downloadRuntimeVersion]);
 
-  /**
-   * Fetches whatever transcription still needs, in one press.
-   *
-   * Which downloads those are is decided in Rust, beside the readiness check that says whether
-   * anything is missing at all — so this cannot ask for the wrong thing without the two
-   * disagreeing at the one site that answers both. Unlike the six per-asset actions this does
-   * not navigate: the point is progress without leaving Home.
-   */
+  //Fetches whatever transcription still needs, in one press.
   const downloadMissingEssentials = useCallback(async () => {
     try {
       setBusyAction("downloadEssentials");
-      // The model and runtime downloads read the SAVED settings, so an unsaved draft would
-      // fetch for the previous choice.
       await persistSettingsIfNeeded();
       const nextBootstrap = await invoke<AppBootstrap>(
         "download_missing_essentials",
@@ -118,7 +103,9 @@ export function useSetupActions({
   const downloadRecommendedFfmpeg = useCallback(async () => {
     try {
       setBusyAction("downloadFfmpeg");
-      const nextBootstrap = await invoke<AppBootstrap>("download_recommended_ffmpeg");
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_recommended_ffmpeg",
+      );
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
@@ -128,13 +115,7 @@ export function useSetupActions({
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
-  /**
-   * Fetches a fresh FFmpeg over a working one.
-   *
-   * Its own action rather than a flag on the download above, because the two differ in what the
-   * backend is allowed to skip: the plain download stops early when a runnable copy is present,
-   * which is right for "I have none" and silently does nothing for "replace what I have".
-   */
+  //Fetches a fresh FFmpeg over a working one.
   const reinstallFfmpeg = useCallback(async () => {
     try {
       setBusyAction("reinstallFfmpeg");
@@ -151,7 +132,9 @@ export function useSetupActions({
   const downloadRecommendedYtdlp = useCallback(async () => {
     try {
       setBusyAction("downloadYtdlp");
-      const nextBootstrap = await invoke<AppBootstrap>("download_recommended_ytdlp");
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_recommended_ytdlp",
+      );
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
@@ -164,7 +147,9 @@ export function useSetupActions({
   const downloadRecommendedMpv = useCallback(async () => {
     try {
       setBusyAction("downloadMpv");
-      const nextBootstrap = await invoke<AppBootstrap>("download_recommended_mpv");
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_recommended_mpv",
+      );
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
@@ -174,13 +159,7 @@ export function useSetupActions({
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
-  /**
-   * Fetches a fresh mpv over a working one.
-   *
-   * Its own action for the same reason FFmpeg has one: the plain download skips when a runnable
-   * copy is present, which is right for "I have none" and silently does nothing for "replace
-   * what I have".
-   */
+  // Fetches a fresh mpv over a working one.
   const reinstallMpv = useCallback(async () => {
     try {
       setBusyAction("reinstallMpv");
@@ -197,7 +176,9 @@ export function useSetupActions({
   const downloadRecommendedAlass = useCallback(async () => {
     try {
       setBusyAction("downloadAlass");
-      const nextBootstrap = await invoke<AppBootstrap>("download_recommended_alass");
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_recommended_alass",
+      );
       applyBootstrap(nextBootstrap);
       openSettingsSection("storage");
     } catch (error) {
@@ -224,20 +205,10 @@ export function useSetupActions({
     }
   }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
-  /**
-   * Reads the collection and rebuilds the known-word list.
-   *
-   * The snapshot the command returns is discarded on purpose: it also emits an
-   * app snapshot, and taking the result here as well would mean two paths writing
-   * the same status, which is how the count in the header and the count in the
-   * card end up disagreeing.
-   */
+  //Reads the collection and rebuilds the known-word list.
   const refreshKnownWords = useCallback(async () => {
     try {
       setBusyAction("refreshKnownWords");
-      // Settings first: the refresh reads the sources and threshold from the
-      // SAVED settings, so an unsaved edit would otherwise rebuild the old list
-      // and look like the change did nothing.
       await persistSettingsIfNeeded();
       await invoke<KnownWordsSnapshot>("refresh_known_words");
     } catch (error) {
@@ -249,13 +220,7 @@ export function useSetupActions({
     }
   }, [persistSettingsIfNeeded, setBusyAction, showError]);
 
-  /**
-   * Looks through the collection for note types that hold vocabulary.
-   *
-   * Returns the suggestions rather than applying them. Writing them straight into
-   * settings would be the one thing this feature must not do: a wrong field fails
-   * silently, so the user has to see the samples and choose.
-   */
+  // Looks through the collection for note types that hold vocabulary.
   const scanVocabularySources =
     useCallback(async (): Promise<VocabularySuggestions | null> => {
       try {
@@ -274,7 +239,8 @@ export function useSetupActions({
   const checkYtdlpUpdate = useCallback(async () => {
     try {
       setBusyAction("checkYtdlpUpdate");
-      const result = await invoke<WhisperAssetUpdateResult>("check_ytdlp_update");
+      const result =
+        await invoke<WhisperAssetUpdateResult>("check_ytdlp_update");
       setYtdlpUpdateResult(result);
     } catch (error) {
       showError(
@@ -285,23 +251,19 @@ export function useSetupActions({
     }
   }, [setBusyAction, showError, setYtdlpUpdateResult]);
 
-  /**
-   * Fetches only the speech detector, for the repair shown when it is missing but the model
-   * is not.
-   *
-   * Its own command rather than reusing the model download: that one writes to
-   * `<asset_dir>/models/` and skips only what is already there, but a managed model is
-   * accepted from six different directories and a manual path from anywhere — so "the model
-   * is installed" does not mean "the model is where that download would put it", and pressing
-   * a repair could have started a multi-gigabyte transfer.
-   */
+  // Fetches only the speech detector, for the repair shown when it is missing but the model
+  //is not.
   const downloadWhisperVadModel = useCallback(async () => {
     try {
       setBusyAction("downloadModel");
-      const nextBootstrap = await invoke<AppBootstrap>("download_whisper_vad_model");
+      const nextBootstrap = await invoke<AppBootstrap>(
+        "download_whisper_vad_model",
+      );
       applyBootstrap(nextBootstrap);
     } catch (error) {
-      showError(errorMessage(error, "The speech detector could not be prepared."));
+      showError(
+        errorMessage(error, "The speech detector could not be prepared."),
+      );
     } finally {
       setBusyAction(null);
     }
@@ -319,7 +281,10 @@ export function useSetupActions({
       openSettingsSection("whisper");
     } catch (error) {
       showError(
-        errorMessage(error, "The recommended Whisper model could not be prepared."),
+        errorMessage(
+          error,
+          "The recommended Whisper model could not be prepared.",
+        ),
       );
     } finally {
       setBusyAction(null);
@@ -348,7 +313,12 @@ export function useSetupActions({
     } finally {
       setBusyAction(null);
     }
-  }, [persistSettingsIfNeeded, setBusyAction, showError, setRuntimeUpdateResult]);
+  }, [
+    persistSettingsIfNeeded,
+    setBusyAction,
+    showError,
+    setRuntimeUpdateResult,
+  ]);
 
   const checkModelUpdate = useCallback(async () => {
     try {
@@ -367,37 +337,29 @@ export function useSetupActions({
     }
   }, [persistSettingsIfNeeded, setBusyAction, showError, setModelUpdateResult]);
 
-  /**
-   * Pauses or resumes the running download.
-   *
-   * Nothing is applied from the call, and the command returns nothing to apply — the same
-   * reasoning as `refreshKnownWords` above, but with a sharper symptom. The download thread
-   * emits a fresh app snapshot on every 64KB chunk, so a bootstrap built at the end of this
-   * command could carry a "downloading" written microseconds after the pause was recorded,
-   * and applying it here landed it *after* the worker's own "paused" had arrived. The button
-   * then still read "Pause Download" over a paused download, so pressing it again resumed
-   * rather than paused, and the transfer looked stuck part-way.
-   *
-   * Pause is where this surfaced because pause is where the emissions stop: the worker
-   * announces "paused" once and then blocks, so nothing arrives afterwards to correct a bad
-   * overwrite. Every other status keeps emitting and heals itself within a chunk.
-   */
+  //Pauses or resumes the running download.
+
   const toggleDownloadPause = useCallback(async () => {
     try {
       await invoke("toggle_whisper_model_download_pause");
     } catch (error) {
       showError(
-        errorMessage(error, "The active download could not be paused or resumed."),
+        errorMessage(
+          error,
+          "The active download could not be paused or resumed.",
+        ),
       );
     }
   }, [showError]);
 
-  /** Same as `toggleDownloadPause`: the emitted snapshot is the only writer. */
+  //Same as `toggleDownloadPause`: the emitted snapshot is the only writer.
   const cancelDownload = useCallback(async () => {
     try {
       await invoke("cancel_whisper_model_download");
     } catch (error) {
-      showError(errorMessage(error, "The active download could not be cancelled."));
+      showError(
+        errorMessage(error, "The active download could not be cancelled."),
+      );
     }
   }, [showError]);
 
@@ -419,7 +381,9 @@ export function useSetupActions({
 
         updateSettings({ [field]: selection });
       } catch (error) {
-        showError(errorMessage(error, "The folder chooser could not be opened."));
+        showError(
+          errorMessage(error, "The folder chooser could not be opened."),
+        );
       } finally {
         setBusyAction(null);
       }

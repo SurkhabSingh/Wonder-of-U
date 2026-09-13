@@ -69,9 +69,6 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         .map_err(|_| "Could not read the model download state.".to_string())?
         .clone();
     let dictionary_detection = detect_local_dictionary(&persisted.settings);
-    // Judged against the settings just read, rather than re-locking them: this runs
-    // on every snapshot emit, and reading them twice is how the two halves of the
-    // answer end up describing different moments.
     let known_words = known_words_snapshot_from_state(
         app,
         &KnownWordsBuild::from_anki_settings(&persisted.settings.anki),
@@ -83,8 +80,6 @@ pub(crate) fn build_app_bootstrap<R: Runtime>(app: &AppHandle<R>) -> Result<AppB
         .display()
         .to_string();
 
-    // Asked of the same function transcription asks, with the detections just read — so the
-    // checklist cannot describe a requirement the engine does not have, or miss one it does.
     let transcription_requirements = crate::recording_library::transcription::transcription_requirements(
         &persisted.settings,
         &whisper_detection,
@@ -140,9 +135,6 @@ pub(crate) fn setup_error(message: impl Into<String>) -> tauri::Error {
 }
 
 /// A plain-text block a user can paste into a bug report.
-///
-/// Deliberately not the log: this is the part a person will actually complete, and it answers
-/// the questions every report starts with. The log file is the optional attachment beside it.
 pub(crate) fn diagnostics_text<R: Runtime>(app: &AppHandle<R>) -> String {
     let bootstrap = build_app_bootstrap(app);
     let mut lines = vec![format!("Run: {}", crate::logging::run_id())];

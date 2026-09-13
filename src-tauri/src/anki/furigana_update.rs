@@ -204,15 +204,6 @@ fn add_furigana_to_single_anki_card<R: Runtime>(
     );
 
     // The SAME writer the mine and push paths use, seeded with what Anki already holds.
-    //
-    // This used to be a hand-rolled copy of it, and the copy had drifted: it wrote the
-    // bracket text to the field WITHOUT escaping, while the shared writer escapes it. That
-    // difference is the whole security argument for bracket notation — the text comes from
-    // an unauthenticated localhost port and lands in a field Anki renders as HTML, and a
-    // transcript containing a bare `<` or `&` was being written raw on this path alone.
-    //
-    // `insert_furigana_field` merges against whatever is already in the map, so seeding it
-    // with the note's current field value reproduces this path's behaviour exactly.
     let mut fields = serde_json::Map::new();
     if let Some(existing) = existing_furigana_field_value.as_deref() {
         fields.insert(

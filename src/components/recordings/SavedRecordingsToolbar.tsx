@@ -74,9 +74,6 @@ export function SavedRecordingsToolbar({
 }) {
   const hasSelection = visibleSelectedPaths.length > 0;
 
-  // Gmail-style select mode: with a selection active the filter tabs + toolbar
-  // row give way to a batch-actions bar that occupies the same slot. Nothing new
-  // floats or docks — the toolbar row itself morphs into the action bar.
   if (hasSelection) {
     return (
       <SelectionActionBar
@@ -103,8 +100,6 @@ export function SavedRecordingsToolbar({
     );
   }
 
-  // No selection: the toolbar's job is filters + the "…All" shortcuts for the
-  // current filter.
   return (
     <>
       <RecordingFilterTabs
@@ -114,8 +109,6 @@ export function SavedRecordingsToolbar({
       />
 
       <div className="recording-toolbar">
-        {/* LEFT: the current filter's one bulk action, styled as a prominent
-            accent-outline button. Empty when the active filter has none. */}
         <div className="recording-toolbar-actions">
           {recordingFilter === "needsTranscription" &&
           untranscribedRecordings.length > 0 ? (
@@ -178,8 +171,6 @@ export function SavedRecordingsToolbar({
           ) : null}
         </div>
 
-        {/* RIGHT: a quiet Anki cluster — the default-deck selector paired with a
-            ghost Refresh. Grouped so they read as one unit. */}
         <div className="recording-toolbar-anki">
           <DropdownMenuPrimitive.Root>
             <DropdownMenuPrimitive.Trigger asChild>

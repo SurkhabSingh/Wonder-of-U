@@ -19,9 +19,6 @@ use super::transfer::{
 };
 
 /// Where the dictionary's archive is staged and where it unpacks to.
-///
-/// Unlike alass, the archive goes to the shared `downloads/` staging directory — it is only
-/// removed on the *success* path, so a failed run leaves it there to be looked at.
 struct DictionaryPaths {
     archive: PathBuf,
     install: PathBuf,
@@ -37,11 +34,6 @@ fn dictionary_paths(asset_directory: &Path) -> DictionaryPaths {
 }
 
 /// Proves the extracted dictionary is one lindera can actually read.
-///
-/// The load parses every component lindera needs, so it answers the only question
-/// worth asking about a dictionary directory — far more than checking that the
-/// files exist. It costs a one-off ~57MB read on the download thread, which is why
-/// it happens here once and never in detection.
 fn verify_extracted_dictionary(
     install_directory: &Path,
     asset_directory: &Path,
@@ -57,18 +49,11 @@ fn verify_extracted_dictionary(
 }
 
 /// Downloads the pinned IPADIC dictionary into `<asset_dir>/lindera-ipadic/<version>/`.
-///
-/// Shaped like the FFmpeg download — a zip fetched to the downloads folder and
-/// unpacked — and it shares the `ModelDownloadControlState` slot with the other
-/// asset downloads, so only one runs at a time and Cancel works.
 pub(super) fn dictionary_plan<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<AssetDownloadPlan<R>, String> {
     let asset_directory = asset_directory(app)?;
     let paths = dictionary_paths(&asset_directory);
-    // Both directories exist before the worker starts, exactly as before: the archive cannot
-    // be written into a missing `downloads/`, and extraction clears the install directory
-    // rather than creating it.
     ensure_directory_exists(
         paths
             .archive
@@ -81,8 +66,7 @@ pub(super) fn dictionary_plan<R: Runtime>(
         "Downloading the Japanese dictionary to {}...",
         paths.install.display()
     );
-    // The card names the ARCHIVE while fetching and the dictionary root once installed — the
-    // one asset where those differ, which is why `Installed` carries a path at all.
+
     let starting_target_path = paths.archive.clone();
 
     Ok(AssetDownloadPlan {
@@ -104,10 +88,6 @@ pub(super) fn dictionary_plan<R: Runtime>(
                 "the Japanese dictionary",
             )?;
 
-            // Armed across extraction only: an interrupted unpack writes
-            // metadata.json long before the word list, and detection keys on
-            // metadata.json. Once the archive is whole, the validation below
-            // owns the cleanup instead.
             let mut install_guard = PartialInstallGuard::new(paths.install.clone());
             extract_zip_archive_to_directory(&paths.archive, &paths.install)?;
             install_guard.disarm();

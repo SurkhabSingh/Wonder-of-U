@@ -63,11 +63,6 @@ fn anki_connect_request_with_timeout(
 }
 
 /// Fails the request when the reply reports an error.
-///
-/// AnkiConnect answers with `error` as a string or null. Anything else is a reply this
-/// app cannot read, and waving it through would let the `result` beside it — null in
-/// every error response — be taken for a real answer by whatever reads it next. Kept
-/// pure so each shape can be asserted without Anki running.
 fn check_anki_connect_error(response: &serde_json::Value) -> Result<(), String> {
     match response.get("error") {
         None | Some(serde_json::Value::Null) => Ok(()),
@@ -85,16 +80,6 @@ pub(super) fn anki_note_exists(note_id: i64) -> Result<bool, String> {
 }
 
 /// Reads one note out of a `notesInfo` reply.
-///
-/// Kept pure so the two answers that look alike can be told apart in a test without
-/// Anki running, because confusing them costs the user data.
-///
-/// A reply that is not a LIST of notes is a read that did not happen. Reporting that
-/// as `exists: false` would be a failure wearing an absent note's clothes — and the
-/// caller prunes push history from `state.json` on exactly that answer, so one
-/// unreadable reply would delete the record of every card ever mined from a
-/// recording. A real list that simply does not contain the id is the opposite: solid
-/// evidence the note was deleted in Anki, which is what this check exists to find.
 fn note_snapshot_from_result(
     result: &serde_json::Value,
     note_id: i64,
@@ -148,21 +133,11 @@ pub(super) fn anki_note_field_value(
 /// What to say when a reply is not the shape it was supposed to be. `what` names the
 /// thing that was asked for, so the message says which read failed rather than that
 /// something, somewhere, did.
-///
-/// Shared rather than repeated: three places had this sentence written out by hand, and
-/// a sentence kept in three places is one that stops matching itself.
 pub(super) fn unreadable(what: &str) -> String {
     format!("Anki's {what} could not be read — its API may have changed.")
 }
 
 /// The items of an AnkiConnect array reply, or an error naming what could not be read.
-///
-/// The one door every "this should be a list" read goes through. `as_array` answers
-/// `None` for a reply of the wrong shape, and the `unwrap_or_default` that reads so
-/// naturally after it turns that into an empty list — an answer no caller can tell from
-/// "there are none". That mistake was made independently in five places in this module,
-/// which is what a missing name looks like: give the operation one, and the lenient
-/// spelling has nowhere left to hide.
 pub(super) fn json_array<'a>(
     value: &'a serde_json::Value,
     what: &str,
@@ -171,18 +146,6 @@ pub(super) fn json_array<'a>(
 }
 
 /// The strings in an AnkiConnect array reply.
-///
-/// A reply that is not a list of strings is a read that did not happen, and
-/// `unwrap_or_default` turned it into an empty list — which no caller can tell from
-/// "you have none". That difference is not cosmetic here. `update_existing_note_type`
-/// reads a note type's fields and appends the missing ones starting at
-/// `existing_fields.len()`; an empty list makes it believe the note type has no
-/// fields and start inserting at index 0, and `Sentence` has to stay first because
-/// Anki keys duplicate detection on the first field.
-///
-/// An item that is not a string fails for the same reason the whole reply does: it
-/// means the shape is not what this app was written against, and quietly dropping it
-/// would under-report a list while looking like a complete answer.
 pub(super) fn json_string_array(
     value: serde_json::Value,
     what: &str,
@@ -202,18 +165,10 @@ pub(super) fn anki_find_notes(query: &str) -> Result<Vec<i64>, String> {
 }
 
 /// Fetches whole notes — fields, tags, and all — for `note_ids`.
-///
-/// Deliberately takes a slice rather than one id: a note carries every field it
-/// has, so the response is heavy per note and the only way to read many notes
-/// affordably is to ask for them in one round trip. Callers with a large id list
-/// must still chunk it; see `NOTES_INFO_BATCH_SIZE`.
 pub(super) fn anki_notes_info(note_ids: &[i64]) -> Result<serde_json::Value, String> {
     anki_connect_request("notesInfo", serde_json::json!({ "notes": note_ids }))
 }
 
-/// The ids in an AnkiConnect array reply. Strict for the same reason as
-/// `json_string_array`: an unreadable search answer became "no notes matched", and
-/// the known-words build treats that as "the user knows none of these words".
 pub(super) fn json_i64_array(value: serde_json::Value, what: &str) -> Result<Vec<i64>, String> {
     json_array(&value, what)?
         .iter()
@@ -334,9 +289,6 @@ mod tests {
             Err("deck not found".to_string())
         );
 
-        // An error shaped in a way this app does not understand must still FAIL. Waving
-        // it through leaves `result` — null in every error reply — to be read as an
-        // answer, which is how an unreadable response became "the note is gone".
         for unreadable in [
             serde_json::json!({ "result": null, "error": { "code": 1 } }),
             serde_json::json!({ "result": null, "error": 42 }),

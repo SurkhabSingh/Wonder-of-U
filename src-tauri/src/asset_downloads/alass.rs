@@ -18,11 +18,6 @@ use super::transfer::{
 };
 
 /// Where alass puts its two files.
-///
-/// **The archive sits in the install directory, not `downloads/`** — alass is the only asset
-/// that does this. It is deliberate: the zip is deleted the moment extraction has been
-/// attempted, so it never lives long enough for the staging directory to buy anything, and
-/// keeping it beside its own install is one less place a stale 26 MB file can hide.
 struct AlassPaths {
     archive: PathBuf,
     target: PathBuf,
@@ -37,10 +32,6 @@ fn alass_paths(asset_directory: &Path) -> AlassPaths {
 }
 
 /// Downloads alass into `<asset_dir>/alass/alass-cli.exe`.
-///
-/// The release is a 26 MB zip that unpacks to ~74 MB, almost all of it a second copy of
-/// ffmpeg. Only `alass-cli.exe` is kept — see `runtime_assets/alass.rs` for why that is
-/// sufficient and how the binary is pointed at the ffmpeg the app already manages.
 pub(super) fn alass_plan<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<AssetDownloadPlan<R>, String> {
@@ -49,9 +40,6 @@ pub(super) fn alass_plan<R: Runtime>(
     ensure_directory_exists(&install_directory)?;
     let paths = alass_paths(&asset_directory);
 
-    // The card and the shell point at the binary being installed, not the archive being
-    // fetched. Three assets do it this way and three point at the archive; the envelope must
-    // not decide which, so it is stated here.
     let shown_path = paths.target.clone();
 
     Ok(AssetDownloadPlan {
@@ -73,9 +61,6 @@ pub(super) fn alass_plan<R: Runtime>(
                 extract_zip_entry_to_path(&paths.archive, &paths.target, |names| {
                     alass_archive_entry(names)
                 });
-            // The archive is 26 MB of mostly-discarded ffmpeg; it is never worth keeping,
-            // and it is removed whether or not the extraction succeeded. Hence the
-            // deliberate order: remove first, THEN propagate.
             let _ = fs::remove_file(&paths.archive);
             extracted?;
 
@@ -91,7 +76,6 @@ pub(super) fn alass_plan<R: Runtime>(
                 log_details: serde_json::json!({
                     "alassPath": paths.target.display().to_string()
                 }),
-                // Same path the card started on — only the dictionary discovers a new one.
                 target_path: paths.target,
             })
         }),

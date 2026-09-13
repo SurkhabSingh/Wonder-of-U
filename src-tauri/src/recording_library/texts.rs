@@ -12,30 +12,14 @@ use crate::app_types::{
 
 use super::find_recent_recording;
 
-/// Upper bound on how much of a text sidecar we load into a document. Transcripts
-/// are tiny in practice; this is a guard against a pathologically large file, not
-/// a real limit anyone should hit.
 const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Read every transcript and translation text tied to a recording.
-///
-/// The frontend passes a `file_path`, but it is only ever used to look the
-/// recording up in history (same trust model as the Anki push path). Every file
-/// actually read comes from the persisted record, and each read is confined to
-/// the folder of that record's own audio file. Note the sandbox root is itself
-/// derived from the persisted audio path, so the precise guarantee is "cannot
-/// read outside the recording's own directory" — it assumes an untampered audio
-/// path rather than anchoring to a fixed trusted root. Writing a tampered path
-/// into the state file already requires the same local FS access needed to read
-/// the target directly, so this is not an escalation on a single-user desktop.
 pub(crate) fn read_recording_texts_inner<R: Runtime>(
     app: &AppHandle<R>,
     file_path: &str,
 ) -> Result<RecordingTexts, String> {
     let recording = find_recent_recording(app, file_path)?;
-    // Sandbox to the recording's own folder rather than the global output
-    // directory: this stays correct even if the user repoints output later, and
-    // every sidecar lives beside the audio.
     let sandbox_root = Path::new(&recording.file_path)
         .parent()
         .map(Path::to_path_buf)
@@ -43,19 +27,11 @@ pub(crate) fn read_recording_texts_inner<R: Runtime>(
     Ok(collect_recording_texts(&sandbox_root, &recording))
 }
 
-/// Pure, Tauri-free core: given the sandbox folder and a recording record,
-/// resolve and read its transcript and translation text. Never fails as a whole
-/// — an unreadable or out-of-sandbox file becomes a `missing` document so the
-/// other panes still render.
 pub(crate) fn collect_recording_texts(
     sandbox_root: &Path,
     recording: &RecentRecording,
 ) -> RecordingTexts {
     let mut transcripts = Vec::new();
-    // The recording's own stem, used to recover a transcript whose stored path went
-    // stale — a temp path written by an older build, or an absolute path broken by a
-    // moved recordings folder — since the canonical `{stem}[.lang].transcript.txt`
-    // still sits beside the current audio.
     let audio_stem = Path::new(&recording.file_path)
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -78,9 +54,6 @@ pub(crate) fn collect_recording_texts(
         transcripts.push(document);
     }
 
-    // Older recordings carry a single `transcript_path` with no `transcripts`
-    // entries. Include it, but skip it when it is the same file already listed
-    // above so the primary transcript is not shown twice.
     if let Some(transcript_path) = recording.transcript_path.as_deref() {
         let already_listed = recording
             .transcripts
@@ -122,9 +95,6 @@ pub(crate) fn collect_recording_texts(
     }
 }
 
-/// Build a single text document, reading the file inside the sandbox. A file
-/// that is missing, unreadable, or outside the sandbox yields `missing: true`
-/// with empty text rather than an error.
 fn read_recording_text_document(
     sandbox_root: &Path,
     file_path: &str,
@@ -146,11 +116,6 @@ fn read_recording_text_document(
     }
 }
 
-/// If a transcript's stored path could not be read, recover it from the canonical
-/// transcript name beside the *current* audio. This turns a stale stored path — a temp
-/// path left by an older build, or an absolute path broken when the recordings folder
-/// moved — back into readable text instead of a false "missing". A genuinely absent
-/// transcript stays `missing: true`.
 fn recover_missing_transcript(
     document: &mut RecordingTextDocument,
     sandbox_root: &Path,
@@ -169,10 +134,6 @@ fn recover_missing_transcript(
     }
 }
 
-/// Read the canonical `{stem}.{lang}.transcript.txt` (falling back to the language-less
-/// `{stem}.transcript.txt`) from the recording's own folder, through the same sandbox
-/// guard. These are exactly the names the record→transcribe and additional-language
-/// writers produce beside the audio.
 fn read_transcript_beside_audio(
     sandbox_root: &Path,
     audio_stem: &str,
@@ -189,24 +150,15 @@ fn read_transcript_beside_audio(
         .find_map(|name| read_text_within_sandbox(sandbox_root, &sandbox_root.join(name)))
 }
 
-/// Read and deserialize the `{stem}.{lang}.segments.json` sidecar through the same
-/// sandbox guard used for transcripts (the file lives beside the audio, so it
-/// passes). A missing, out-of-sandbox, or unparseable sidecar degrades to an empty
-/// Vec so the read never fails over absent segments.
 fn read_segments_within_sandbox(sandbox_root: &Path, candidate: &Path) -> Vec<RecordingSegment> {
     read_text_within_sandbox(sandbox_root, candidate)
         .and_then(|raw| serde_json::from_str::<Vec<RecordingSegment>>(&raw).ok())
         .unwrap_or_default()
 }
 
-/// Read a file only if it resolves inside `sandbox_root`. Returns `None` (never
-/// reading the bytes) for anything that escapes the sandbox, does not exist, or
-/// cannot be opened.
 fn read_text_within_sandbox(sandbox_root: &Path, candidate: &Path) -> Option<String> {
     let resolved = resolve_within(sandbox_root, candidate)?;
 
-    // Guard against loading a huge file: cap oversized ones, otherwise read the
-    // whole (tiny) transcript in one shot.
     let metadata = fs::metadata(&resolved).ok()?;
     let bytes = if metadata.len() > MAX_TEXT_FILE_BYTES {
         let file = fs::File::open(&resolved).ok()?;
@@ -222,10 +174,6 @@ fn read_text_within_sandbox(sandbox_root: &Path, candidate: &Path) -> Option<Str
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Canonicalize both the sandbox root and the candidate — resolving `..`,
-/// symlinks, and the Windows `\\?\` verbatim prefix on *both* sides — and
-/// confirm the candidate stays inside the root. `None` means the candidate does
-/// not exist or escapes the sandbox.
 fn resolve_within(root: &Path, candidate: &Path) -> Option<PathBuf> {
     let canonical_root = root.canonicalize().ok()?;
     let canonical_candidate = candidate.canonicalize().ok()?;
@@ -236,10 +184,6 @@ fn resolve_within(root: &Path, candidate: &Path) -> Option<PathBuf> {
 
 /// Pull the `{lang}` out of a `{stem}.translation.{lang}.txt` sidecar name,
 /// defaulting to `"en"` when the name does not carry a language tag.
-///
-/// The filename is the only record of which language a translation is in, so this
-/// is also how the translate path decides whether an existing translation already
-/// matches the configured target and how history resolves which sidecar to show.
 pub(crate) fn parse_translation_language(path: &Path) -> String {
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
     let without_extension = file_name.strip_suffix(".txt").unwrap_or(file_name);
@@ -249,9 +193,6 @@ pub(crate) fn parse_translation_language(path: &Path) -> String {
     }
 }
 
-/// Treat two stored paths as the same file when they canonicalize to the same
-/// location (so a redundant `.`/`..` or symlink does not defeat de-duplication),
-/// falling back to a raw string match when either path cannot be canonicalized.
 fn same_file(left: &str, right: &str) -> bool {
     if left == right {
         return true;

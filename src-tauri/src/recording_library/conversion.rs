@@ -62,10 +62,6 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
             continue;
         }
 
-        // History can outlive the file it names — an audio file moved or deleted outside the
-        // app leaves the row behind. Without this the conversion ran anyway, ffmpeg failed on a
-        // file that was not there, and the user was told "the WAV file was kept" about a WAV
-        // that no longer existed.
         if !audio_path.exists() {
             items.push(RecordingActionItem {
                 file_path: recording.file_path,
@@ -89,9 +85,6 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
 
         let converted_path = match compress_transcribed_audio(app, &audio_path) {
             Ok(path) => path,
-            // ffmpeg already said what went wrong and it was written to the log; repeating the
-            // generic sentence here is what made this undiagnosable from the app. Whatever the
-            // reason was, the user reads it.
             Err(reason) => {
                 items.push(RecordingActionItem {
                     file_path: recording.file_path,
@@ -117,11 +110,6 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
         let converted_file_path = updated_recording.file_path.clone();
         let note_id = updated_recording.anki_note_id;
 
-        // Commit the history update BEFORE unlinking the WAV, and treat a failure as
-        // this file's failure rather than the batch's. If the commit cannot land (a
-        // concurrent rename moved the key, the state file could not be written) the
-        // recording has to stay exactly as it was: the WAV is still the file history
-        // names, so drop the orphan MP3 and keep going down the list.
         if let Err(error) = update_recent_recording(app, &original_file_path, move |recording| {
             *recording = updated_recording;
         }) {
@@ -184,11 +172,6 @@ pub(crate) fn convert_recordings_to_mp3_inner<R: Runtime>(
 }
 
 /// Converts a WAV to MP3, or says why it could not.
-///
-/// Returned as a `Result` rather than "the original path back", which is what the caller used
-/// to receive. That shape could only be reported as "MP3 conversion did not complete", so every
-/// distinct cause — no ffmpeg, an unreadable file, a codec error — reached the user as the same
-/// sentence, and the actual message only ever existed in the log.
 fn compress_transcribed_audio<R: Runtime>(
     app: &AppHandle<R>,
     audio_path: &Path,
@@ -294,8 +277,6 @@ fn compress_transcribed_audio<R: Runtime>(
                 "targetPath": mp3_path,
                 "executablePath": executable_path,
                 "statusCode": output.status.code(),
-                // One message, logged and returned, so the log and the user never describe the
-                // same failure differently.
                 "message": reason.clone()
             }),
         );
@@ -314,14 +295,6 @@ fn compress_transcribed_audio<R: Runtime>(
     Ok(mp3_path)
 }
 
-/// Unlinks the WAV an MP3 replaced. Deliberately NOT part of the compression step:
-/// the MP3 only becomes the recording once history says it is, and deleting the
-/// source the moment ffmpeg produced a file meant a failed history commit left the
-/// library pointing at a WAV that no longer existed, with the MP3 orphaned beside
-/// it and the audio unrecoverable. The caller runs this only after the commit.
-///
-/// A failure here is cosmetic — a stale WAV beside a registered MP3 — so it is
-/// logged rather than failing a conversion that has already succeeded.
 fn remove_converted_source<R: Runtime>(app: &AppHandle<R>, audio_path: &Path, mp3_path: &Path) {
     match fs::remove_file(audio_path) {
         Ok(()) => {}

@@ -4,15 +4,6 @@ import { segmentMineKey } from "../../lib/segments";
 import type { RecordingSegment } from "../../types";
 
 // The whole subtitle file as a mineable list, tracking mpv's clock.
-//
-// Deliberately a separate component from `TranscriptReadingPane` rather than a
-// generalisation of it. That pane is used by the verified transcript viewer, and it
-// identifies the playing row by EXACT start/end equality — which is only safe because
-// the audio player hands back the very segment object the row was built from. A player's
-// clock gives a position instead, and after a merge or split no row's bounds match a cue
-// any more. Rewriting the pane to suit both would have put the verified viewer at risk
-// for no gain; the expensive part (`TranscriptSegmentRow`) is reused verbatim, and the
-// semantics that must not diverge — the mine key, merge, split — are shared functions.
 export function SubtitleListPane({
   cues,
   positionMs,

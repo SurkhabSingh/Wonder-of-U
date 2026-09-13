@@ -6,9 +6,6 @@ export type RecordingTextsStatus = "idle" | "loading" | "error";
 
 type UseRecordingTextsOptions = {
   filePath: string | null;
-  // A cheap signature of anything that should force a re-read while the viewer
-  // stays open (e.g. a fresh translation lands). Keeping this out of the fetch
-  // itself lets a newly written sidecar appear without leaving the page.
   changeSignature: string;
 };
 
@@ -53,9 +50,6 @@ export function useRecordingTexts({
         }
         setData(null);
         setStatus("error");
-        // A Tauri command returning `Result<_, String>` rejects with a plain
-        // string, not an Error — handle that first so the specific backend
-        // reason survives instead of always falling back to the generic text.
         setError(
           typeof invokeError === "string" && invokeError.trim()
             ? invokeError

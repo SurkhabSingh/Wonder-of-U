@@ -3,33 +3,11 @@ use std::{path::Path, process::Command};
 use super::mine::{hide_command_window, ClipPadding};
 
 /// The clip is capped at 720p, not left at the source resolution.
-///
-/// Anki syncs its media collection to AnkiWeb and down to phones, so a mined line is not a
-/// local file — it is something the user carries around and pays for in sync time. A 4K
-/// source cut without re-encoding would also keep whatever codec it was in, and HEVC is
-/// exactly what AnkiDroid and AnkiMobile refuse to play.
 const MAX_CLIP_WIDTH: u32 = 1280;
 const MAX_CLIP_HEIGHT: u32 = 720;
 
-/// Constant-quality rather than a target bitrate: a still shot and a busy action scene are
-/// worth different numbers of bits, and CRF spends them where they are needed. 34 is VP9's
-/// rough equivalent of x264's 28 and lands a few-second line in the low hundreds of
-/// kilobytes on typical animation.
 const CLIP_QUALITY: &str = "34";
 
-/// Builds the ffmpeg arguments for cutting `[start_ms, end_ms]` out of `input` as a small
-/// VP9/Opus WebM. Kept pure, like `screenshot_ffmpeg_args` and `slice_ffmpeg_args`, so the
-/// ordering and the filter string can be tested without spawning anything.
-///
-/// **WebM, not MP4, and this is not a preference.** Anki's desktop webview is Chromium built
-/// without the patent-encumbered codecs, so it cannot decode H.264 or AAC — which is exactly
-/// why Anki hands a `[sound:]` video to an external player instead of showing it in the card.
-/// An MP4 in a `<video>` element renders the controls and then plays nothing at all. VP9,
-/// Opus and WebM are the open codecs Chromium always ships, so they play inline on the
-/// desktop and in the Android webview.
-///
-/// `-ss`/`-to` come before `-i`, matching the audio slicer: ffmpeg seeks by keyframe before
-/// it starts decoding, which is what keeps this fast on a long episode.
 pub(super) fn clip_ffmpeg_args(
     start_ms: u64,
     end_ms: u64,
@@ -37,10 +15,6 @@ pub(super) fn clip_ffmpeg_args(
     input: &str,
     output: &str,
 ) -> Vec<String> {
-    // Padding applied HERE, exactly as `slice_ffmpeg_args` does it, so the two builders take
-    // the same arguments and mean the same thing by them. They used to disagree — this one
-    // took a window the caller had already padded — and the cost of that asymmetry is a clip
-    // silently a quarter-second out of step with its own audio, which nothing would fail on.
     let start = start_ms.saturating_sub(padding.before_ms);
     let end = end_ms.saturating_add(padding.after_ms);
     vec![
@@ -55,18 +29,12 @@ pub(super) fn clip_ffmpeg_args(
         format!("{}.{:03}", end / 1000, end % 1000),
         "-i".into(),
         input.into(),
-        // First video and first audio stream. Without this an MKV with several audio tracks
-        // or a subtitle stream would have ffmpeg guessing, and a subtitle stream in an MP4
-        // container is an error rather than a warning.
         "-map".into(),
         "0:v:0".into(),
         "-map".into(),
         "0:a:0".into(),
         "-vf".into(),
         format!(
-            // Two scales on purpose. The first shrinks to fit inside the cap and never
-            // enlarges — a 480p source stays 480p. The second rounds to even dimensions,
-            // which yuv420p requires; without it an odd height fails the encode outright.
             "scale='min({width},iw)':'min({height},ih)':force_original_aspect_ratio=decrease,\
              scale=trunc(iw/2)*2:trunc(ih/2)*2",
             width = MAX_CLIP_WIDTH,
@@ -76,21 +44,14 @@ pub(super) fn clip_ffmpeg_args(
         "libvpx-vp9".into(),
         "-crf".into(),
         CLIP_QUALITY.into(),
-        // VP9 reads `-crf` as a ceiling unless the bitrate target is explicitly zero, in
-        // which case it encodes at constant quality. Without this it silently targets a
-        // default bitrate and ignores the CRF.
         "-b:v".into(),
         "0".into(),
-        // This runs while the user waits for a card. `good` with a high `cpu-used` is the
-        // usual fast-but-not-terrible corner; VP9's default is far slower than x264's.
         "-deadline".into(),
         "good".into(),
         "-cpu-used".into(),
         "4".into(),
         "-row-mt".into(),
         "1".into(),
-        // A 10-bit source would otherwise produce a profile-2 file that the webview cannot
-        // decode, which is the same failure this whole choice of codec exists to avoid.
         "-pix_fmt".into(),
         "yuv420p".into(),
         "-c:a".into(),
@@ -102,9 +63,6 @@ pub(super) fn clip_ffmpeg_args(
 }
 
 /// Writes a short video of the line to `output_path`.
-///
-/// Every failure is the caller's cue to mine WITHOUT a clip, never to fail the mine — the
-/// same contract `capture_screenshot` has. The audio is what a card cannot do without.
 pub(super) fn capture_clip(
     ffmpeg_path: &Path,
     video_path: &Path,
@@ -139,8 +97,6 @@ pub(super) fn capture_clip(
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    // ffmpeg can exit 0 having written nothing — seeking past the end of the video is the
-    // usual way — so the file itself is the proof, not the exit code.
     match std::fs::metadata(output_path) {
         Ok(metadata) if metadata.len() > 0 => Ok(()),
         _ => Err("ffmpeg produced an empty video clip.".into()),

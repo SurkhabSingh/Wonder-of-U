@@ -26,9 +26,6 @@ use crate::{
 struct AnkiPushOutcome {
     note_id: i64,
     furigana_message: Option<String>,
-    /// Why a mapped translation is not on the card, when it was asked for and could not be
-    /// supplied. `None` means there was nothing to say — either no field is mapped, or the
-    /// translation is there.
     translation_message: Option<String>,
 }
 
@@ -122,14 +119,7 @@ fn push_single_recording_to_anki<R: Runtime>(
             serde_json::Value::String(recording.created_at_ms.to_string()),
         );
     }
-    // A translation the user mapped a field for and did not get has to be said out loud.
-    // This read used to be `if let Ok(...)` with no else: a translation file that had been
-    // deleted, or could not be read, produced a card with an empty translation field and a
-    // push that reported plain success. That is the same silent-miss shape as the furigana
-    // bug that went unnoticed for eleven days, and the Jimaku `unwrap_or_default` — the
-    // failure is invisible precisely because the happy path looks identical.
-    //
-    // A recording with no translation at all is NOT a problem: nothing was promised.
+    
     let mut translation_message = None;
     if !settings.fields.translation.is_empty() {
         if let Some(translation_path) = recording.translation_path.as_deref() {

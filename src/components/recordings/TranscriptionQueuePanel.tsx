@@ -1,7 +1,5 @@
 import type { TranscriptionQueueItem } from "../../types";
 
-// Decorative status glyphs (aria-hidden); each row carries an aria-label with
-// the spelled-out status for the reader. Mirrors the Home YouTube queue glyphs.
 const STATUS_GLYPH: Record<TranscriptionQueueItem["status"], string> = {
   queued: "•",
   active: "⟳",
@@ -26,10 +24,6 @@ const STATUS_CHIP: Record<TranscriptionQueueItem["status"], string> = {
   cancelled: "status-chip-warning",
 };
 
-// The non-blocking transcription queue, rendered above the Library list. Cloned
-// from the Home YouTube queue: a flat list of status rows, the one `active` row
-// carrying a live progress bar + Cancel, queued rows a × remove, terminal rows a
-// status chip, and a Clear finished control once there is history to drop.
 export function TranscriptionQueuePanel({
   items,
   activeProgress,
@@ -49,12 +43,8 @@ export function TranscriptionQueuePanel({
   onCancel: () => void;
   onRemove: (id: string) => void;
   onClearFinished: () => void;
-  // Open the transcript viewer for the recording being transcribed, to watch the
-  // sentences arrive as whisper writes them.
   onViewLive: (filePath: string) => void;
 }) {
-  // No rows, no panel — matches the YouTube queue, which is absent until work is
-  // queued.
   if (items.length === 0) {
     return null;
   }
@@ -65,8 +55,6 @@ export function TranscriptionQueuePanel({
     <section className="transcription-queue" aria-label="Transcription queue">
       <div className="transcription-queue-header">
         <span className="transcription-queue-label">Transcription queue</span>
-        {/* Finished rows are history, not work in progress — offer the dismissal
-            only once there is something to dismiss. */}
         {finishedCount > 0 ? (
           <button
             type="button"
@@ -100,9 +88,6 @@ export function TranscriptionQueuePanel({
               </span>
               {item.status === "active" ? (
                 <div className="transcription-queue-active">
-                  {/* Completion is the awaited invoke resolving, not this bar
-                      hitting 100 — the bar is live feedback fed by the
-                      transcription-progress event. */}
                   <div className="progress-track" aria-hidden="true">
                     <div
                       className="progress-fill"
@@ -114,12 +99,6 @@ export function TranscriptionQueuePanel({
                       }}
                     />
                   </div>
-                  {/* Always offered on the active row, never gated on "is this the
-                      first run": this panel only renders on the Library page, so
-                      seeing it means the viewer is NOT open and the button cannot
-                      be redundant. Gating it on the enqueue's `force` flag instead
-                      made it vanish after a cancel-then-re-transcribe, which is
-                      exactly when a way back in is wanted. */}
                   <button
                     type="button"
                     className="ghost transcription-queue-live"

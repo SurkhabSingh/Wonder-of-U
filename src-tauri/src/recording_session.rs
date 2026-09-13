@@ -25,31 +25,15 @@ use crate::{
 /// overlay bar (`src/overlay/main.ts`). Broadcast, so both windows receive it.
 const RECORDING_LEVEL_EVENT: &str = "recording-level";
 
-/// Set for as long as a `start_recording` call is between claiming the recorder
-/// slot and storing the `ActiveRecording` in it.
 static RECORDER_START_CLAIM: Mutex<bool> = Mutex::new(false);
 
-/// Held across the probe for a free WAV name and the create that reserves it.
 static WAV_PATH_RESERVATION_LOCK: Mutex<()> = Mutex::new(());
 
 /// Whether nothing owns the recorder phase.
-///
-/// The same test was written out in three places — here, in the download queue's busy check,
-/// and inverted inside the hotkey failure path — which is three chances to disagree about what
-/// "the app is free" means. One of them WAS inverted, which is exactly how that goes wrong.
 pub(crate) fn recorder_phase_is_free(phase: &str) -> bool {
     phase == "idle" || phase == "error"
 }
 
-/// What to say when a recording cannot start, based on what is actually running.
-///
-/// One sentence used to cover every case — "The app is still busy with the previous recording
-/// task." — which was true only for the recorder's own phases. Pressed during an asset download
-/// it reported a recording nobody had started, so the message named the wrong subsystem while
-/// the real one carried on in the background.
-///
-/// The default is deliberately vague rather than a guess: a phase this does not know about is
-/// better described as "something else" than as a recording.
 pub(crate) fn recording_refusal_for(phase: &str) -> &'static str {
     match phase {
         "downloading-model" => {
@@ -63,29 +47,11 @@ pub(crate) fn recording_refusal_for(phase: &str) -> &'static str {
 }
 
 /// Owns the recorder slot for the whole of `start_recording_inner`.
-///
-/// The slot itself is `Mutex<Option<ActiveRecording>>`, and an `ActiveRecording`
-/// cannot exist until its worker thread does — so the check ("is a recording
-/// running?") and the claim (storing the handle) are unavoidably separated by the
-/// name reservation, a persisted-state write, two snapshot emits and the spawn.
-/// Two concurrent commands used to both pass the check and the second assignment
-/// then dropped the first `stop_signal` on the floor, leaving its capture thread
-/// running until process exit with no way to join it.
-///
-/// This flag closes that window without holding either mutex across the gap:
-/// `acquire` takes both locks, decides, and releases them before returning. That
-/// matters because `update_shell_snapshot` emits, and the emit re-locks the same
-/// state to rebuild the bootstrap — `std::sync::Mutex` is not reentrant, so a
-/// guard held across an emit would deadlock the app instantly. Dropping this guard
-/// clears the flag, so every `?` between the claim and the spawn releases the slot
-/// rather than wedging recording until restart.
 struct RecorderStartClaim;
 
 impl RecorderStartClaim {
     fn acquire<R: Runtime>(app: &AppHandle<R>) -> Result<Self, String> {
         Self::acquire_with(|| {
-            // Nested under the claim, never the other way round: `stop_recording`
-            // only ever takes the recorder lock, so this ordering cannot cycle.
             let recorder_state = app.state::<RecorderState>();
             let recorder = recorder_state
                 .0
@@ -95,10 +61,7 @@ impl RecorderStartClaim {
         })
     }
 
-    /// The claim itself, taking the "is a recording already running?" answer as a
-    /// closure so the flag's behavior can be tested without an `AppHandle` (the
-    /// Tauri mock runtime does not run on Windows). The closure is called with the
-    /// flag held, which is what makes the check and the claim inseparable.
+
     fn acquire_with<F>(recording_is_active: F) -> Result<Self, String>
     where
         F: FnOnce() -> Result<bool, String>,
@@ -123,17 +86,12 @@ impl Drop for RecorderStartClaim {
     }
 }
 
-/// Removes the placeholder WAV that `reserve_wav_path` created, unless the worker
-/// thread took ownership of it. Without this a start that fails after reserving
-/// leaves an empty file behind that every later recording then has to skip past.
 struct ReservedWavPath {
     path: PathBuf,
     armed: bool,
 }
 
 impl ReservedWavPath {
-    /// Gives up responsibility for the file: the capture worker owns it from here
-    /// on, and removes it itself if the capture fails.
     fn disarm(mut self) {
         self.armed = false;
     }
@@ -148,14 +106,6 @@ impl Drop for ReservedWavPath {
 }
 
 /// Picks a free WAV name and creates it in the same breath.
-///
-/// `unique_wav_path` only probes: the worker thread does not open the file until
-/// much later, so on its own the probe reserves nothing and two starts landing in
-/// the same millisecond can pick the same name — the second `WavWriter::create`
-/// truncates and one recording is silently lost. Creating the file under the lock
-/// makes the name taken as far as any later probe is concerned. `create_new` is
-/// atomic, so it also holds against another process racing us, and the empty
-/// placeholder is harmless: `WavWriter::create` truncates it anyway.
 fn reserve_wav_path(directory: &Path, file_stem: &str) -> Result<PathBuf, String> {
     let _reservation_guard = WAV_PATH_RESERVATION_LOCK
         .lock()
@@ -179,8 +129,6 @@ pub(crate) fn start_recording_inner<R: Runtime>(
     app: &AppHandle<R>,
     requested_name: Option<String>,
 ) -> Result<(), String> {
-    // Claimed before the phase check so that two concurrent starts cannot both
-    // read an idle shell and proceed.
     let _slot_claim = RecorderStartClaim::acquire(app)?;
 
     {
@@ -218,21 +166,12 @@ pub(crate) fn start_recording_inner<R: Runtime>(
         armed: true,
     };
 
-    // Spawn the capture worker FIRST — before the durable state write and the shell
-    // snapshot emit. Those two used to sit on the critical path ahead of capture: the
-    // fsync in write_persisted_data (a few ms, more under load) and the snapshot's
-    // ffmpeg/yt-dlp detection (up to ~1s on a cold probe cache) delayed the first
-    // sample by exactly that much. Doing them after the spawn overlaps them with the
-    // worker's WASAPI initialisation, so audio starts as soon as the device is ready.
+    // Spawn the capture worker FIRST — before the durable state write and the shell snapshot emit. 
     let stop_signal = Arc::new(AtomicBool::new(false));
     let log_path = app.state::<AppPathsState>().inner().log_file.clone();
     let output_path_for_worker = output_path.clone();
     let display_name_for_worker = display_name.clone();
     let stop_signal_for_worker = stop_signal.clone();
-    // The capture thread reports its input level here; broadcast each reading so
-    // both meters — the main-window bar and the global toast overlay — light up
-    // from the one source. A dropped emit (e.g. a window is gone) is ignored: the
-    // meter is purely cosmetic and must never disturb the capture.
     let app_for_level = app.clone();
     let worker = std::thread::Builder::new()
         .name("system-audio-recorder".into())
@@ -273,9 +212,6 @@ pub(crate) fn start_recording_inner<R: Runtime>(
         });
     }
 
-    // Capture is now running; persist the reserved counter/settings off the hot path.
-    // Best-effort: a failure here must not tear down a live recording (worst case a
-    // recording counter is reused), so it is logged rather than propagated.
     if let Err(error) = write_persisted_data(app, &persisted_snapshot) {
         let message: String = error.into();
         log_event(
@@ -306,8 +242,6 @@ pub(crate) fn start_recording_inner<R: Runtime>(
         shell.transition_count += 1;
     })?;
 
-    // Both the global hotkey and the UI button reach recording through here, so a
-    // single call flashes the corner pill and lights the tray dot for either.
     signal_recording_indicator(app, IndicatorSignal::Recording);
     Ok(())
 }
@@ -363,11 +297,6 @@ pub(crate) fn stop_recording_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(),
                 });
             }
         })
-        // The phase was set to "saving" above, for a thread that does not exist. Nothing else
-        // would ever move it: both start and stop refuse while it reads "saving", and the
-        // finalizer that clears it is the thread that failed to launch — so the app stayed
-        // wedged until it was restarted. `start_recording_inner` already releases the phase the
-        // same way when ITS spawn fails; this is the one spawn site that did not.
         .map_err(|error| {
             let message = error.to_string();
             let _ = update_shell_snapshot(app, |shell| {
@@ -380,8 +309,6 @@ pub(crate) fn stop_recording_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(),
             message
         })?;
 
-    // Capture has stopped, so drop the tray dot and flash the corner pill now
-    // rather than waiting on the background finalizer that saves the WAV.
     signal_recording_indicator(app, IndicatorSignal::Saved);
     Ok(())
 }
@@ -395,8 +322,6 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
 
         let first = reserve_wav_path(temp_dir.path(), "sample").unwrap();
-        // The probe alone would hand back "sample.wav" twice, because the worker
-        // thread does not create the file until much later.
         let second = reserve_wav_path(temp_dir.path(), "sample").unwrap();
 
         assert_eq!(first.file_name().unwrap(), "sample.wav");
@@ -429,9 +354,7 @@ mod tests {
 mod refusal_message_tests {
     use super::recording_refusal_for;
 
-    /// One sentence used to answer every phase, and it named the recorder. Pressed during a
-    /// download the app reported "the previous recording task" for a recording nobody had
-    /// started — the same class of mistake as a download refusal that talked about recordings.
+    /// One sentence used to answer every phase, and it named the recorder.
     #[test]
     fn the_refusal_names_the_thing_that_is_actually_running() {
         assert!(recording_refusal_for("downloading-model").contains("download"));

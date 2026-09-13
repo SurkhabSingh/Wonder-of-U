@@ -19,11 +19,6 @@ type SubtitleSource = {
 };
 
 // Every subtitle line for the video being watched.
-//
-// The cues come from the file rather than from mpv: mpv answers "what is on screen now"
-// and exposes no cue list at all, so the whole list has to be read separately. Rust does
-// the reading (a sidecar, or an ffmpeg extraction of an embedded track) and hands back
-// text; parsing stays here so the app has one parser.
 export function useWatchSubtitles() {
   const [cues, setCues] = useState<RecordingSegment[]>([]);
   const [tracks, setTracks] = useState<SubtitleTrack[]>([]);
@@ -51,9 +46,6 @@ export function useWatchSubtitles() {
         setTracks(source.tracks);
         const parsed = parseSubtitles(source.content, source.name);
         setCues(parsed);
-        // A file that loaded but yielded nothing is a FAILURE, not an empty state. Left
-        // silent it reaches the pane as zero cues and reads as "No subtitles loaded — pick
-        // a file", which tells a user who just picked one to go and do it again.
         if (parsed.length === 0 && source.content.trim().length > 0) {
           setError(
             `${source.name} has no readable subtitle lines — it may be an unsupported format or a text encoding the parser could not decode.`,

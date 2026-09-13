@@ -32,8 +32,6 @@ export function ProgressPage({
   const comparison = report?.comparison ?? null;
   const knownWords = bootstrap.knownWords;
 
-  // Never looked, as opposed to looked and found nothing. A page of dashes would claim
-  // we had checked.
   if (readCount === 0 && !failed) {
     return (
       <section className="progress-scroll">
@@ -59,8 +57,6 @@ export function ProgressPage({
       </div>
 
       {storeUnavailable ? (
-        // A condition the app is in, not one action's outcome, so it is stated here
-        // rather than raised as a toast.
         <p className="microcopy field-warning">
           Your progress history could not be opened, so there is nothing to show. Nothing
           has been written over it.
@@ -85,8 +81,6 @@ export function ProgressPage({
             comparison ? (
               <>
                 {comparison.deltaPoints === 0 ? (
-                  // Neither coloured nor signed: "+0.0" reads as a gain of nothing
-                  // rather than as no gain.
                   <span>No change</span>
                 ) : (
                   <span className={comparison.deltaPoints > 0 ? "up" : "down"}>
@@ -176,8 +170,6 @@ export function ProgressPage({
               report.activity.itemsWithoutADay > 0
                 ? `${formatCount(report.activity.itemsWithoutADay)} on no known day`
                 : null,
-              // Both are readings not folded into the numbers above, and both are kept
-              // in the file — so each says so, or it reports a loss that did not happen.
               report.damagedRows > 0
                 ? `${formatCount(report.damagedRows)} earlier reading${
                     report.damagedRows === 1 ? "" : "s"

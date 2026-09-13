@@ -1,30 +1,3 @@
-//! Cutting the clip the transcript viewer plays when you click a sentence.
-//!
-//! Playback used to seek the original file with `audio.currentTime`. For an MP3 the WebView
-//! seeks through the file's Xing TOC — 100 entries for the whole recording, linearly
-//! interpolated between them. On a constant-bitrate file that is exact. On a variable-bitrate
-//! one it is an estimate, and on a real 550 s VBR recording from the library the estimate is
-//! wrong by up to a second, in both directions, erratically:
-//!
-//! ```text
-//!   seek to    lands at    error
-//!     8.08 s     8.40 s    +320 ms   first syllable gone
-//!   293.34 s   292.32 s   -1020 ms   plays the previous sentence
-//!   494.46 s   493.58 s    -876 ms
-//! ```
-//!
-//! That is why the same sentence sounded wrong in the viewer and perfect on the card: a mined
-//! clip is cut by ffmpeg, which parses frames and lands sample-exact (measured: 0.0 ms error at
-//! every position tested). So playback stops seeking and plays an ffmpeg cut instead — the same
-//! cut, from the same window, that a card would get.
-//!
-//! Nothing here is shared with the miner beyond two pure functions. An earlier attempt at this
-//! wrote previews into the mining temp directory using the miner's own naming, and mined cards
-//! broke; the cause was never established. Sharing a directory with files that delete
-//! themselves, and a name generator that hands out the first free name, is enough of a hazard
-//! that this keeps its own of both — not as caution, but so the two paths have nothing to
-//! collide over.
-
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -41,11 +14,6 @@ use crate::{
 };
 
 /// Scratch space for previews, and ours alone.
-///
-/// Deliberately NOT the miner's `wonder-of-u` directory. That one is shared with files whose
-/// lifetime is a mine, and whose names come from a generator that returns the first unused one —
-/// so a preview left sitting there changes which name the next mine is given. A separate
-/// directory means a preview cannot be seen by the mining path at all.
 fn preview_temp_dir() -> Result<PathBuf, String> {
     let directory = std::env::temp_dir().join("wonder-of-u-preview");
     fs::create_dir_all(&directory)
@@ -54,17 +22,9 @@ fn preview_temp_dir() -> Result<PathBuf, String> {
 }
 
 /// Counter behind the preview filename.
-///
-/// A fixed name would be served from the WebView's cache on the second play — same URL, stale
-/// bytes, and the wrong sentence heard. Each cut gets its own name so each gets its own URL.
 static PREVIEW_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Deletes every file in the preview directory except the one just written.
-///
-/// Only one preview is ever playable, so anything else in here is finished with — including
-/// whatever a crash or a force-quit left behind, which is why this sweeps the directory rather
-/// than only unlinking the path it remembers. Safe precisely because the directory is ours: no
-/// other part of the app writes here.
 fn sweep_previews_except(keep: &Path) {
     let Ok(directory) = preview_temp_dir() else {
         return;
@@ -82,9 +42,6 @@ fn sweep_previews_except(keep: &Path) {
 
 /// Cuts `[start_ms, end_ms]` (plus the miner's padding) out of `file_path` and returns the
 /// clip's path for the frontend to play.
-///
-/// The padding comes from the same `clipPaddingMs` setting a mine uses, so what is heard here
-/// and what lands on the card are the same window by construction rather than by agreement.
 pub(crate) fn preview_segment_clip_inner<R: Runtime>(
     app: &tauri::AppHandle<R>,
     file_path: String,

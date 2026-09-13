@@ -1,21 +1,6 @@
-//! Writing a subtitle file from our own transcript.
-//!
-//! Crate level rather than under `watch/` or `recording_library/` because both sides use it:
-//! the segments come from a transcription and the file is consumed by a watch session.
-//!
-//! Serialised from the CLEANED segments, never from whisper's `--output-srt`. Whisper's own
-//! output carries what cleaning exists to remove — the runaway repeats, the stock
-//! hallucination phrases, the out-of-bounds tail, and whisper's unclamped cue ends — so a
-//! `-osrt` file would disagree with both the list the app displays and the sidecar it mines
-//! from. Two answers to "what does this recording say" is the divergence
-//! `store_segments_sidecar` already rewrites the `.txt` to avoid.
-
 use crate::app_types::RecordingSegment;
 
 /// Milliseconds → `HH:MM:SS,mmm`, the SRT timestamp form (comma, not the period VTT uses).
-///
-/// Hours are not capped: a long recording is rare but a wrapped hour would silently move a
-/// cue to the start of the file.
 fn format_srt_timestamp(total_ms: u64) -> String {
     let hours = total_ms / 3_600_000;
     let minutes = (total_ms % 3_600_000) / 60_000;
@@ -47,9 +32,6 @@ pub(crate) fn segments_to_srt(segments: &[RecordingSegment]) -> String {
     let mut index = 0usize;
 
     for segment in segments {
-        // Collapsing rather than replacing with a space: SRT allows a multi-line cue, and a
-        // transcript line that already contains a break should keep it. Only *blank* lines
-        // are the hazard.
         let text = segment
             .text
             .lines()

@@ -48,12 +48,6 @@ pub(super) fn request_furigana_html(text: &str) -> Result<String, String> {
         let furigana_html = response
             .furigana_html
             .ok_or_else(|| "Anki Lookup add-on did not return furigana HTML.".to_string())?;
-        // Converted to bracket notation rather than validated as markup. The old strict
-        // tag allowlist existed because ruby HTML from an unauthenticated port went
-        // straight into a field Anki renders; converting drops every tag instead, so
-        // there is no markup left to allow or reject. It also means an add-on that
-        // changes its wrapper — which is exactly what silently broke this — can no longer
-        // break furigana.
         let brackets = ruby_html_to_furigana_brackets(&furigana_html);
         if brackets.trim().is_empty() {
             return Err("Anki Lookup add-on returned furigana with no readable text.".into());
@@ -67,31 +61,14 @@ pub(super) fn request_furigana_html(text: &str) -> Result<String, String> {
 }
 
 
-/// Converts the bridge's ruby HTML into Anki's bracket notation:
-/// `<ruby>漢字<rt>かんじ</rt></ruby>` becomes `漢字[かんじ]`.
-///
-/// This is what the Lapis note type does, and what Yomitan and mpvacious emit. The point
-/// is not cosmetic — it removes the security problem rather than managing it. Storing
-/// ruby HTML meant accepting markup from an unauthenticated localhost port and rendering
-/// it inside Anki's QtWebEngine, which is why a strict tag allowlist existed at all.
-/// Bracket notation is PLAIN TEXT: the field is escaped like every other field, and
-/// Anki's own `{{furigana:}}` filter builds the ruby at render time. Nothing the bridge
-/// sends can be markup any more, because every tag is dropped here.
-///
-/// A space is inserted before a reading group when the preceding character is not
-/// already one. Anki's filter matches `([^ >]+?)\[(.+?)\]`, so without that separator
-/// `これは漢字[かんじ]` makes the WHOLE run the base text and renders the reading over
-/// `これは漢字`. Yomitan inserts the same space for the same reason.
+/// Converts the bridge's ruby HTML into Anki's bracket notation
 pub(super) fn ruby_html_to_furigana_brackets(html: &str) -> String {
     let characters = html.chars().collect::<Vec<_>>();
     let mut output = String::with_capacity(html.len());
-    // Text collected inside the current <ruby>, i.e. the base the reading belongs to.
     let mut base = String::new();
     let mut reading = String::new();
     let mut index = 0;
     let mut in_ruby = false;
-    // <rt> is the reading; <rp> is fallback parens for renderers without ruby support and
-    // must be dropped whole; <style>/<script> content is not text at all.
     let mut in_reading = false;
     let mut skip_depth: Option<&'static str> = None;
 
@@ -153,15 +130,6 @@ pub(super) fn ruby_html_to_furigana_brackets(html: &str) -> String {
                 let reading_text = reading.trim();
                 if !base_text.is_empty() {
                     if !reading_text.is_empty() {
-                        // Separate the group from whatever precedes it, or Anki's filter
-                        // swallows that text into the base.
-                        //
-                        // The test is against a LITERAL SPACE, not `is_whitespace`. Anki's
-                        // pattern is ` ?([^ >]+?)\[(.+?)\]`, and that class excludes only
-                        // a space and `>` — a NEWLINE is fair game, so the match crosses
-                        // it and swallows the end of the previous line into the base. On a
-                        // multi-line transcript that renders the reading over the wrong
-                        // words entirely.
                         if output.chars().last().is_some_and(|last| last != ' ') {
                             output.push(' ');
                         }
@@ -180,11 +148,9 @@ pub(super) fn ruby_html_to_furigana_brackets(html: &str) -> String {
             }
             ("rt", false) => in_reading = true,
             ("rt", true) => in_reading = false,
-            // Fallback parens, and anything whose contents are not text.
             ("rp", false) => skip_depth = Some("rp"),
             ("style", false) => skip_depth = Some("style"),
             ("script", false) => skip_depth = Some("script"),
-            // A line break is real content the transcript carried over.
             ("br", _) => {
                 if in_ruby {
                     base.push('\n');
@@ -192,12 +158,10 @@ pub(super) fn ruby_html_to_furigana_brackets(html: &str) -> String {
                     output.push('\n');
                 }
             }
-            // <rb>, <span>, and anything else: unwrap, keep the text.
             _ => {}
         }
     }
 
-    // An unclosed <ruby> still has text worth keeping.
     let trailing = base.trim();
     if !trailing.is_empty() {
         output.push_str(trailing);
@@ -205,17 +169,12 @@ pub(super) fn ruby_html_to_furigana_brackets(html: &str) -> String {
     output
 }
 
-/// Writes validated furigana over the mapped transcription field, keeping any
-/// `[sound:...]` tag the field already carries. Shared by the mine and push flows,
-/// which differ only in how they report the outcome.
 pub(super) fn insert_furigana_field(
     settings: &AnkiSettings,
     furigana_brackets: &str,
     media_file_name: &str,
     fields: &mut serde_json::Map<String, serde_json::Value>,
 ) {
-    // Bracket notation is plain text, so it is escaped like every other field value —
-    // the reason the old ruby-HTML path could not be.
     let furigana_html = html_escape(furigana_brackets);
     let furigana_html = furigana_html.as_str();
     let target_field = settings.fields.transcription.as_str();
@@ -383,11 +342,6 @@ mod tests {
 
     #[test]
     fn a_group_after_a_newline_still_gets_its_separating_space() {
-        // The bug this pins. Anki's pattern is ` ?([^ >]+?)\[(.+?)\]` and that class
-        // excludes only a SPACE and `>` — a newline is fair game. Without a space the
-        // match crosses the line break, the base becomes the end of the PREVIOUS line,
-        // and the reading renders over the wrong words. Multi-line transcripts hit this
-        // on nearly every line, which is exactly what was seen on a real card.
         let html = concat!(
             "お<ruby>願<rt>ねが</rt></ruby>いします。\n",
             "<ruby>単品<rt>たんぴん</rt></ruby>です"
@@ -395,8 +349,6 @@ mod tests {
         let got = ruby_html_to_furigana_brackets(html);
         assert_eq!(got, "お 願[ねが]いします。\n 単品[たんぴん]です");
 
-        // Every group's base must start after a literal space (or the string start), and
-        // must not reach back across a newline.
         for (bracket, _) in got.match_indices('[') {
             let base_start = got[..bracket].rfind(' ').map(|at| at + 1).unwrap_or(0);
             assert!(

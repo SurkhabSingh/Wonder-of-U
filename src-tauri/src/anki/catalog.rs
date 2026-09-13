@@ -62,20 +62,6 @@ pub(crate) fn load_anki_catalog_inner<R: Runtime>(
     note_types.sort();
 
     // Only ask for the fields of a note type Anki has just said it HAS.
-    //
-    // `modelFieldNames` errors on a name it does not know, and that error used to take the
-    // whole catalog down with it — so renaming or deleting the configured note type in Anki
-    // emptied the deck AND note-type lists on this page, and the only control that could
-    // have fixed it was the note-type picker that had just gone blank. The recovery path
-    // was the thing that broke.
-    //
-    // Checked against the list rather than wrapped in a fallback: a lookup that cannot be
-    // asked for a name that does not exist has no failure to handle.
-    //
-    // Answered as `None` rather than an empty list. An empty list is what a note type with
-    // no matching fields looks like, and the page's response to that is to name the mapped
-    // fields it could not find — advice that reads as nonsense when the note type itself is
-    // the thing that is gone.
     let fields = if note_types.iter().any(|name| name == &selected_note_type) {
         Some(json_string_array(
             anki_connect_request(

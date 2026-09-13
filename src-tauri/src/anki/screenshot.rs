@@ -3,27 +3,11 @@ use std::process::Command;
 
 use super::mine::hide_command_window;
 
-/// Longest edge of a mined screenshot, in pixels. Anki syncs its media collection, and a
-/// sentence card is read on a phone — a full 1080p frame per card would bloat the
-/// collection for detail nobody reads. Downscaling only: `force_original_aspect_ratio`
-/// plus the `min()` guard leaves an already-smaller frame alone rather than upscaling it
-/// into blur.
 const MAX_SCREENSHOT_EDGE: u32 = 640;
 
-/// JPEG quality for `-q:v` (2–31, lower is better). 4 is visually clean on video stills
-/// while staying a fraction of the size of the 2 the audio path uses for clips.
 const SCREENSHOT_QUALITY: &str = "4";
 
 /// Builds the ffmpeg arguments that grab a single frame at `at_ms`.
-///
-/// `-ss` goes BEFORE `-i` deliberately: that seeks by keyframe before decoding, which
-/// turns a frame grab from a whole-file decode into a near-instant one. The cost is
-/// landing on the nearest preceding keyframe rather than the exact millisecond, which for
-/// a still illustrating a sentence is not a cost at all — and mining has to stay
-/// interactive, since the user is pressing Enter on one row after another.
-///
-/// Kept pure so the profile can be asserted without spawning ffmpeg, matching
-/// `slice_ffmpeg_args` in mine.rs.
 pub(super) fn screenshot_ffmpeg_args(at_ms: u64, input: &str, output: &str) -> Vec<String> {
     vec![
         "-y".into(),
@@ -35,11 +19,8 @@ pub(super) fn screenshot_ffmpeg_args(at_ms: u64, input: &str, output: &str) -> V
         format!("{}.{:03}", at_ms / 1000, at_ms % 1000),
         "-i".into(),
         input.into(),
-        // One frame, and never a stream of them.
         "-frames:v".into(),
         "1".into(),
-        // Drop any audio/subtitle stream so a container with several does not confuse the
-        // single-frame output.
         "-an".into(),
         "-sn".into(),
         "-vf".into(),
@@ -55,11 +36,6 @@ pub(super) fn screenshot_ffmpeg_args(at_ms: u64, input: &str, output: &str) -> V
 }
 
 /// Writes a single still from `video_path` at `at_ms` to `output_path`.
-///
-/// Every failure is the caller's cue to mine WITHOUT a picture, never to fail the mine:
-/// the source video is a reference to the user's own file and may have been moved,
-/// renamed, or deleted since the import, and a missing screenshot must not cost them the
-/// card.
 pub(crate) fn capture_screenshot(
     ffmpeg_path: &Path,
     video_path: &Path,
@@ -90,8 +66,6 @@ pub(crate) fn capture_screenshot(
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    // ffmpeg can exit 0 having written nothing — seeking past the end of the video is the
-    // usual way — so the file itself is the proof, not the exit code.
     match std::fs::metadata(output_path) {
         Ok(metadata) if metadata.len() > 0 => Ok(()),
         _ => Err("ffmpeg produced an empty screenshot.".into()),

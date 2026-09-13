@@ -11,18 +11,12 @@ pub(crate) struct ActivityDay {
     pub(crate) items: u32,
 }
 
-/// When the library was worked on. Sparse: a row per empty day would be mostly zeroes
-/// for the frontend to filter back out.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ActivityReport {
     pub(crate) days: Vec<ActivityDay>,
-    /// Not floored at the day this feature first ran: recordings carry real dated evidence
-    /// from before it, and hiding that tells a user with history they did nothing.
     pub(crate) since_day: Option<DayKey>,
     pub(crate) active_days: usize,
-    /// Sent, not re-derived: the 04:00 boundary lives in one place, and a frontend using
-    /// local midnight would disagree with its own rows for four hours a night.
     pub(crate) today: DayKey,
     pub(crate) items_without_a_day: usize,
     pub(crate) streak: Streak,
@@ -40,14 +34,10 @@ pub(crate) struct Streak {
 pub(crate) struct LibraryReport {
     pub(crate) items: usize,
     pub(crate) total_ms: u64,
-    /// Items whose length was never recorded. Their time is not in `total_ms`, so a total
-    /// that did not say so would be quietly short.
     pub(crate) items_without_length: usize,
     pub(crate) recorded: usize,
     pub(crate) imported_from_a_link: usize,
     pub(crate) imported_from_a_file: usize,
-    /// Items predating the origin field. Its own count: "we do not know" and "microphone"
-    /// are different answers.
     pub(crate) unknown_origin: usize,
     pub(crate) transcribed: usize,
     pub(crate) japanese: usize,
@@ -86,8 +76,6 @@ pub(crate) fn summarise(
             library.total_ms += recording.duration_ms;
         }
 
-        // The values the app writes. Anything else, `None` included, is an origin nobody
-        // recorded, and is never guessed at.
         match recording.source.as_deref() {
             Some("recording") => library.recorded += 1,
             Some("import") => library.imported_from_a_file += 1,

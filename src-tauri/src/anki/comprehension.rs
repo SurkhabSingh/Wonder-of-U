@@ -13,12 +13,8 @@ use crate::tokenizer::tokenize_japanese;
 use super::known_words::normalize_expression;
 use super::sentence_ranking::is_content_word;
 
-/// Below this there is nothing to say: a headline that swings twenty points because one
-/// clip arrived teaches the reader to distrust it.
 const MIN_CONTENT_TOKENS: u32 = 200;
 
-/// Why no sample was taken. An enum rather than an empty sample: nothing sums to `0 / 0`,
-/// and the page would render a confident zero for "I could not look".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Skip {
     Unconfigured,
@@ -68,8 +64,6 @@ pub(crate) fn sample_comprehension<R: Runtime>(
         return Ok(Sampled::Skipped(Skip::NeedsDictionary));
     };
 
-    // Copied out and the lock released at once: the tokenize pass can load a 58 MB
-    // dictionary, and the two "do not measure" states are found before paying for it.
     let (known_words, built_at_ms) = {
         let state = app.state::<KnownWordsState>();
         let guard = state
@@ -94,8 +88,6 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     let mut unread = 0_u32;
     for (key, path) in japanese {
         let Ok(text) = crate::text_files::read_external_text(Path::new(&path)) else {
-            // Never skipped silently: a denominator that quietly shrinks moves the
-            // headline with no visible cause.
             unread += 1;
             continue;
         };
@@ -128,8 +120,6 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     )))
 }
 
-/// Returns nothing by signature, so a reading cannot turn a working refresh into an error.
-/// `catch_unwind` protects this thread only, so nothing here holds a lock across slow work.
 pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String, String> {
         let now_ms = crate::app_runtime::now_ms();

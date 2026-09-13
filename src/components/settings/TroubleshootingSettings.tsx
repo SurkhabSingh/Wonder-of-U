@@ -2,14 +2,6 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "../../lib/errors";
 
-/**
- * Everything a user needs to report a problem.
- *
- * Two things, because they answer different halves. The diagnostics block is what a bug report
- * form asks for and what a person will actually paste; the log file is the optional attachment
- * that says what happened, and it needs a way to be found at all — a filesystem path in a chat
- * message is not one.
- */
 export function TroubleshootingSettings({
   logPath,
   onError,
@@ -23,8 +15,6 @@ export function TroubleshootingSettings({
     try {
       await invoke("open_log_folder");
     } catch (error) {
-      // A rejected invoke carries the backend's plain string, never an Error, so an
-      // `instanceof` test discards every reason the command can give.
       onError(errorMessage(error, "The log folder could not be opened."));
     }
   };
@@ -34,7 +24,6 @@ export function TroubleshootingSettings({
       const text = await invoke<string>("copy_diagnostics");
       await navigator.clipboard.writeText(text);
       setCopied(true);
-      // Long enough to read, short enough that the button does not look stuck.
       setTimeout(() => setCopied(false), 2500);
     } catch (error) {
       onError(errorMessage(error, "The summary could not be copied."));
@@ -70,8 +59,6 @@ export function TroubleshootingSettings({
           </button>
         </div>
 
-        {/* Named plainly, because the file is about to be handed to someone else and nobody
-            should have to open it to find out what is in it. */}
         <p className="microcopy">
           The log holds file locations, recording names, and what each action
           did. Your Windows account name is replaced before anything is written,

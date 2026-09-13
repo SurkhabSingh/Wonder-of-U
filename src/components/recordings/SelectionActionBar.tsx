@@ -5,12 +5,6 @@ import type { BusyAction, RecentRecording } from "../../types";
 type RecordingAction = (filePaths: string[]) => void | Promise<void>;
 type PushAction = (filePaths: string[], deckName?: string) => void | Promise<void>;
 
-// Select-mode content for the Library toolbar. When rows are selected the
-// filter tabs + normal toolbar give way to this row IN PLACE (Gmail-style takeover)
-// — nothing new floats or docks. It reuses the .recording-toolbar row shell, adds
-// the .recording-toolbar-selected tint + an accent left-rail, and surfaces the
-// applicable actions DIRECTLY as one-click buttons (each with its own count),
-// with a small dropdown only for the rarer "push to another deck".
 export function SelectionActionBar({
   visibleSelectedPaths,
   configuredDeckMenuOptions,
@@ -59,12 +53,6 @@ export function SelectionActionBar({
     configuredDeckMenuOptions.length > 0 &&
     selectedTranscribedRecordings.some((recording) => !recording.audioDeleted);
 
-  // Acting on a selection ends it. Leaving the rows ticked meant the next selection was
-  // added to the last one — pick three, transcribe, pick three more, and the bar reports six,
-  // three of which were already dealt with. The action is the end of that selection's life.
-  //
-  // Only the batch bar does this. A single row's own button acts on that row alone and has no
-  // business clearing a selection the user made for something else.
   const runOnSelection = (action: () => void | Promise<void>) => {
     void action();
     onClearSelection();

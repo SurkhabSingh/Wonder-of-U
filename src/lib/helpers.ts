@@ -6,8 +6,7 @@ export function pathHasExtension(path: string, extension: string): boolean {
 }
 
 // A dropped payload can contain anything the OS allows — folders, PDFs, a
-// screenshot. Both the drop handler and the file picker gate on this one list
-// so what the picker offers and what a drop accepts stay identical.
+// screenshot.
 export function isSupportedMediaPath(path: string): boolean {
   const extension = path.trim().toLowerCase().split(".").pop() ?? "";
   return (

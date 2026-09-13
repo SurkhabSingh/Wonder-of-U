@@ -39,10 +39,6 @@ fn write_worker_log(log_path: &Path, level: &str, event: &str, message: &str) {
 #[cfg(target_os = "windows")]
 const LEVEL_EMIT_INTERVAL: Duration = Duration::from_millis(75);
 
-/// Runs the loopback capture. `on_level` is called roughly every
-/// [`LEVEL_EMIT_INTERVAL`] with the peak sample amplitude (0.0..=1.0) seen since
-/// the last call, so the caller can drive a live input meter; it is called once
-/// more with `0.0` when capture ends so the meter falls back to rest.
 #[cfg(target_os = "windows")]
 pub fn capture_system_audio_loopback(
     output_path: PathBuf,

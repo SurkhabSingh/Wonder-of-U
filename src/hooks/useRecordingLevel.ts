@@ -6,12 +6,6 @@ import { listen } from "@tauri-apps/api/event";
 // surfaces the latest reading for the input meter.
 const RECORDING_LEVEL_EVENT = "recording-level";
 
-/**
- * Subscribes to the live recording input level. Returns the latest peak
- * amplitude in the range 0..1, or 0 whenever `active` is false — so the meter
- * rests the instant recording is no longer the current phase, without waiting on
- * a trailing event that a hidden window might miss.
- */
 export function useRecordingLevel(active: boolean): number {
   const [level, setLevel] = useState(0);
 

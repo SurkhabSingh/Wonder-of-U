@@ -1,24 +1,8 @@
-//! Finding mpv's video window on screen.
-//!
-//! The scanner overlay has to sit exactly on top of the video, and mpv offers no way to ask
-//! where it is — `--wid` embedding was rejected (it would make mpv a child of our window and
-//! break its own fullscreen and OSC), so the window is located the way any other process
-//! would do it: enumerate top-level windows, keep the ones owned by mpv's pid, and pick the
-//! visible one.
-//!
-//! Measured in the spike: mpv owns **five** top-level windows — the video window plus
-//! `mpv-smtc` (the media-transport-controls helper, permanently hidden) and three IME
-//! windows with zero-sized rects. Only one is both visible and real, which is what
-//! `video_window_for_pid` filters on. Matching on the window *title* would have been the
-//! obvious alternative and is wrong: mpv's title is the filename by default and fully
-//! user-configurable via `--title`.
-
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows_sys::core::BOOL;
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, POINT, RECT, TRUE},
-    // `ClientToScreen` lives with the GDI bindings rather than the windowing ones.
     Graphics::Gdi::ClientToScreen,
     UI::HiDpi::GetDpiForWindow,
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_SHIFT},
@@ -28,10 +12,8 @@ use windows_sys::Win32::{
     },
 };
 
-/// mpv's window class. Stable across builds and, unlike the title, not user-settable.
 const MPV_WINDOW_CLASS: &str = "mpv";
 
-/// A window narrower or shorter than this is a helper, not a video surface.
 const MINIMUM_VIDEO_EXTENT: i32 = 120;
 
 /// Where mpv's video is, in physical screen pixels, plus what it takes to place a window
@@ -42,9 +24,6 @@ pub(crate) struct VideoWindowRect {
     pub(crate) top: i32,
     pub(crate) width: i32,
     pub(crate) height: i32,
-    /// Physical pixels per logical pixel × 100. Tauri positions in physical pixels but sizes
-    /// webview content in logical ones, so the overlay needs this to agree with mpv when the
-    /// two windows are on monitors with different scaling.
     pub(crate) dpi: u32,
 }
 
@@ -55,8 +34,6 @@ struct Search {
 
 /// `EnumWindows` hands the callback an `LPARAM`, so the search state travels as a pointer.
 unsafe extern "system" fn collect(window: HWND, state: LPARAM) -> BOOL {
-    // SAFETY: `state` is the `&mut Search` handed to EnumWindows below, alive for the
-    // duration of that call, and the callback is only ever invoked from inside it.
     let search = unsafe { &mut *(state as *mut Search) };
 
     let mut owner = 0u32;
@@ -94,7 +71,6 @@ unsafe extern "system" fn collect(window: HWND, state: LPARAM) -> BOOL {
     }
 
     search.found = window;
-    // Stop enumerating: the first visible, correctly-classed, real-sized window is it.
     0
 }
 
@@ -130,11 +106,6 @@ fn find_window(pid: u32) -> Option<HWND> {
     Some(search.found)
 }
 
-/// mpv's video area, or `None` while its window does not exist — during startup, after it
-/// quits, and while it is minimised.
-///
-/// The **client** rect is used rather than the window rect: the window rect includes the
-/// title bar and borders, and an overlay aligned to it would sit a title bar too high.
 pub(crate) fn video_window_rect(pid: u32) -> Option<VideoWindowRect> {
     let window = find_window(pid)?;
 
@@ -148,8 +119,6 @@ pub(crate) fn video_window_rect(pid: u32) -> Option<VideoWindowRect> {
         return None;
     }
 
-    // GetClientRect is window-relative and always starts at (0,0); ClientToScreen turns the
-    // origin into a desktop coordinate.
     let mut origin = POINT { x: 0, y: 0 };
     if unsafe { ClientToScreen(window, &mut origin) } == 0 {
         return None;
@@ -158,8 +127,6 @@ pub(crate) fn video_window_rect(pid: u32) -> Option<VideoWindowRect> {
     let width = client.right - client.left;
     let height = client.bottom - client.top;
     if width < MINIMUM_VIDEO_EXTENT || height < MINIMUM_VIDEO_EXTENT {
-        // Minimised windows report a degenerate client rect. Report "not placeable" rather
-        // than parking the overlay in a corner.
         return None;
     }
 
@@ -177,8 +144,6 @@ pub(crate) fn video_window_rect(pid: u32) -> Option<VideoWindowRect> {
     })
 }
 
-/// The window the user is currently working in, or null if the desktop has no foreground
-/// window (it briefly does not, during app switches).
 pub(crate) fn foreground_window() -> HWND {
     unsafe { GetForegroundWindow() }
 }
@@ -194,20 +159,11 @@ pub(crate) fn window_process_id(window: HWND) -> u32 {
 }
 
 /// Whether Escape is down.
-///
-/// Polled for the same reason the modifier is: the overlay carries `WS_EX_NOACTIVATE`, so
-/// it never takes focus and never receives a key event. Without this there is no keyboard
-/// way to dismiss a popup drawn over the video.
 pub(crate) fn escape_is_held() -> bool {
     (unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } as u16 & 0x8000) != 0
 }
 
 /// Which scanner modifier is held right now.
-///
-/// Polled rather than bound as a shortcut, deliberately: `tauri-plugin-global-shortcut`
-/// registers accelerators (a modifier *plus* a key) and cannot report a bare modifier being
-/// held. The scanner needs the held state while **mpv** has focus, so no DOM listener can
-/// see it either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScanModifier {
     None,
@@ -226,7 +182,6 @@ impl ScanModifier {
         }
     }
 
-    /// `None` means "always scanning", so it reads as permanently held.
     pub(crate) fn is_held(self) -> bool {
         let key = match self {
             Self::None => return true,
@@ -234,8 +189,6 @@ impl ScanModifier {
             Self::Control => VK_CONTROL,
             Self::Alt => VK_MENU,
         };
-        // The high bit is the down state; the low bit is "pressed since last call" and is
-        // deliberately ignored — this is a level, not an edge.
         (unsafe { GetAsyncKeyState(key as i32) } as u16 & 0x8000) != 0
     }
 }

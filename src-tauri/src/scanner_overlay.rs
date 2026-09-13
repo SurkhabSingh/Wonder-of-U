@@ -1,26 +1,3 @@
-//! The scanner overlay: a transparent window pinned over mpv's video, so a word can be
-//! looked up without leaving the player.
-//!
-//! **Why an overlay at all.** mpv draws subtitles with libass, which exposes no glyph
-//! positions — asked directly, an mpv maintainer answered "There's no way to get the
-//! position of words in the subtitle", and called fixing it unfeasible. So hovering a word
-//! over the video is only possible if we draw the line ourselves, with mpv's own subtitle
-//! layer switched off. SubMiner and asbplayer arrived at the same design; Memento avoids it
-//! only by embedding libmpv in-process, which is closed to us because mpv is a separate
-//! process.
-//!
-//! **What the spike established** (all measured, none assumed):
-//! - mpv owns five top-level windows; exactly one is visible with class `mpv`.
-//! - A move is reflected in `GetClientRect` within 0.02 ms, and the call costs ~3 µs, so
-//!   polling the rectangle is cheap enough to do at frame rate.
-//! - Toggling `WS_EX_TRANSPARENT` routes the pointer to mpv or to the overlay exactly as
-//!   needed — this is what makes "hold Shift to scan" both the gesture and the mechanism.
-//! - `WS_EX_NOACTIVATE` keeps focus with mpv when the overlay is raised.
-//! - The overlay draws **over mpv's fullscreen**, because the app never passes `--ontop`
-//!   and mpv's plain `--fs` stays composited by the DWM.
-//! - `sub-text` / `sub-start` / `sub-end` keep updating with `sub-visibility=no`, which is
-//!   why the overlay renders from mpv's own properties and needs no cue list of its own.
-
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
@@ -45,29 +22,12 @@ pub(crate) const SCANNER_WINDOW_LABEL: &str = "scanner";
 const SCANNER_STATE_EVENT: &str = "scanner-overlay-state";
 
 /// How often the tracker samples mpv's rectangle and the modifier key.
-///
-/// 16 ms, not the watch panel's 250 ms: this drives whether the pointer belongs to the
-/// overlay or to mpv, and a quarter-second of lag there is the difference between "hold
-/// Shift and hover" and "hold Shift, wait, then hover".
-///
-/// It costs nothing that matters only because every call on this path is lock-free Win32:
-/// the pid comes from an atomic mirror rather than the session mutex, and the modifier is
-/// cached rather than read from settings. Both were originally not true, and reading them
-/// through their mutexes would have let this thread stall behind `watch_snapshot`'s nine
-/// blocking round trips — freezing click-through in whatever state it happened to be in.
 const TRACK_INTERVAL: Duration = Duration::from_millis(16);
 
-/// How long the tracker sleeps while the overlay is switched off. The thread lives for the
-/// app's life, and waking 60 times a second to read one atomic and go back to sleep is a
-/// real cost on a laptop for a feature that is off by default.
+/// How long the tracker sleeps while the overlay is switched off. 
 const IDLE_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How often the configured modifier is re-read from settings, in ticks.
-///
-/// Reading it every tick meant taking the global settings mutex — the same one
-/// `save_settings` holds while it clones the whole persisted blob — sixty times a second,
-/// and allocating a String each time. Changing the scan key is a settings action, so a
-/// delay of up to a second before it takes effect is imperceptible.
 const MODIFIER_REFRESH_TICKS: u32 = 60;
 
 /// Whether the overlay is switched on. Off by default: mpv keeps its own styled `.ass`
@@ -76,39 +36,25 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 /// Set once, so a second enable does not start a second tracker.
 static TRACKER_RUNNING: AtomicBool = AtomicBool::new(false);
 /// True while a dictionary popup is open.
-///
-/// The overlay has to stay interactive for as long as there is a popup to read, or the
-/// default "leave it open on release" would produce a popup nobody can scroll or click.
 static POPUP_OPEN: AtomicBool = AtomicBool::new(false);
 /// Sampled by the tracker, because a window that never takes focus never sees a key event.
 static MODIFIER_HELD: AtomicBool = AtomicBool::new(false);
 static ESCAPE_HELD: AtomicBool = AtomicBool::new(false);
 
-/// What was last actually done to the window. **The only record of applied state**, and
-/// written exclusively inside [`reconcile`], immediately beside the call it describes.
 static APPLIED: Mutex<Applied> = Mutex::new(Applied::new());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ScannerState {
-    /// False while mpv has no placeable window — starting up, minimised, or gone.
     pub(crate) tracking: bool,
-    /// True while the scan modifier is held, which is also when the overlay stops being
-    /// click-through.
     pub(crate) scanning: bool,
-    /// True while Escape is down. Polled rather than listened for: a window that never takes
-    /// focus never receives a key event, so this is the overlay's only keyboard input.
     pub(crate) escape_pressed: bool,
     pub(crate) width: i32,
     pub(crate) height: i32,
-    /// Physical pixels per logical pixel × 100, so the overlay can size text against the
-    /// monitor mpv is actually on rather than the primary one.
     pub(crate) dpi: u32,
 }
 
 impl ScannerState {
-    /// What the overlay is told whenever it goes off screen. Chiefly `tracking: false`,
-    /// which is the frontend's cue to drop a popup anchored to a line it can no longer show.
     fn hidden() -> Self {
         Self {
             tracking: false,
@@ -129,8 +75,6 @@ struct Inputs {
     popup_open: bool,
     modifier_held: bool,
     escape_held: bool,
-    /// Where the video is, or `None` when there is nowhere legitimate to draw: no session,
-    /// mpv not in front, or no placeable window.
     placement: Option<VideoWindowRect>,
 }
 
@@ -147,16 +91,11 @@ impl Inputs {
         let visible = self.enabled && self.placement.is_some();
         Desired {
             visible,
-            // Interactivity is DERIVED from visibility rather than tracked beside it. An
-            // invisible window that still takes the mouse is precisely how clicks meant for
-            // mpv were swallowed, and computing it here means no future caller can put the
-            // two back out of step.
             interactive: visible && (self.modifier_held || self.popup_open),
         }
     }
 
-    /// What the overlay bundle needs. `tracking: false` is its cue to drop a popup anchored
-    /// to a line it can no longer show.
+    /// What the overlay bundle needs.
     fn frontend_state(self) -> ScannerState {
         match self.placement {
             Some(rect) if self.enabled => ScannerState {
@@ -195,12 +134,6 @@ impl Applied {
 }
 
 /// Turns the overlay on or off, switching mpv's own subtitles the other way.
-///
-/// The two are opposites on purpose: two subtitle layers drawn at once would double every
-/// line. Failing to switch mpv is **not** fatal — the user would see both, which is ugly but
-/// recoverable, and refusing to open the scanner over it would be worse.
-/// Told by the overlay when a popup opens or closes, so the tracker can keep the window
-/// taking the mouse for as long as there is something to interact with.
 pub(crate) fn set_scanner_popup_open<R: Runtime>(app: &AppHandle<R>, open: bool) {
     POPUP_OPEN.store(open, Ordering::Relaxed);
     reconcile(app);
@@ -227,17 +160,13 @@ pub(crate) fn set_scanner_overlay_enabled<R: Runtime>(
     if enabled {
         start_tracker(app);
     } else {
-        // A popup cannot outlive the overlay that hosts it.
         POPUP_OPEN.store(false, Ordering::Relaxed);
     }
-    // One call handles hiding, click-through and telling the frontend — the three things
-    // that used to be done by hand here and drift apart.
     reconcile(app);
     Ok(())
 }
 
-/// Builds the overlay window once, hidden and click-through, exactly like the recording
-/// indicator. Non-fatal: a failure here costs the scanner, not the app.
+/// Builds the overlay window once, hidden and click-through, exactly like the recording indicator.
 pub(crate) fn configure_scanner_overlay<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let window = WebviewWindowBuilder::new(
         app,
@@ -268,9 +197,6 @@ pub(crate) fn configure_scanner_overlay<R: Runtime>(app: &AppHandle<R>) -> Resul
 
 /// Adds `WS_EX_NOACTIVATE` so clicking the popup never pulls focus off mpv — without it,
 /// the first click on a definition would silently kill mpv's own space/arrow bindings.
-///
-/// Tauri exposes `focused(false)` only at build time, which covers creation and nothing
-/// after it, so this is set directly on the handle.
 #[cfg(target_os = "windows")]
 fn apply_no_activate<R: Runtime>(window: &WebviewWindow<R>) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -307,10 +233,6 @@ fn configured_modifier<R: Runtime>(app: &AppHandle<R>) -> String {
 fn start_tracker<R: Runtime>(_app: &AppHandle<R>) {}
 
 /// One thread, for the app's life, following mpv's window and the modifier key.
-///
-/// Deliberately not a second mpv poller: it reads the window rectangle and the keyboard
-/// through Win32 only. The subtitle text the overlay draws rides the watch page's existing
-/// 250 ms snapshot, so watching costs mpv exactly what it costs today.
 #[cfg(target_os = "windows")]
 fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
     if TRACKER_RUNNING.swap(true, Ordering::SeqCst) {
@@ -342,12 +264,6 @@ fn start_tracker<R: Runtime>(app: &AppHandle<R>) {
 /// It is always-on-top and follows mpv's rectangle, which says nothing about whether mpv is
 /// in FRONT — without a check, alt-tabbing away leaves a subtitle line floating over
 /// whatever the user switched to.
-///
-/// But "mpv is not in front" is not the same as "the user switched away". Clicking the
-/// overlay counts as the second and not the first: `WS_EX_NOACTIVATE` stops the top-level
-/// window activating, and the webview host underneath it activates anyway, so a click on a
-/// definition — or on a source tab — read as an app switch and tore the whole overlay down
-/// mid-read. Hence the second arm.
 #[cfg(target_os = "windows")]
 fn overlay_should_draw<R: Runtime>(app: &AppHandle<R>, mpv_pid: u32) -> bool {
     let foreground = foreground_window();
@@ -392,11 +308,6 @@ fn sample_inputs<R: Runtime>(app: &AppHandle<R>) -> Inputs {
 /// Six bugs came out of that, all the same shape: one path changed the window without
 /// updating a mirror, the next comparison saw "no change", and the window stayed wrong.
 /// Two of them were introduced by the fix for a third.
-///
-/// So inputs and effects are separated. `Inputs` is sampled fresh, `Desired` is derived from
-/// it, and `Applied` records only what was actually issued — written here, next to the call
-/// it describes, and nowhere else. Adding a new reason to show or hide the overlay now means
-/// adding a field to `Inputs`; it cannot mean forgetting to update a mirror.
 #[cfg(target_os = "windows")]
 fn reconcile<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window(SCANNER_WINDOW_LABEL) else {
@@ -508,7 +419,6 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn the_overlay_takes_the_mouse_only_while_scanning_or_reading() {
-        // Drawn but passive: every click belongs to mpv, including its own controls.
         let idle = inputs(true, false, false).desired();
         assert!(idle.visible);
         assert!(!idle.interactive);
@@ -522,8 +432,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn the_frontend_is_told_to_stand_down_whenever_the_overlay_is_not_drawn() {
-        // `tracking: false` is the overlay bundle's cue to drop a popup anchored to a line
-        // it can no longer show — the fix for a popup that survived an alt-tab.
+        // `tracking: false` is the overlay bundle's cue to drop a popup anchored to a line it can no longer show — the fix for a popup that survived an alt-tab.
         assert!(!inputs(false, true, true).frontend_state().tracking);
         assert!(!Inputs {
             placement: None,
@@ -540,7 +449,6 @@ mod tests {
 
     #[test]
     fn the_overlay_starts_disabled() {
-        // mpv's own styled subtitles are the default; ours replace them only when asked.
         assert!(!ENABLED.load(Ordering::Relaxed));
     }
 

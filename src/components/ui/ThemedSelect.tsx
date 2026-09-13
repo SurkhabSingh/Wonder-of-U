@@ -27,12 +27,7 @@ export function ThemedSelect({
   placeholder?: string;
   disabled?: boolean;
   title?: string;
-  // Id of an element describing this control. The trigger's `aria-label` replaces the
-  // whole wrapping <label>, so anything else in that label — a badge, a caveat — is
-  // dropped for screen readers unless it is pointed at explicitly.
   describedBy?: string;
-  // Extra class on the trigger, so a caller can compact it (e.g. the player bar)
-  // without forking the component or its styled dropdown.
   triggerClassName?: string;
 }) {
   return (

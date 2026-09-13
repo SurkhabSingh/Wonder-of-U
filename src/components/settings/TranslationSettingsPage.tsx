@@ -12,9 +12,6 @@ import type {
 import { ThemedSelect } from "../ui/ThemedSelect";
 import type { SettingsUpdate } from "./settingsTypes";
 
-// Must match the extension's provider ids (KNOWN_TRANSLATION_PROVIDERS). The
-// desktop app sends the chosen id with every translation job; the extension
-// routes on it instead of falling back to its own popup selection.
 const PROVIDER_OPTIONS: { value: TranslationProvider; label: string }[] = [
   { value: "google-translate", label: "Google Translate" },
   { value: "deepl", label: "DeepL" },
@@ -42,18 +39,10 @@ export function TranslationSettingsPage({
 }) {
   const { provider, targetLanguage } = settingsDraft.translation;
   const targetLanguages = targetLanguagesFor(provider);
-  // Neither list is a superset of the other (DeepL has "nb", Google has "no"),
-  // and the backend does not validate codes at all, so a code we do not offer
-  // can always be the persisted one — from an older build, a hand-edited config,
-  // or the other provider. Surface it instead of letting the select fall blank
-  // and silently rewrite the user's choice on the next save.
   const targetLanguageKnown = targetLanguages.some(
     (option) => option.code === targetLanguage,
   );
 
-  // Switching providers can strand the target on a language the new provider
-  // cannot translate into, which only fails later as a bridge error. Reset it
-  // here, where we still know enough to say what happened, and say it.
   function handleProviderChange(nextProvider: TranslationProvider) {
     const nextLanguages = targetLanguagesFor(nextProvider);
     const stillSupported = nextLanguages.some(
@@ -145,9 +134,6 @@ export function TranslationSettingsPage({
           Support mode while translating.
         </p>
 
-        {/* Said here rather than discovered while mining. Whether a mined card can carry
-            its own translation line is decided by this control, and nothing later in the
-            flow explains why one card got a translation and the next did not. */}
         <div className="info-note">
           <p className="microcopy">
             <strong>Mining one line at a time:</strong> a mined card gets its own

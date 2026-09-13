@@ -18,8 +18,6 @@ pub(crate) struct Comparison {
     pub(crate) later_taken_at_ms: u64,
 }
 
-/// Over material both measured: recomputing a share puts growth into numerator and
-/// denominator alike. New, re-transcribed and differently-configured items are held out.
 pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
     if !earlier.build.matches(&later.build) {
         return None;
@@ -84,8 +82,6 @@ pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
     })
 }
 
-/// A share to one decimal, floored below whole while any word is unknown: 99.97 rounded
-/// up tells the reader they are finished with material they are not.
 pub(crate) fn percent(known: u32, content: u32) -> f64 {
     if content == 0 {
         return 0.0;
@@ -122,8 +118,6 @@ pub(crate) struct ProgressReport {
     pub(crate) comparison: Option<Comparison>,
     pub(crate) readings: usize,
     pub(crate) first_run_day: Option<super::day::DayKey>,
-    /// Rows this build could not read. Surfaced: a smaller answer with no explanation is
-    /// the failure this feature exists to avoid.
     pub(crate) damaged_rows: usize,
     pub(crate) newer_rows: usize,
     pub(crate) store_readable: bool,
@@ -147,8 +141,6 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         .progress_file
         .clone();
 
-    // From the recording history, not the store: items already carry when they arrived,
-    // so this reaches back as far as the library rather than as far as this feature.
     let (activity, library) = {
         let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
         let persisted = persisted_state

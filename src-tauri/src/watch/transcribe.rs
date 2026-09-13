@@ -1,13 +1,3 @@
-//! Generating subtitles for a watch session from the video's own audio.
-//!
-//! Deliberately does NOT go through the recording library. `recording_library::import` strips
-//! the video track and registers a library entry, so importing a film to subtitle it would
-//! leave an audio recording the user never asked for. `decode_to_wav_16k` already passes
-//! `-map 0:a:0 -vn`, so an MKV can be handed to the transcription engine directly.
-//!
-//! The output sits beside the video and is offered to alass exactly like a downloaded
-//! subtitle, so the whole chain — transcribe, time, realign — can be exercised end to end.
-
 use std::{fs, path::{Path, PathBuf}};
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -34,13 +24,6 @@ pub(crate) struct GeneratedSubtitles {
     pub(crate) language: String,
 }
 
-/// `{video stem}.{lang}.whisper.srt`, beside the video.
-///
-/// Beside the video because that is where mpv, alass and the user all already look — the same
-/// choice `jimaku_download` and alass's `.synced.` output make. The `.whisper.` marker says the
-/// file was machine-generated, so it is never confused with a downloaded subtitle.
-///
-/// Deterministic, so regenerating overwrites instead of littering the folder with variants.
 pub(crate) fn generated_subtitle_path(video_path: &Path, language: &str) -> PathBuf {
     let stem = video_path
         .file_stem()
@@ -57,10 +40,6 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
         return Err(format!("The video is no longer at {}", video_path.display()));
     }
 
-    // One whisper pass at a time, and this is what actually enforces it. The previous version
-    // read `shell.phase`, which this path never writes — so it excluded a recording or a
-    // download but not the library's own transcription, the one run it shares a cancel event
-    // with. Held for the whole pass and released on drop.
     let _whisper_slot = WhisperSlotGuard::acquire(
         "A transcription is already running. Wait for it to finish, or cancel it first.",
     )?;
@@ -82,12 +61,6 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
         ffmpeg_path,
     } = resolve_whisper_engine(app, &settings)?;
 
-    // A real cancel flag, not a placeholder. This listens to the same global
-    // `transcription-cancel` event the library batch uses, which is safe because the slot above
-    // genuinely means only one of the two can be running: one event, one owner. (Tauri's `once`
-    // is "fires once then unregisters", not "only one listener" — with both registered, one
-    // emit would set both flags and kill both runs.) Registered before the pass so a Cancel
-    // pressed at any point during it lands, and unregistered on drop.
     let cancel_listener = CancelListener::register(app);
     let app_progress = app.clone();
     let result = run_whisper_transcription(
@@ -103,31 +76,20 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
             fast_decode: settings.whisper.decode_speed == "fast",
         },
         cancel_listener.flag(),
-        // Reuses the transcription progress channel, so the existing bar reports this too —
-        // a 24-minute film is minutes of work and reads as a hang without one.
         move |percent| {
             let _ = app_progress.emit("transcription-progress", percent);
         },
         |_start_ms, _end_ms, _text| {},
     )?;
 
-    // Without a duration the out-of-bounds pass is skipped, and a hallucinated tail past the
-    // end of the film would survive into the subtitle file.
     let duration_ms = crate::recording_library::import::probe_duration_ms(
         Some(&ffmpeg_path.display().to_string()),
         video_path,
     );
 
-    // Carries the reason rather than collapsing every cause into one sentence: this path had
-    // the same silent hole as the recording library, where a single truncated byte in
-    // whisper's json discarded every cue.
     let raw = parse_whisper_segments(&result.json_path).map_err(|reason| {
         format!("No subtitles could be generated for this video. {}", reason.message())
     })?;
-    // Deliberately the OLD rule, not the waveform trim the recording library uses. This path
-    // is verified working and frozen on request: the trim moves cue starts, which is the one
-    // thing that could disturb subtitle sync, and no rule at all leaves each cue running to
-    // the next, which bloats every card mined from a video. See `clamp_end_to_vad_regions`.
     let segments = clean_segments(
         raw,
         duration_ms,
@@ -145,7 +107,6 @@ pub(crate) fn generate_watch_subtitles_inner<R: Runtime>(
         )
     })?;
 
-    // whisper's temp outputs are ours to clean up; nothing else refers to them.
     let _ = fs::remove_file(&result.transcript_path);
     let _ = fs::remove_file(&result.json_path);
 
@@ -181,8 +142,6 @@ mod tests {
         );
     }
 
-    /// Regenerating overwrites rather than littering the folder, and a second language gets
-    /// its own file instead of clobbering the first.
     #[test]
     fn the_name_is_deterministic_per_language() {
         let video = Path::new("/v/show.mp4");

@@ -1,26 +1,14 @@
 import { DownloadProgressCard } from "../settings/DownloadProgressCard";
 import type { ModelDownloadSnapshot, TranscriptionRequirement } from "../../types";
 
-/**
- * What each unmet requirement is called on the landing page.
- *
- * Labels only — this does NOT decide what gets downloaded. That answer lives in Rust beside
- * the readiness check that produced these ids, so the two cannot disagree about what is
- * missing. An id with no label here is skipped rather than shown raw.
- */
+/** What each unmet requirement is called on the landing page.*/
 const REQUIREMENT_LABEL: Record<string, string> = {
   whisper: "Transcription engine and model",
   ffmpeg: "Audio processing",
   vad: "Speech detector",
 };
 
-/**
- * Failures worth reporting on Home.
- *
- * The download snapshot is global, so a dictionary or yt-dlp download started from Settings
- * fails into the same field. Those belong to their own Settings card, not under a heading
- * about transcription.
- */
+/**Failures worth reporting on Home.*/
 const TRANSCRIPTION_KINDS = ["model", "runtime", "ffmpeg"];
 
 export function HomeSetupCard({
@@ -60,8 +48,6 @@ export function HomeSetupCard({
   if (isDownloadingAssets) {
     return (
       <article className="panel home-setup-card">
-        {/* Neutral on purpose: a dictionary or subtitle-sync download started from Settings
-            lands here too, and calling that "setting up transcription" would be false. */}
         <p className="panel-kicker">Downloads</p>
         <h2>Download in progress</h2>
         <DownloadProgressCard
@@ -85,9 +71,6 @@ export function HomeSetupCard({
     .map((requirement) => REQUIREMENT_LABEL[requirement.id])
     .filter((label): label is string => label !== undefined);
 
-  // A failed download leaves nothing else on Home once its toast expires, and the queue drops
-  // everything still waiting when one item fails — so without this a run can end with the
-  // engine installed, audio processing never attempted, and no surface saying so.
   const failureMessage =
     downloadSnapshot.status === "failed" &&
     downloadSnapshot.kind !== null &&
@@ -101,8 +84,6 @@ export function HomeSetupCard({
       <h2>Set up transcription</h2>
       <p className="microcopy">
         Recording works already. Turning a recording into text needs{" "}
-        {/* The list below is not always plural: cancelling a model download between its two
-            files leaves only the speech detector missing. */}
         {missing.length === 1 ? "one more thing" : "a few more things"} on this
         computer.
       </p>
@@ -115,9 +96,6 @@ export function HomeSetupCard({
         </ul>
       ) : null}
 
-      {/* The size is disclosed before the press, not after it. The model is by far the largest
-          of these, and it is whichever one the settings name — which on an existing install can
-          be the 2.9 GiB option. */}
       {!modelReady && modelLabel && modelDiskSize ? (
         <p className="microcopy">
           Your model is set to {modelLabel} ({modelDiskSize}).
@@ -126,9 +104,6 @@ export function HomeSetupCard({
 
       {failureMessage ? (
         <>
-          {/* Two paragraphs, not one sentence joined to another. The snapshot's message is
-              whatever failed said, and it does not reliably end in a full stop — a download
-              error ending in a URL ran straight into the line below it. */}
           <p className="microcopy home-setup-failure">{failureMessage}</p>
           <p className="microcopy">Anything still waiting was not started.</p>
         </>

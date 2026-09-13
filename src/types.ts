@@ -3,9 +3,6 @@ export type RecorderPhase =
   | "recording"
   | "saving"
   | "transcribing"
-  // Held by the download queue for as long as it runs — across every item, including the gaps
-  // between them. Listed for the reader only: the union ends in `string`, so TypeScript cannot
-  // flag a consumer that has no arm for it.
   | "downloading-model"
   | "error"
   | string;
@@ -14,8 +11,6 @@ export type HotkeyBindings = {
   start: string;
   stop: string;
   showWindow: string;
-  // Mines the line playing in a watch session. Global so it fires while mpv has
-  // focus — mining should not mean leaving the video.
   mine: string;
 };
 
@@ -37,17 +32,8 @@ export type FeatureSettings = {
   allowMp3Conversion: boolean;
   autoAddFuriganaAfterAnkiPush: boolean;
   translateAfterTranscription: boolean;
-  // Look the new words in a mined line up in the dictionary the popup uses, and
-  // write what comes back onto the card. Needs the Anki add-on running.
   addDefinitionsToMinedCards: boolean;
-  // Whether "Mine all" may make more than one card for the same new word. Off by
-  // default: a transcript often teaches a word twice, and two cards for one word is
-  // review load without extra learning.
   allowDuplicateMinedWords: boolean;
-  // Whether "Mine all" takes lines whose only content word is the new one — `刑期が`, a word
-  // and a particle. Off by default, which is what happened before those lines were listed at
-  // all. Measured on a real 598-line episode: two of every five one-word-away lines are bare,
-  // so this is roughly a 40% difference in how many cards a batch makes.
   mineWordsWithoutContext: boolean;
 };
 
@@ -61,16 +47,9 @@ export type AnkiFieldMapping = {
   sourceUrl: string;
   title: string;
   position: string;
-  // Receives an <img> of a still grabbed from the video at the mined line's moment.
-  // Empty = unmapped, which is also every source that has no video.
   image: string;
-  // Receives a [sound:...] tag for a short video of the line. Anki renders a video behind
-  // that tag as a player, and treats it as media it owns, so it works on the phone clients
-  // and Check Media counts it. Empty = unmapped, which is what turns clip capture off.
   video: string;
   definition: string;
-  // The one word a card was mined FOR, when it was mined from the lookup popup
-  // rather than from a row. Empty on every card made by mining a line.
   word: string;
 };
 
@@ -78,18 +57,9 @@ export type AnkiSettings = {
   deckName: string;
   noteType: string;
   fields: AnkiFieldMapping;
-  // Milliseconds of audio padding added to each side of a mined sentence clip.
   clipPaddingMs: number;
-  // Which note types and fields hold the words you already know. Independent of
-  // `noteType` above: the notes cards are pushed INTO are rarely the ones your
-  // vocabulary is read FROM.
   vocabularySources: VocabularySource[];
-  // How long a word has to have stuck before it counts as known, in days. 21 is
-  // Anki's own "mature" line.
   knownWordIntervalDays: number;
-  // Which of the add-on's dictionaries supply meanings for mined cards, by id.
-  // Empty means every enabled one, in the add-on's own order — which is what the
-  // reading popup uses and is the default.
   definitionDictionaryIds: number[];
 };
 
@@ -104,16 +74,8 @@ export type WhisperSettings = {
   runtimeVersion: string;
   modelChoice: string;
   language: string;
-  // How much of the machine transcription may use: "low" | "balanced" | "high".
-  // The backend maps it to a whisper-cli thread count; "balanced" is the default.
   cpuUsage: string;
-  // Audio content mode: "speech" (default) or "music". Music lowers the VAD
-  // threshold so sung vocals transcribe.
   audioType: string;
-  // Decoder search width: "balanced" (default) or "fast". Fast decodes greedily —
-  // measured 13–23% quicker, with differences that are lateral (kana vs kanji,
-  // punctuation, sentence splits) rather than less accurate. There is no "thorough"
-  // option: a wider beam was measured and recovered nothing for its extra cost.
   decodeSpeed: string;
 };
 
@@ -121,14 +83,11 @@ export type TranslationProvider = "google-translate" | "deepl";
 
 export type TranslationSettings = {
   provider: TranslationProvider;
-  // Lowercase ISO 639-1. The extension interpolates this straight into a
-  // provider URL, so an uppercase or regional code (EN-US) breaks the request.
   targetLanguage: string;
 };
 
 export type ThemePreference = "system" | "light" | "dark";
 
-// Held to scan. Must stay in lockstep with the Rust `normalize_scan_modifier`.
 export type ScanModifier = "shift" | "ctrl" | "alt" | "none";
 export type ScanReleaseBehavior = "remainOpen" | "close";
 
@@ -136,14 +95,10 @@ export type ScannerSettings = {
   modifier: ScanModifier;
   releaseBehavior: ScanReleaseBehavior;
   debounceMs: number;
-  // Popup font. Empty means inherit the app's reading font.
   fontFamily: string;
   fontSizePx: number;
-  // Draw our own scannable subtitles over mpv instead of mpv's styled ones.
-  // Off by default: mpv's .ass rendering is what works today.
   overlayEnabled: boolean;
   overlayFontSizePx: number;
-  // The app's own reading typography, driving --font-reading and --reading-base.
   readingFontFamily: string;
   readingFontSizePx: number;
 };
@@ -179,8 +134,6 @@ export type AppSettings = {
   features: FeatureSettings;
   translation: TranslationSettings;
   scanner: ScannerSettings;
-  // jimaku.cc API key. Flat because it is one field; the sibling-wiping trap that once
-  // made flatness the safer choice is gone — see mergeSettings.
   jimakuApiKey: string;
   theme: ThemePreference;
   indicatorPosition: IndicatorPosition;
@@ -188,22 +141,6 @@ export type AppSettings = {
   startMinimized: boolean;
 };
 
-/**
- * A settings change: any subset of the fields, at any depth.
- *
- * Derived from AppSettings rather than written out, because the written-out version
- * existed three times and one copy had fallen two groups behind — it still omitted
- * `translation` and `scanner`, so inside `useSetupActions` those two were typed as
- * whole objects and could not be partially updated at all. Deriving it means a group
- * added to AppSettings is covered here the moment it exists.
- *
- * AppSettings holds only strings, numbers, booleans and nested groups of the same, so
- * `extends object` cleanly separates "group to recurse into" from "value to replace".
- */
-// An array is a leaf, not something to recurse into. `mergeSettings` replaces an
-// array wholesale — merging by index would make removing a row impossible — and
-// the type has to say the same thing, or an update could offer a half-filled row
-// that type-checks here and is rejected by the save as a missing field.
 export type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends readonly unknown[]
     ? T[K]
@@ -214,45 +151,26 @@ export type DeepPartial<T> = {
 
 export type SettingsUpdate = DeepPartial<AppSettings>;
 
-// Where a video's subtitle came from. Labels a chip and nothing else — the backend keeps the
-// stored value to these four, and anything else arrives as null and simply draws no chip.
 export type SubtitleOrigin = "picked" | "jimaku" | "generated" | "synced";
 
-// A video in the video library, and the subtitle it is paired with.
-//
-// Separate from RecentRecording on purpose: a video is watched, subtitled and realigned; a
-// recording is transcribed, translated and mined. They share no actions.
 export type WatchedVideo = {
   videoPath: string;
   title: string | null;
-  // The remembered subtitle. Null means none has been chosen, which is not the same as none
-  // existing — the container may still carry an embedded track.
   subtitlePath: string | null;
   subtitleOrigin: SubtitleOrigin | null;
   thumbnailPath: string | null;
   durationMs: number;
   bytes: number;
   addedAtMs: number;
-  // Null until the video has actually been played once.
   lastOpenedAtMs: number | null;
-  // Where to pick the video up. Null means start from the beginning — either it has never
-  // been watched far enough in to be worth resuming, or it was watched to the end.
-  //
-  // Already judged by the backend when it was written, so this is a position to use, not one
-  // to second-guess. Rendering it and resuming to it therefore cannot disagree.
   resumePositionMs: number | null;
 };
 
 export type RecentRecording = {
   fileName: string;
   filePath: string;
-  // Provenance. Older state files predate these fields, so the backend
-  // serializes them with #[serde(default)] and they arrive as null for every
-  // recording captured before media import shipped.
-  // "import" for a file brought in from disk, null/"recording" for the mic.
   source: string | null;
   sourceUrl: string | null;
-  // The original file name of an imported file (the on-disk name can differ).
   title: string | null;
   transcriptPath: string | null;
   transcriptLanguage: string | null;
@@ -296,9 +214,6 @@ export type RecordingTextDocument = {
   filePath: string;
   text: string;
   missing: boolean;
-  // Timed sentences parsed from the Whisper segments sidecar. Empty for older
-  // recordings transcribed before timestamps were captured, and always empty
-  // for translations (which have no per-sentence timing of their own).
   segments: RecordingSegment[];
 };
 
@@ -318,10 +233,6 @@ export type WhisperDetection = {
   availableRuntimeVersions: string[];
   cliReady: boolean;
   modelReady: boolean;
-  // Whether whisper.cpp's Silero VAD model is on disk beside the transcription model.
-  // Separate from modelReady on purpose: the two are fetched together, so they normally agree,
-  // but a download cancelled between them leaves the model installed and the VAD missing — and
-  // then modelReady is true while transcription refuses to run.
   vadReady: boolean;
   cliManaged: boolean;
   modelManaged: boolean;
@@ -342,9 +253,6 @@ export type YtdlpDetection = {
   message: string;
 };
 
-// alass is managed-only: there is no conventional system install to probe for.
-// Whether a player the app can drive is available. Detection prefers a user's own install
-// over the managed one, so `managed` says which is in use.
 export type MpvDetection = {
   status: string;
   executablePath: string | null;
@@ -365,9 +273,6 @@ export type DictionaryDetection = {
   message: string;
 };
 
-// One dictionary installed in the Anki add-on. `priority` is the order lookups
-// consult them in, which is why it is shown: it explains why an answer came from
-// one dictionary rather than another.
 export type LookupDictionary = {
   id: number;
   title: string;
@@ -414,34 +319,19 @@ export type MinedLinesResult = {
   bootstrap: AppBootstrap;
 };
 
-// What one transcript line asks of the reader. `unknownWords` rather than a bare
-// count, because on an i+1 line that one word is the entire reason to mine it.
 export type LineRanking = {
   unknownWords: string[];
-  // Words that count at all, known or not. A line of pure grammar has none, which
-  // is not the same as a line you know every word of.
   contentWordCount: number;
-  // Whether this line is worth mining. Decided in Rust, never re-derived here: the
-  // summary count and the filtered rows have to be the same set, and two copies of
-  // the rule is how they stop being.
   withinReach: boolean;
-  // Whether there is another content word to learn the new one from. Its own answer rather
-  // than this side re-deriving contentWordCount >= 2 — that threshold is the definition of a
-  // learnable line, and one definition is enough.
   hasContext: boolean;
 };
 
-// Always one entry per line handed in, whatever `status` says: "ready",
-// "unconfigured", "unbuilt", or "needsDictionary".
 export type TranscriptRanking = {
   status: string;
   message: string;
   lines: LineRanking[];
 };
 
-// One proposed vocabulary source. `samples` carries real values off the user's own
-// cards — the scan cannot tell a deck of single kanji from a deck of words, and
-// three samples answer that at a glance.
 export type VocabularySuggestion = {
   noteType: string;
   field: string;
@@ -450,8 +340,6 @@ export type VocabularySuggestion = {
   alreadyAdded: boolean;
 };
 
-// `status` is "ready", "none" (nothing read like vocabulary), "offline", or
-// "needsDictionary".
 export type VocabularySuggestions = {
   status: string;
   message: string;
@@ -469,8 +357,6 @@ export type KnownWordsSnapshot = {
 };
 
 export type WhisperAssetUpdateResult = {
-  // Same shared union as the download snapshot. Nothing reads this today, but it is the same
-  // six strings and there is no reason for a third hand-written copy of them.
   kind: AssetKind;
   status: string;
   message: string;
@@ -481,11 +367,6 @@ export type WhisperAssetUpdateResult = {
 // Which asset a download is for. These are the exact strings Rust's `AssetKind` serializes
 // to, and the Rust side has a test pinning them, so this list is a copy of an authoritative
 // one rather than a second opinion.
-//
-// It lives here, in one place, because it used to be written out again inside
-// DownloadProgressCard — and that copy was missing "alass". The card hides itself when the
-// snapshot's kind is not its own, so an alass download rendered no progress at all AND, since
-// every card was checking the same single snapshot, blanked the other four at the same time.
 export type AssetKind =
   | "model"
   | "runtime"
@@ -496,8 +377,6 @@ export type AssetKind =
   | "mpv";
 
 export type ModelDownloadSnapshot = {
-  // Typed, so `snapshot.kind !== kind` in the progress card is a comparison the compiler
-  // checks. As `string` it accepted any misspelling and silently never matched.
   kind: AssetKind | null;
   status: string;
   message: string;
@@ -505,8 +384,6 @@ export type ModelDownloadSnapshot = {
   totalBytes: number | null;
   progressPercent: number | null;
   targetPath: string | null;
-  // How many further downloads are waiting behind this one. 0 for a download started on its
-  // own, which is every download unless you queued more while one was running.
   queuedRemaining: number;
 };
 
@@ -522,12 +399,6 @@ export type TranscriptionRequirement = {
 
 /**
  * Whether anything transcription needs is still missing.
- *
- * `false` while the answer is not yet known: the placeholder bootstrap carries an empty list
- * until the first snapshot arrives, and "nothing is listed" is not "nothing is missing". This
- * and `transcriptionReady` are deliberately NOT complements — on an empty list both are false,
- * because the honest answer then is neither. `summarizeSetupChecklist` guards its own total the
- * same way, for the same reason.
  */
 export function transcriptionSetupIncomplete(
   requirements: TranscriptionRequirement[],
@@ -565,13 +436,7 @@ export type AnkiCatalog = {
   version: number | null;
   decks: string[];
   noteTypes: string[];
-  // The note type `fields` was read for. Not always the note type on screen: a refresh
-  // leaves the previous catalog in place while it runs, so anything reading `fields`
-  // has to check this first or it will describe the note type before last.
   noteType: string;
-  // The fields of `noteType`, or null when Anki has no note type by that name. Null and
-  // an empty list are different answers, and `fieldsForNoteType` is where they are told
-  // apart — read them through it rather than here.
   fields: string[] | null;
 };
 
@@ -598,10 +463,7 @@ export type RecordingBatchResult = {
   bootstrap: AppBootstrap;
 };
 
-// What one YouTube import settled as. A rejected `invoke` carries a reason but
-// no `bootstrap`, so it cannot honestly be dressed up as a RecordingBatchResult
-// — the reason travels on its own branch, and the queue row renders it. Note a
-// user Cancel is NOT this: that resolves `ok` with a "cancelled" batch.
+// What one YouTube import settled as.
 export type YoutubeImportOutcome =
   | { ok: true; result: RecordingBatchResult }
   | { ok: false; message: string };
@@ -612,9 +474,6 @@ export type YoutubeQueueItem = {
   id: string;
   url: string;
   title?: string;
-  // "partial" is one link that held several videos where some arrived and some did
-  // not — a tweet with two clips, one of them silent. Reporting that row as "done"
-  // would show half a result as a whole one.
   status: "queued" | "active" | "done" | "partial" | "failed" | "cancelled";
   message?: string;
 };
@@ -645,10 +504,6 @@ export type TranscriptionLiveSegment = {
 // What mpv is showing right now, read over its JSON IPC channel. Every field is
 // optional because mpv answers null for a property with no current value — nothing
 // loaded, or no subtitle on screen — and that is a normal state, not a failure.
-//
-// `subtitleText` / `subtitleStartMs` / `subtitleEndMs` are the line on screen and its
-// exact bounds, straight from mpv. They are what mining reads: no parsing, no sync, no
-// guessing which cue the user meant.
 export type WatchSnapshot = {
   connected: boolean;
   path: string | null;
@@ -668,7 +523,6 @@ export type LookupFrequency = {
 };
 
 export type LookupPitch = {
-  /// Mora index where the pitch drops. 0 is 平板 (no drop).
   position: number;
 };
 
@@ -677,34 +531,19 @@ export type LookupEntry = {
   reading: string;
   dictionary: string;
   definitions: string[];
-  /// Why a conjugated form matched its dictionary form, e.g. ["past"] for 食べた.
   inflectionReasons: string[];
   frequencies: LookupFrequency[];
   pitchAccents: LookupPitch[];
 };
 
 export type LookupResult = {
-  /// "ready" | "empty" | "unavailable". `unavailable` means Anki is closed, which is an
-  /// ordinary state — the dictionary lives inside the add-on — not an error.
   status: "ready" | "empty" | "unavailable";
   message: string;
-  /// The candidate that actually matched. Usually longer than the clicked character,
-  /// and it is what gets highlighted in the line.
   term: string;
   entries: LookupEntry[];
 };
 
 /// The busy actions that fetch a managed binary or model.
-///
-/// A download button cannot ask only whether ITS OWN action is running. `busyAction` is set
-/// the instant a button is clicked, while `downloadIsActive` comes from the backend's own
-/// progress snapshot and only arrives once it has started reporting — so between the click
-/// and that first report, every OTHER download button is still live. Starting a second one
-/// there overwrites `busyAction`, and the first download's `finally` then clears the busy
-/// state while the second is still running.
-///
-/// Naming the group in one place means a new download joins the guard by being added here,
-/// rather than by every button remembering to name it.
 export const DOWNLOAD_BUSY_ACTIONS = [
   "downloadModel",
   "downloadRuntime",
@@ -727,9 +566,6 @@ export type BusyAction =
   | "stop"
   | "hide"
   | "browse"
-  // Derived, not restated. The array above promises that a new download joins the guard by
-  // being added there — which was not true while these eight names were also spelled here, ten
-  // lines away, and this diff had to edit both.
   | (typeof DOWNLOAD_BUSY_ACTIONS)[number]
   | "refreshKnownWords"
   | "scanVocabulary"
@@ -760,19 +596,10 @@ export type AppPage =
   | "settings";
 
 // A number the backend worked out, together with whether it could work it out at all.
-//
-// `value` is `T | null` and must stay that way end to end. A `?? 0` anywhere between here
-// and the screen puts a confident zero in front of the user for a reading that never
-// happened, which is the one failure this whole feature exists to prevent.
 export type Measured<T> = {
   value: T | null;
-  // "known" | "stale" | "partial" | "unavailable". Only "unavailable" carries no value;
-  // the two middle ones are real answers under a caveat and keep their number.
   status: string;
-  // When the value was measured — not when the page loaded. Null exactly when there is
-  // no value.
   asOfMs: number | null;
-  // One sentence for the reader, on every status but "known".
   reason: string | null;
 };
 
@@ -782,8 +609,6 @@ export type ProgressComparison = {
   earlierPercent: number;
   laterPercent: number;
   itemsCompared: number;
-  // Reported beside the change, never folded into it: new material is not progress on
-  // old material, and a re-transcribed document is not the same words.
   itemsAdded: number;
   itemsChanged: number;
   earlierTakenAtMs: number;
@@ -791,41 +616,31 @@ export type ProgressComparison = {
 };
 
 export type ActivityDay = {
-  // A `YYYY-MM-DD` label, already shifted by the app's 04:00 day rollover. A date, not an
-  // instant — never re-interpret it in local time.
   day: string;
   items: number;
 };
 
 export type ActivityReport = {
-  // Sparse: only days that had something.
   days: ActivityDay[];
   sinceDay: string | null;
   activeDays: number;
-  // Today, as the backend keys days. Sent rather than derived here so the grid cannot
-  // disagree with the rows in it.
   today: string;
   itemsWithoutADay: number;
   streak: Streak;
 };
 
 export type Streak = {
-  // Days in a row up to now. A day not yet worked does not break a run.
   current: number;
-  // The longest run there has ever been, which need not be the one ending now.
   best: number;
 };
 
 export type LibraryReport = {
   items: number;
   totalMs: number;
-  // Items whose length was never recorded, and so are not in `totalMs`.
   itemsWithoutLength: number;
   recorded: number;
   importedFromALink: number;
   importedFromAFile: number;
-  // Items that predate the app noting how they arrived. Never folded into `recorded`:
-  // "we do not know" and "microphone" are different answers.
   unknownOrigin: number;
   transcribed: number;
   japanese: number;

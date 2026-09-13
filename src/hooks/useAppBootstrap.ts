@@ -60,14 +60,12 @@ export function useAppBootstrap() {
   const applyBootstrap = useCallback(
     (nextBootstrap: AppBootstrap, options?: { preserveDraft?: boolean }) => {
       if (
-        nextBootstrap.shell.transitionCount <
-        latestTransitionCountRef.current
+        nextBootstrap.shell.transitionCount < latestTransitionCountRef.current
       ) {
         return false;
       }
 
-      latestTransitionCountRef.current =
-        nextBootstrap.shell.transitionCount;
+      latestTransitionCountRef.current = nextBootstrap.shell.transitionCount;
       setBootstrap(nextBootstrap);
       if (!options?.preserveDraft) {
         setSettingsDraft(nextBootstrap.settings);
@@ -128,16 +126,20 @@ export function useAppBootstrap() {
         // return to idle "Recording saved" told a user who had just transcribed that
         // something had been recorded and saved, neither of which happened.
         const title =
-          previousPhase === "transcribing" ? "Transcription finished" : "Recording saved";
+          previousPhase === "transcribing"
+            ? "Transcription finished"
+            : "Recording saved";
 
-        // A stop the user asked for is not good news. The backend now names it in the same
-        // status line, so read it rather than inventing a second source of truth: a green
-        // check on a cancelled run is exactly the report that was wrong before.
         if (detail.toLowerCase().includes("cancelled")) {
-          toast(previousPhase === "transcribing" ? "Transcription cancelled" : "Cancelled", {
-            description: detail,
-            duration: 3500,
-          });
+          toast(
+            previousPhase === "transcribing"
+              ? "Transcription cancelled"
+              : "Cancelled",
+            {
+              description: detail,
+              duration: 3500,
+            },
+          );
           return;
         }
 
@@ -191,19 +193,6 @@ export function useAppBootstrap() {
         return;
       }
 
-      // `=== false` rather than `!previous`: null is "not yet known", and treating it as
-      // not-ready would fire this on the first real snapshot for an install that was already
-      // set up before launch.
-      //
-      // KNOWN, AND DELIBERATELY LEFT (audit 2026-08-19): this can fire with no download
-      // involved. The speech-detector requirement is satisfied either by the file existing OR
-      // by the audio type being "music", which skips VAD entirely — so with Whisper and FFmpeg
-      // ready and the detector file absent, switching that dropdown to Music flips every
-      // requirement ready at once and toasts here. The sentence is TRUE, which is why it stays:
-      // gating on `modelDownload.status === "completed"` would only half-fix it (a download
-      // earlier in the same session still leaves that status set) and would also silence the
-      // toast for someone who pointed at an existing model by hand. Reads odd, says nothing
-      // false.
       if (next.transcriptionReady && previous.transcriptionReady === false) {
         toast.success("Ready to transcribe", {
           description: "Your recordings can be transcribed now.",
@@ -244,15 +233,18 @@ export function useAppBootstrap() {
 
     void loadBootstrap();
 
-    const unlistenPromise = listen<AppBootstrap>(APP_SNAPSHOT_EVENT, (event) => {
-      const accepted = applyBootstrap(event.payload, {
-        preserveDraft: settingsDirtyRef.current,
-      });
-      if (accepted) {
-        syncRecordingToastState(event.payload, { notify: true });
-        syncDownloadToastState(event.payload, { notify: true });
-      }
-    });
+    const unlistenPromise = listen<AppBootstrap>(
+      APP_SNAPSHOT_EVENT,
+      (event) => {
+        const accepted = applyBootstrap(event.payload, {
+          preserveDraft: settingsDirtyRef.current,
+        });
+        if (accepted) {
+          syncRecordingToastState(event.payload, { notify: true });
+          syncDownloadToastState(event.payload, { notify: true });
+        }
+      },
+    );
 
     return () => {
       mounted = false;

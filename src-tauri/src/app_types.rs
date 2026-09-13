@@ -15,8 +15,6 @@ use crate::{
 pub(crate) const START_SHORTCUT: &str = "Ctrl+Alt+R";
 pub(crate) const STOP_SHORTCUT: &str = "Ctrl+Alt+S";
 pub(crate) const SHOW_SHORTCUT: &str = "Ctrl+Alt+W";
-/// Mines the line playing in a watch session. Global on purpose: it has to fire while
-/// mpv has focus, which is the whole point — mining should not mean leaving the video.
 pub(crate) const MINE_SHORTCUT: &str = "Ctrl+Alt+M";
 
 #[derive(Copy, Clone)]
@@ -60,16 +58,9 @@ pub(crate) const WHISPER_MODEL_SPECS: [WhisperModelSpec; 5] = [
     },
 ];
 
-/// whisper.cpp's built-in Silero VAD ggml model, used for drift-free speech segmentation.
-/// Tiny (~0.85 MB); lives alongside the ggml Whisper models under `{asset}/models/`.
 pub(crate) const WHISPER_VAD_MODEL_FILE: &str = "ggml-silero-v6.2.0.bin";
 
 /// Where the VAD model lives, for everyone who needs to know.
-///
-/// Three places had this joined by hand: transcription, which refuses to run without it; the
-/// model download, which fetches it; and now detection, which reports whether it is there. Two
-/// of those decide whether the user is told to fix something and the third is the fix — so if
-/// they ever disagreed about the path, the app would offer a repair that repaired nothing.
 pub(crate) fn whisper_vad_model_path(asset_directory: &Path) -> PathBuf {
     asset_directory.join("models").join(WHISPER_VAD_MODEL_FILE)
 }
@@ -113,23 +104,15 @@ pub(crate) fn default_theme_preference() -> String {
     "system".into()
 }
 
-/// Where the global recording-indicator toast is anchored on the primary
-/// monitor. One of the six values `normalize_indicator_position` accepts; the
-/// centered top edge is the original, most eye-catching placement.
+/// Where the global recording-indicator toast is anchored on the primary monitor.
 pub(crate) fn default_indicator_position() -> String {
     "top-center".into()
 }
 
-/// Matches the browser extension's default provider id (`KNOWN_TRANSLATION_PROVIDERS`
-/// in the extension). Sent verbatim in each translation job; the extension routes
-/// on it, so the string must stay in lockstep with the extension's ids.
 pub(crate) fn default_translation_provider() -> String {
     "google-translate".into()
 }
 
-/// English, matching what every translation written before the target language was
-/// configurable used. Also the fallback whenever a stored code is unusable, so a
-/// broken setting degrades to the old behaviour instead of a broken provider URL.
 pub(crate) fn default_translation_target_language() -> String {
     "en".into()
 }
@@ -137,15 +120,7 @@ pub(crate) fn default_translation_target_language() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct TranslationSettings {
-    /// Which provider the extension should use for desktop-initiated translations:
-    /// `"google-translate"` or `"deepl"`. Passed through the bridge as the job's
-    /// `provider`; an unknown value simply lets the extension fall back to its own
-    /// selection.
     pub(crate) provider: String,
-    /// The language transcripts are translated INTO, as a lowercase ISO 639-1 code.
-    /// Sent as the job's `targetLang` and used to name the `{stem}.translation.{lang}.txt`
-    /// sidecar. The UI owns which codes are offered; see
-    /// `normalize_translation_target_language` for why only the format is enforced here.
     pub(crate) target_language: String,
 }
 
@@ -158,69 +133,42 @@ impl Default for TranslationSettings {
     }
 }
 
-/// Shift, matching Yomitan — the gesture users of this workflow already have in their
-/// fingers. It is also the mechanism: over the video, holding the modifier is exactly what
-/// stops the overlay being click-through, so the key and the hit-testing are one thing.
 pub(crate) fn default_scan_modifier() -> String {
     "shift".into()
 }
 
-/// `remainOpen` — releasing the modifier leaves the popup up so it can be read and
-/// scrolled. Matches the add-on's own default.
 pub(crate) fn default_scan_release_behavior() -> String {
     "remainOpen".into()
 }
 
-/// 20 ms, the add-on's value. It is a floor on how often a lookup may *start*, not a delay
-/// before the first one — see the two-stage throttle in the scanner.
 pub(crate) fn default_scan_debounce_ms() -> u64 {
     20
 }
 
-/// 14 px, the add-on's popup default, so a transplanted stylesheet looks identical.
 pub(crate) fn default_lookup_font_size_px() -> u64 {
     14
 }
 
-/// 28 px, matching the browser extension's `DEFAULT_FONT_SIZE_PX` for subtitles drawn over
-/// video — a size chosen against real playback rather than guessed.
 pub(crate) fn default_overlay_font_size_px() -> u64 {
     28
 }
 
-/// 17 px, the existing `--reading-base` token. Naming it here keeps the Rust default and
-/// the stylesheet from drifting.
 pub(crate) fn default_reading_font_size_px() -> u64 {
     17
 }
 
 /// The word scanner and the typography it is read at.
-///
-/// Grouped rather than flattened onto `AppSettings` because these are one feature. Adding
-/// a group used to carry an obligation — a matching merge line in the frontend's
-/// `updateSettings`, or a partial update silently wiped its siblings — but that merge
-/// walks the shape now, so a new group needs nothing beyond existing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct ScannerSettings {
-    /// Held to scan: `shift` | `ctrl` | `alt` | `none`. `none` scans on bare hover, which
-    /// is why the debounce below matters more in that mode.
     pub(crate) modifier: String,
-    /// What releasing the modifier does: `remainOpen` | `close`.
     pub(crate) release_behavior: String,
     pub(crate) debounce_ms: u64,
-    /// Popup font. Empty means inherit the app's reading font. A free string, deliberately:
-    /// the UI owns which families it offers, Rust only bounds the length.
     pub(crate) font_family: String,
     pub(crate) font_size_px: u64,
-    /// Draw our own scannable subtitles over mpv instead of mpv's styled ones. **Off by
-    /// default**: mpv's `.ass` rendering is what works today and stays the default.
     pub(crate) overlay_enabled: bool,
     pub(crate) overlay_font_size_px: u64,
-    /// The app's own reading font, driving `--font-reading`. Empty = the built-in stack.
     pub(crate) reading_font_family: String,
-    /// Drives `--reading-base`, which the transcript rows, the live pane and the watch line
-    /// already size themselves from.
     pub(crate) reading_font_size_px: u64,
 }
 
@@ -247,34 +195,11 @@ pub(crate) struct FeatureSettings {
     pub(crate) delete_local_audio_after_anki_push: bool,
     pub(crate) allow_mp3_conversion: bool,
     pub(crate) auto_add_furigana_after_anki_push: bool,
-    /// Translate a transcript as soon as it is created, instead of waiting for the
-    /// user to press Translate. Needs the browser extension in App Support mode;
-    /// when it is not connected the transcript is still saved and the translation
-    /// is simply skipped.
     pub(crate) translate_after_transcription: bool,
-    /// Look the new words in a mined line up in the dictionary the popup uses, and
-    /// write what comes back onto the card. Off by default: it needs the Anki
-    /// add-on running, and a card is a different thing with a definition on it than
-    /// without — that should be chosen, not inherited.
     #[serde(default)]
     pub(crate) add_definitions_to_mined_cards: bool,
-    /// Whether "Mine all" may make more than one card for the same new word.
-    ///
-    /// Off by default. A transcript often teaches a word twice — a song repeats its
-    /// lines, and 生まれ変わる arrives in two of them — and two cards for one word is
-    /// review load without extra learning. On, every line within reach is mined,
-    /// which is what someone collecting several examples of a word wants.
     #[serde(default)]
     pub(crate) allow_duplicate_mined_words: bool,
-    /// Whether "Mine all" takes lines whose only content word is the new one.
-    ///
-    /// Off by default, which is the behaviour that existed before these lines were listed at
-    /// all. They are shown and filtered like any other line one word away — the badge tells
-    /// them apart — but a batch is where the cost lands: measured on a real 598-line episode,
-    /// two of every five one-word-away lines are bare, so turning this on makes a batch produce
-    /// roughly 40% more cards, and those extra cards are a word with a particle rather than a
-    /// sentence. Worth having for someone who wants every new word regardless; worth being a
-    /// decision rather than a surprise.
     #[serde(default)]
     pub(crate) mine_words_without_context: bool,
 }
@@ -303,33 +228,12 @@ pub(crate) struct AnkiFieldMapping {
     pub(crate) translation: String,
     pub(crate) source_path: String,
     pub(crate) created_at: String,
-    /// Target field for a clickable link back to the source (YouTube links deep-link
-    /// to the sentence's moment). Empty = unmapped.
     pub(crate) source_url: String,
-    /// Target field for the recording's display title. Empty = unmapped.
     pub(crate) title: String,
-    /// Target field for the sentence's timestamp (H:MM:SS). Empty = unmapped.
     pub(crate) position: String,
-    /// Target field for a still frame from the video at the mined line's moment.
-    /// Empty = unmapped, which is also what every source without a video gets.
-    /// Receives an `<img src="...">` tag.
     pub(crate) image: String,
-    /// Target field for a short video of the mined line. Empty = unmapped, which is what
-    /// switches clip capture off; every source without a video gets the same. Receives a
-    /// `[sound:...]` tag — Anki treats video behind that tag as media it owns and renders a
-    /// player for it, which is what makes it work on the phone clients too.
     pub(crate) video: String,
-    /// Target field for the dictionary definitions of the words this line is meant
-    /// to teach. Empty = unmapped, which switches the lookup off for that card as
-    /// surely as the feature toggle does.
     pub(crate) definition: String,
-    /// Target field for the one word a card was mined FOR, when it was mined for a
-    /// word rather than for its sentence. Empty on every card made by mining a line,
-    /// which is what tells the two apart on the card itself.
-    ///
-    /// Deliberately NOT the first field: Anki keys duplicate detection on field one,
-    /// and the sentence has to keep that job or "already mined" stops working for
-    /// every card the app has ever made.
     pub(crate) word: String,
 }
 
@@ -339,40 +243,11 @@ pub(crate) struct AnkiSettings {
     pub(crate) deck_name: String,
     pub(crate) note_type: String,
     pub(crate) fields: AnkiFieldMapping,
-    /// Milliseconds of audio padding added to each side of a mined sentence clip so it does
-    /// not cut the first/last syllable. Clamped to the file start on the low side.
     pub(crate) clip_padding_ms: u64,
-    /// Where the known-word index is read from: note type plus the field holding the
-    /// word. A list, because known words come from more than one note type in practice —
-    /// a starter deck and a personal mining type — and the index is their union.
-    ///
-    /// Independent of the push `note_type` on purpose: the type cards are pushed INTO is
-    /// rarely the one vocabulary is read FROM.
     #[serde(default)]
     pub(crate) vocabulary_sources: Vec<VocabularySource>,
-    /// How long a card's interval must be before its word counts as known, in days.
-    ///
-    /// A word appearing on a card is NOT the same as knowing it — one added yesterday and
-    /// failed ever since would otherwise count in full. MorphMan and AnkiMorphs both judge
-    /// by interval for exactly this reason, and 21 days is the maturity both default to.
     #[serde(default = "default_known_word_interval_days")]
     pub(crate) known_word_interval_days: u32,
-    /// Which of the add-on's dictionaries supply meanings for mined cards, by id.
-    ///
-    /// **Empty means none, not all.** It meant "every enabled one" at first, on the
-    /// reasoning that an absent filter is no filter — true of the request and wrong
-    /// on the screen, where a list of unticked boxes says nothing is chosen and
-    /// cards then arrived with meanings anyway.
-    ///
-    /// Narrowing is the point: the add-on's order suits immersion, where a
-    /// monolingual dictionary first is what you want, and it puts a 500,000-entry
-    /// encyclopedia above JMdict — not what belongs on a card.
-    ///
-    /// Ids rather than titles, though NEITHER survives a dictionary being updated —
-    /// the add-on keys uniqueness on title AND revision, so an update is a new row
-    /// with a new id, and the title carries its release date. A stored id that no
-    /// longer exists is therefore REPORTED rather than quietly dropped, or card
-    /// meanings would stop appearing the day a dictionary is updated.
     #[serde(default)]
     pub(crate) definition_dictionary_ids: Vec<i64>,
 }
@@ -402,8 +277,6 @@ pub(crate) struct WhisperSettings {
     /// How much of the machine transcription may use: `"low" | "balanced" | "high"`. Maps to
     /// a whisper-cli `-t` thread count via `transcription_thread_count`.
     pub(crate) cpu_usage: String,
-    /// Audio content mode: `"speech"` (default) or `"music"`. Music skips VAD so a full
-    /// song (sung vocals) transcribes; speech keeps the VAD-anchored behaviour.
     pub(crate) audio_type: String,
     /// Decoder search width: `"balanced"` (default) or `"fast"`. Fast drops whisper to
     /// greedy decoding (`-bs 1 -bo 1`), measured 13–23% quicker with lateral quality
@@ -431,19 +304,6 @@ impl Default for WhisperSettings {
 
 /// Every settings struct carries a container-level `default`, so a key missing from
 /// `state.json` falls back to that struct's `Default` rather than failing the parse.
-///
-/// It is worth being precise about what that buys, because the parse failure was not
-/// silent: an unparseable state file is moved aside and reported. But it takes the
-/// whole file with it — the recording library included — and which keys could do that
-/// was decided by nothing more than the order the fields were written in. Thirteen of
-/// the oldest had no default while the twenty-one newer ones did, so deleting
-/// `"audio": ""` by hand cost the library and deleting `"video": ""` beside it cost
-/// nothing. This file is hand-edited by design; `normalize_decode_speed` says so in as
-/// many words.
-///
-/// Container level rather than per field, so a field added later is covered without
-/// anyone remembering to cover it, and the `Default` impl below stays the only place a
-/// default is written down.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct AppSettings {
@@ -454,8 +314,6 @@ pub(crate) struct AppSettings {
     pub(crate) features: FeatureSettings,
     pub(crate) translation: TranslationSettings,
     pub(crate) scanner: ScannerSettings,
-    /// Jimaku API key (jimaku.cc/account). Flat rather than a nested group because it is
-    /// one field; the sibling-wiping trap that once made flatness the safer choice is gone.
     pub(crate) jimaku_api_key: String,
     pub(crate) theme: String,
     pub(crate) indicator_position: String,
@@ -463,10 +321,6 @@ pub(crate) struct AppSettings {
     pub(crate) start_minimized: bool,
 }
 
-/// The two directories are left empty rather than guessed at, because the real defaults
-/// depend on an `AppHandle` this impl does not have. `normalize_settings` turns an empty
-/// directory into the platform default and runs on every load and every save, so empty
-/// here means "ask normalize", not "no directory".
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -503,9 +357,6 @@ pub(crate) struct RecordingTranscript {
     pub(crate) file_path: String,
     #[serde(default)]
     pub(crate) detected_language: Option<String>,
-    /// Path to the `{stem}.{lang}.segments.json` sidecar beside the audio, when
-    /// whisper produced parseable per-segment offsets. `None` for transcripts
-    /// created before segments existed or when the json was missing/unparseable.
     #[serde(default)]
     pub(crate) segments_path: Option<String>,
 }
@@ -523,9 +374,6 @@ pub(crate) struct RecordingTextDocument {
     pub(crate) file_path: String,
     pub(crate) text: String,
     pub(crate) missing: bool,
-    /// Time-aligned segments for per-sentence playback, resolved from the
-    /// transcript's `segments_path` sidecar. Empty when there is no sidecar or it
-    /// could not be read/parsed — never a reason to fail the read.
     #[serde(default)]
     pub(crate) segments: Vec<RecordingSegment>,
 }
@@ -588,16 +436,10 @@ pub(crate) struct RecentRecording {
     pub(crate) duration_ms: u64,
     pub(crate) bytes_written: u64,
     pub(crate) created_at_ms: u64,
-    /// How this recording entered the library: `"recording"` (mic capture),
-    /// `"import"` (a local file the user brought in), or `None` for entries that
-    /// predate the field. Serialized as `source` in `src/types.ts`.
     #[serde(default)]
     pub(crate) source: Option<String>,
-    /// The origin URL for a future YouTube/network import. Always `None` today.
     #[serde(default)]
     pub(crate) source_url: Option<String>,
-    /// The original file name of an imported file, kept for display when the copy
-    /// on disk is renamed/sanitized. `None` for mic recordings.
     #[serde(default)]
     pub(crate) title: Option<String>,
 }
@@ -614,16 +456,6 @@ impl RecentRecording {
         self.transcript_for_language(language).is_some()
     }
 
-    /// The transcript to READ for `language`, and the language it is actually in.
-    ///
-    /// One answer to "which transcript?", because there were three and they disagreed. A
-    /// recording can hold several variants; `transcript_path` is merely the one transcribed
-    /// most recently, which is why re-translate once sent a Czech transcript for a recording
-    /// being read in Japanese, and why a push once wrote English into the sentence field
-    /// while the viewer showed Japanese. The configured language decides, everywhere.
-    ///
-    /// Falls back to `transcript_path` only when there are no variants at all — recordings
-    /// made before variants existed have the one file and no list.
     pub(crate) fn transcript_source_for(&self, language: &str) -> Option<(&str, String)> {
         if let Some(variant) = self.transcript_for_language(language) {
             return Some((variant.file_path.as_str(), variant.language.clone()));
@@ -655,39 +487,18 @@ impl RecentRecording {
 }
 
 /// A video the user has added to the video library, and the subtitle it is paired with.
-///
-/// The pairing is the whole point. Picking a video and its subtitle used to live in component
-/// state that did not survive leaving the page, so every session meant finding both files again.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct WatchedVideo {
-    /// Identity. The user's own file, never copied or moved by this app.
     pub(crate) video_path: String,
-    /// The file name when it was added, so a moved video still has something to show.
     pub(crate) title: Option<String>,
-    /// The remembered subtitle. `None` means none has been chosen — which is not the same as
-    /// none existing, since the container may carry an embedded track.
     pub(crate) subtitle_path: Option<String>,
-    /// Where that subtitle came from: `picked` | `jimaku` | `generated` | `synced`.
-    ///
-    /// Labels the chip in the list and nothing else. It must never gate behaviour — a mapping
-    /// is a path, and its provenance is decoration.
     pub(crate) subtitle_origin: Option<String>,
-    /// A still frame cached under the asset directory. `None` when one could not be made.
     pub(crate) thumbnail_path: Option<String>,
     pub(crate) duration_ms: u64,
     pub(crate) bytes: u64,
     pub(crate) added_at_ms: u64,
-    /// `None` until the video has actually been played once.
     pub(crate) last_opened_at_ms: Option<u64>,
-    /// Where to pick this video up, in milliseconds from the start.
-    ///
-    /// Holds a position only while one is worth returning to, which is why the whole field is
-    /// an `Option` rather than a `u64` that happens to be 0. `resume_point_ms` is the single
-    /// judge of that, applied when the position is written rather than when it is read: the
-    /// player, the library row and any future caller then all see the same answer, and none of
-    /// them can drift by reimplementing the rule. Finishing a video stores `None`, which is
-    /// what makes the next open start from the beginning.
     pub(crate) resume_position_ms: Option<u64>,
 }
 
@@ -705,8 +516,6 @@ pub(crate) struct PersistedData {
     pub(crate) settings: AppSettings,
     pub(crate) recent_recordings: Vec<RecentRecording>,
     pub(crate) untitled_counter: u64,
-    /// The video library. Separate from `recent_recordings` on purpose: a video is watched and
-    /// subtitled, a recording is transcribed and mined, and the two share no actions.
     pub(crate) watched_videos: Vec<WatchedVideo>,
 }
 
@@ -715,8 +524,6 @@ impl Default for PersistedData {
         Self {
             settings: AppSettings::default(),
             recent_recordings: Vec::new(),
-            // 1, not 0: this counter names untitled recordings, and `load_persisted_data`
-            // already repairs a stored 0 to 1 rather than ever handing out "Untitled 0".
             untitled_counter: 1,
             watched_videos: Vec::new(),
         }
@@ -729,7 +536,6 @@ pub(crate) struct HotkeyBindings {
     pub(crate) start: String,
     pub(crate) stop: String,
     pub(crate) show_window: String,
-    /// Mines the line currently playing in a watch session.
     #[serde(default)]
     pub(crate) mine: String,
 }
@@ -791,16 +597,8 @@ pub(crate) struct AppBootstrap {
     pub(crate) model_download: ModelDownloadSnapshot,
     pub(crate) dictionary_detection: DictionaryDetection,
     pub(crate) known_words: KnownWordsSnapshot,
-    /// What transcription needs, and whether each is present. The Setup checklist reads this
-    /// rather than deciding for itself which steps are required — which is how FFmpeg came to
-    /// be listed as optional while nothing could be transcribed without it.
     pub(crate) transcription_requirements: Vec<TranscriptionRequirement>,
     pub(crate) log_path: String,
-    /// Why logging is not working, when it is not.
-    ///
-    /// A write failure used to be discarded, so a user could hand over a file that was silently
-    /// short and neither side could tell. This is a condition the app is IN rather than the
-    /// outcome of one action, which is what makes it the banner's business and not a toast's.
     pub(crate) logging_failure: Option<String>,
 }
 
@@ -814,9 +612,6 @@ pub(crate) struct DictionaryDetection {
 }
 
 /// Not-installed is the resting state, so it is what `Default` means here.
-///
-/// Deriving this instead would make the default an empty status string, which reads as neither
-/// installed nor missing — and detection returns this value on every path that finds nothing.
 impl Default for DictionaryDetection {
     fn default() -> Self {
         Self {
@@ -842,14 +637,6 @@ pub(crate) struct WhisperDetection {
     pub(crate) available_runtime_versions: Vec<String>,
     pub(crate) cli_ready: bool,
     pub(crate) model_ready: bool,
-    /// Whether whisper.cpp's Silero VAD model is on disk beside the transcription model.
-    ///
-    /// Reported **separately** from `model_ready` rather than folded into it. The two are
-    /// fetched together, so they are almost always the same answer — but a download cancelled
-    /// in the gap between them leaves the model installed and the VAD absent, and then
-    /// `model_ready` is true while transcription refuses to run. Keeping this its own field is
-    /// what lets the interface offer a repair without changing what "the model is installed"
-    /// means to the Whisper status card or the Setup checklist.
     pub(crate) vad_ready: bool,
     pub(crate) cli_managed: bool,
     pub(crate) model_managed: bool,
@@ -965,11 +752,6 @@ impl Default for MpvDetection {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WhisperAssetUpdateResult {
-    /// Which asset this result is about.
-    ///
-    /// Typed for the same reason the download snapshot's is: it was a third hand-written copy
-    /// of the same six strings. Nothing reads it on the frontend today, so it could not have
-    /// drifted visibly — but that is a property of nobody looking, not of the code being safe.
     pub(crate) kind: AssetKind,
     pub(crate) status: String,
     pub(crate) message: String,
@@ -978,43 +760,18 @@ pub(crate) struct WhisperAssetUpdateResult {
 }
 
 /// One thing transcription cannot run without.
-///
-/// Built by `transcription_requirements`, which is the only place that decides what the list
-/// contains — see it for why this exists at all.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TranscriptionRequirement {
-    /// `"whisper"` | `"ffmpeg"` | `"vad"`. The checklist matches on these to decide which of
-    /// its rows are required, so they are part of the contract with the frontend.
     pub(crate) id: &'static str,
     pub(crate) ready: bool,
-    /// What transcription says when this is the one that is missing.
-    ///
-    /// Not sent to the frontend — the checklist writes its own, shorter copy — but kept beside
-    /// the condition so the sentence and the check that produces it cannot drift apart.
     #[serde(skip)]
     pub(crate) blocked_message: String,
-    /// The downloads that would make this ready, in the order they must run.
-    ///
-    /// Beside `ready` rather than in a list of its own, because "what is missing" and "what
-    /// fetches it" are one question asked twice — and asking it twice in two places is exactly
-    /// how FFmpeg came to be required by transcription and optional in the checklist at the
-    /// same time. A requirement added to the list cannot compile without answering this.
-    ///
-    /// Never sent to the frontend, and cannot be: `QueuedDownload` is not `Serialize`, so
-    /// deleting the skip is a build failure rather than a quiet handover of the mapping to a
-    /// second language to restate.
     #[serde(skip)]
     pub(crate) fixed_by: Vec<QueuedDownload>,
 }
 
 impl TranscriptionRequirement {
-    /// A satisfied requirement carries no fix, whatever the caller passes.
-    ///
-    /// Built through here rather than as a struct literal so the readiness condition is written
-    /// once. A call site that spelled it twice could say "this is fine" and "here is what fixes
-    /// it" in the same breath, and the first consumer to believe the second half would start a
-    /// download of something already installed.
     pub(crate) fn new(
         id: &'static str,
         ready: bool,
@@ -1033,13 +790,6 @@ impl TranscriptionRequirement {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ModelDownloadSnapshot {
-    /// Which asset the rest of these fields are about. `None` only when nothing has
-    /// downloaded yet — a finished download leaves its kind in place so the card can keep
-    /// showing the result.
-    ///
-    /// Typed rather than a bare string: the string version had to be repeated by hand in the
-    /// downloader, in `control.rs`'s label lookup and in the frontend's union, and alass
-    /// reached two of those three.
     pub(crate) kind: Option<AssetKind>,
     pub(crate) status: String,
     pub(crate) message: String,
@@ -1047,8 +797,6 @@ pub(crate) struct ModelDownloadSnapshot {
     pub(crate) total_bytes: Option<u64>,
     pub(crate) progress_percent: Option<f64>,
     pub(crate) target_path: Option<String>,
-    /// How many further downloads are waiting behind this one. 0 whenever nothing is queued,
-    /// which is every download started on its own.
     pub(crate) queued_remaining: usize,
 }
 
@@ -1075,18 +823,7 @@ pub(crate) struct AnkiCatalog {
     pub(crate) version: Option<i64>,
     pub(crate) decks: Vec<String>,
     pub(crate) note_types: Vec<String>,
-    /// The note type `fields` was read for, echoed back from the request.
-    ///
-    /// Without it, a caller holding a catalog cannot tell whether the fields belong to
-    /// the note type it is showing or to the one before it. A refresh leaves the previous
-    /// catalog in place while it runs, so between choosing a note type and the answer
-    /// arriving, every name in `fields` belongs to the previous note type.
     pub(crate) note_type: String,
-    /// The fields of `note_type`, or `None` when Anki has no note type by that name.
-    ///
-    /// One empty list used to carry both answers, and they call for opposite responses: a
-    /// note type whose fields do not match the mapping is a mapping to fix, whereas a note
-    /// type that is gone is a note type to re-choose.
     pub(crate) fields: Option<Vec<String>>,
 }
 
@@ -1126,9 +863,6 @@ pub(crate) struct MineLineRequest {
 /// Carries the line itself rather than the recording path every item would share.
 /// A batch reporting "3 of 35 failed" and leaving the reader to work out WHICH
 /// three is a batch that has to be redone from the top.
-///
-/// `status` is `added`, `failed`, or `notAttempted` — the last for lines the run
-/// stopped short of, which is not the same as a line that was tried and refused.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MinedLineOutcome {
@@ -1147,8 +881,6 @@ pub(crate) struct MinedLineOutcome {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MinedLinesResult {
-    /// `ready` (all added), `partial` (some failed), `stopped` (the run gave up
-    /// early), or `failed` (nothing was attempted).
     pub(crate) status: String,
     pub(crate) message: String,
     pub(crate) added: usize,
@@ -1172,13 +904,7 @@ pub(crate) struct AppPathsState {
     pub(crate) state_file: PathBuf,
     pub(crate) log_file: PathBuf,
     pub(crate) assets_dir: PathBuf,
-    /// `known_words.txt`, beside `state.json`. Its own file rather than a key in the
-    /// persisted state: a large word list has no business making every settings write
-    /// bigger, and a corrupt index must not be able to cost the recording library.
     pub(crate) known_words_file: PathBuf,
-    /// `progress.jsonl`, beside the two above, for the same two reasons. It grows a row a
-    /// day for years, so it must not ride along on every settings write; and losing it
-    /// must cost only the measurements that cannot be worked out again, never a recording.
     pub(crate) progress_file: PathBuf,
 }
 
@@ -1186,8 +912,6 @@ pub(crate) struct SharedShellState(pub(crate) Mutex<ShellSnapshot>);
 pub(crate) struct SharedPersistedState(pub(crate) Mutex<PersistedData>);
 pub(crate) struct WhisperDetectionState(pub(crate) Mutex<WhisperDetection>);
 pub(crate) struct ModelDownloadState(pub(crate) Mutex<ModelDownloadSnapshot>);
-/// The downloads waiting their turn. One at a time is still the rule; this is only what is
-/// next. See `asset_downloads/queue.rs`.
 pub(crate) struct ModelDownloadQueueState(pub(crate) Mutex<DownloadQueue>);
 pub(crate) struct ModelDownloadControlState {
     pub(crate) control: Mutex<ModelDownloadControl>,
@@ -1212,11 +936,6 @@ mod settings_default_tests {
     use super::*;
 
     /// The defaults, written out by hand rather than read back from `Default`.
-    ///
-    /// Moving them to the container attribute made `Default` the single source, which is
-    /// the point — but it also means a typo in `Default` would now agree with itself
-    /// everywhere and look correct. This is the independent copy that would disagree.
-    /// It doubles as the contract the frontend's `DEFAULT_BOOTSTRAP` mirrors.
     #[test]
     fn an_empty_settings_object_deserializes_to_the_documented_defaults() {
         let settings: AppSettings = serde_json::from_str("{}").expect("empty settings parse");
@@ -1376,22 +1095,8 @@ pub(crate) struct VocabularySource {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LineRanking {
     pub(crate) unknown_words: Vec<String>,
-    /// How many words the line contains that count at all, known or not. A line of
-    /// pure grammar has none, and is not the same thing as a line you know every
-    /// word of — the badge has to be able to tell those apart.
     pub(crate) content_word_count: usize,
-    /// Whether this line is one word away — exactly one word here is new.
-    ///
-    /// Decided here rather than by whoever draws the badge, so the count in the summary
-    /// and the rows in the filter cannot disagree — see `is_within_reach`.
     pub(crate) within_reach: bool,
-    /// Whether there is another content word to learn that one from.
-    ///
-    /// A separate answer rather than the frontend re-deriving `content_word_count >= 2`,
-    /// because that threshold is the definition of a learnable line and one definition is
-    /// enough. `within_reach && !has_context` is a bare word — shown and filtered like any
-    /// other line one word away, drawn differently, and left out of "Mine all" unless the
-    /// user has asked for it. See `has_context`.
     pub(crate) has_context: bool,
 }
 
@@ -1409,10 +1114,6 @@ pub(crate) struct TranscriptRanking {
 }
 
 /// One proposed vocabulary source, with real values from the user's own cards.
-///
-/// `samples` is not decoration. The tests behind a suggestion cannot tell a deck of
-/// single kanji from a deck of words, or a Basic deck of vocabulary from one of
-/// trivia — and three real values answer that at a glance.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VocabularySuggestion {
@@ -1433,13 +1134,6 @@ pub(crate) struct VocabularySuggestions {
     pub(crate) suggestions: Vec<VocabularySuggestion>,
 }
 
-/// What one known-word refresh has to say for itself.
-///
-/// `word_count` and `built_at_ms` describe the index as it stands after the
-/// attempt, not what the attempt itself read — an offline refresh leaves the
-/// previous index in place and reports it, because it is still the best answer
-/// available. `status` is what happened: `ready`, `empty`, `offline`, or
-/// `unconfigured`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KnownWordsSnapshot {
@@ -1451,33 +1145,16 @@ pub(crate) struct KnownWordsSnapshot {
 
 /// Everything that decides what an index contains: which fields the words are read
 /// from, and how long one must have been held before it counts.
-///
-/// The two live in one type because they are one question. An index is only valid
-/// for the settings it was built under, and asking that in two places is asking for
-/// the day a third input is added and only one of them is updated — leaving an index
-/// that answers confidently for a rule it was never built with. Judged through
-/// `matches`, so there is exactly one definition of "still mine".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KnownWordsBuild {
     #[serde(default)]
     pub(crate) sources: Vec<VocabularySource>,
-    /// Zero only ever comes from a file written before the threshold existed, or a
-    /// hand-edited one. It matches no real setting, so such an index reads as stale
-    /// and is rebuilt — the safe direction.
     #[serde(default)]
     pub(crate) mature_after_days: u32,
 }
 
 impl KnownWordsBuild {
-    /// The build the index should be made from, out of whatever is in settings.
-    ///
-    /// **The only way to make one from settings**, because it is where half-filled
-    /// rows are dropped. Settings keep a row the moment it is added so it can be
-    /// filled in; a row still missing a half cannot be queried and must not reach
-    /// the index, the scan, or the staleness check. Doing that filtering in the
-    /// normalizer deleted the row out from under the user mid-edit; doing it at each
-    /// point of use was four chances to forget.
     pub(crate) fn from_anki_settings(anki: &AnkiSettings) -> Self {
         Self {
             sources: anki
@@ -1490,11 +1167,6 @@ impl KnownWordsBuild {
         }
     }
 
-    /// Whether an index built under `self` still answers for `other`.
-    ///
-    /// Sources compare as a multiset: reordering the rows in settings is not a
-    /// change and must not nag a needless Refresh. The threshold compares exactly —
-    /// a different number is a different set of words by definition.
     pub(crate) fn matches(&self, other: &KnownWordsBuild) -> bool {
         if self.mature_after_days != other.mature_after_days
             || self.sources.len() != other.sources.len()
@@ -1513,14 +1185,6 @@ impl KnownWordsBuild {
     }
 }
 
-/// Every word the user already knows, normalized to the form the transcript side
-/// asks in, with the moment it was read out of Anki and the settings it was built
-/// under.
-///
-/// `build` is what a loaded index is judged against on startup: if the settings
-/// have changed since, this index is for a rule the user no longer uses, and the UI
-/// is nudged to Refresh rather than shown a count that silently answers for the
-/// wrong decks or the wrong maturity.
 pub(crate) struct KnownWordIndex {
     pub(crate) words: std::collections::HashSet<String>,
     pub(crate) built_at_ms: u64,
@@ -1528,12 +1192,6 @@ pub(crate) struct KnownWordIndex {
 }
 
 /// The in-memory known-word index, or `None` until one is built or loaded.
-///
-/// Backed by `known_words.txt`: the index is restored into here at startup and
-/// re-persisted on every successful Refresh, so ranking works on launch without a
-/// manual rebuild. It is still a cache of Anki's contents and can be stale, but the
-/// answer to that is to show its age (`built_at_ms`) and flag a settings change, not
-/// to discard it every launch and leave ranking silently unavailable.
 pub(crate) struct KnownWordsState(pub(crate) Mutex<Option<KnownWordIndex>>);
 
 /// Anki's own "mature" threshold, and the default both MorphMan and AnkiMorphs use.

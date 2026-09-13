@@ -1,12 +1,3 @@
-//! The one place a log line is written.
-//!
-//! Every line goes through [`write`], which is what makes the redaction below reliable: a
-//! second writer would be fail-open on whatever it forgot, and a log file is only shareable if
-//! nothing can leak into it by a path nobody checked.
-//!
-//! The file is JSON Lines — one object per line — so it can be grepped, opened in a text
-//! editor, and parsed without a schema.
-
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -19,18 +10,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 /// Rotate once the active file passes this, keeping [`KEPT_FILES`] in total.
-///
-/// Measured against real use at roughly 8 KiB a day, so three 2 MB files hold well over a
-/// year. The cap exists to bound disk and to bound how much history one shared file exposes,
-/// not because the volume is a problem.
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const KEPT_FILES: usize = 3;
 
 /// What a path is rewritten to before it reaches the file.
-///
-/// A real environment variable rather than an opaque token: it still resolves in a shell, so
-/// nothing is lost for debugging, while the account name it expands to never leaves the
-/// machine.
 const HOME_PLACEHOLDER: &str = "%USERPROFILE%";
 
 /// One record. Field order is declaration order, which is why this is a struct and not a
@@ -46,12 +29,8 @@ struct LogLine<'a> {
     details: Value,
 }
 
-/// Identifies one launch. Every line carries it, so a whole run can be isolated from a file
-/// that holds many.
 static RUN: OnceLock<String> = OnceLock::new();
 
-/// Why logging last failed, if it has. Read by the bootstrap so the app can say so instead of
-/// handing over a file that is silently short.
 static FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Serialises rotation and the append against each other.
@@ -75,9 +54,6 @@ pub(crate) fn failure() -> Option<String> {
 }
 
 fn record_failure(reason: String) {
-    // Printed as well as stored: during development the terminal is where it will be seen, and
-    // a logger that cannot report its own failure is the one component that has nowhere else
-    // to go.
     eprintln!("wonder-of-u: log write failed: {reason}");
     if let Ok(mut failure) = FAILURE.lock() {
         *failure = Some(reason);
@@ -98,14 +74,6 @@ fn home_directory() -> Option<String> {
 }
 
 /// Replaces the home directory wherever it appears in a string.
-///
-/// Windows paths are case-insensitive and reach the log in more than one casing, so the search
-/// is too — but only over ASCII. Full Unicode lowering changes byte lengths (the Kelvin sign is
-/// three bytes and lowers to one), and an offset found in a lowered copy is then not an offset
-/// into the original: the cut lands in the wrong place, leaving part of the account name behind
-/// or slicing mid-character and panicking. ASCII lowering is length-preserving, which makes
-/// that misalignment impossible rather than something to check for, and the casing that varies
-/// on Windows — the drive letter and `Users` — is ASCII.
 fn redact_string(text: &str, home: &str) -> String {
     let haystack = text.to_ascii_lowercase();
     let needle = home.to_ascii_lowercase();
@@ -125,9 +93,6 @@ fn redact_string(text: &str, home: &str) -> String {
 }
 
 /// The folder recordings live in, so their names can be replaced before they are written.
-///
-/// Set at startup and again whenever the setting changes. `None` means the folder is not known
-/// yet, and a name is left alone rather than guessed at.
 static RECORDINGS: Mutex<Option<String>> = Mutex::new(None);
 
 /// Tells the writer where recordings live.
@@ -200,8 +165,6 @@ fn redact_recording_names(text: &str, recordings: &str) -> String {
         out.push_str(&rest[..after_directory]);
         rest = &rest[after_directory..];
 
-        // Only the segment straight after the folder is a recording name; anything beyond the
-        // next separator is a different path and is left to the next pass.
         let separator = if rest.starts_with(['\\', '/']) { 1 } else { 0 };
         out.push_str(&rest[..separator]);
         rest = &rest[separator..];
@@ -219,10 +182,6 @@ fn redact_recording_names(text: &str, recordings: &str) -> String {
 }
 
 /// Rewrites the home directory out of every string anywhere in the payload.
-///
-/// Walks the whole value rather than naming fields, so a field added later is covered without
-/// anyone remembering to add it here — 84% of lines carried the account name before this, and
-/// they carried it in twenty-seven differently named fields plus free text.
 fn redact(value: &mut Value, home: &str, recordings: Option<&str>) {
     match value {
         Value::String(text) => *text = redact_one(text, home, recordings),
@@ -237,9 +196,6 @@ fn redact(value: &mut Value, home: &str, recordings: Option<&str>) {
 }
 
 /// Recording names first, then the home directory.
-///
-/// Order matters: the recordings folder is stored as the real path, and rewriting the home
-/// directory first would leave nothing for it to match.
 fn redact_one(text: &str, home: &str, recordings: Option<&str>) -> String {
     let named = match recordings {
         Some(directory) => redact_recording_names(text, directory),
@@ -249,9 +205,6 @@ fn redact_one(text: &str, home: &str, recordings: Option<&str>) -> String {
 }
 
 /// Moves `details.message` up to the record's own `msg`.
-///
-/// Call sites carry the human sentence inside `details` today. Lifting it gives every line the
-/// same shape without editing them all, and stops the sentence being duplicated once they are.
 fn take_message(details: &mut Value) -> String {
     let Value::Object(fields) = details else {
         return String::new();
@@ -264,9 +217,6 @@ fn take_message(details: &mut Value) -> String {
 }
 
 /// Renames the active file out of the way once it grows past [`MAX_BYTES`].
-///
-/// Size rather than a daily file because volume here follows use, not the clock: a heavy day
-/// would overrun a daily file while a quiet week would leave empty ones behind.
 fn rotate_if_needed(path: &Path) {
     let too_big = fs::metadata(path).map(|meta| meta.len() >= MAX_BYTES).unwrap_or(false);
     if !too_big {
@@ -274,29 +224,17 @@ fn rotate_if_needed(path: &Path) {
     }
 
     let numbered = |index: usize| path.with_extension(format!("{index}.log"));
-
-    // Oldest first, so a rename never lands on a file that has not moved yet. The oldest is
-    // dropped by being renamed over, which is what bounds the set at KEPT_FILES.
     for index in (1..KEPT_FILES - 1).rev() {
         let _ = fs::rename(numbered(index), numbered(index + 1));
     }
     let _ = fs::rename(path, numbered(1));
 }
 
-/// Whether routine detail is written.
-///
-/// Four levels, and DEBUG is the one that is normally dropped: two events accounted for 44% of
-/// the file, and a log whose signal is a twentieth of its lines is one nobody reads. Set
-/// `WONDER_OF_U_LOG=debug` to keep them while working on something.
 fn debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| debug_requested(std::env::var("WONDER_OF_U_LOG").ok().as_deref()))
 }
 
-/// The decision, separated from the latch that caches it.
-///
-/// `debug_enabled` reads the environment once per process, so a test can only ever observe
-/// whichever branch the ambient environment selected. Both answers are testable here.
 fn debug_requested(setting: Option<&str>) -> bool {
     setting.is_some_and(|value| value.eq_ignore_ascii_case("debug"))
 }
@@ -327,17 +265,12 @@ pub(crate) fn write(path: &Path, level: &str, event: &str, mut details: Value) {
         return;
     };
 
-    // Rotation and the append are one critical section. Without it two threads that both see
-    // a full file both run the rename chain and one generation is renamed over; and `writeln!`
-    // issues the payload and the newline as separate appends, which another thread can split.
-    // The recorder, the download worker and the main thread all log.
     let _guard = FILE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
     rotate_if_needed(path);
 
     let opened = OpenOptions::new().create(true).append(true).open(path);
     match opened {
-        // One `write_all` of payload-plus-newline, so a record is a single append.
         Ok(mut file) => {
             if let Err(error) = file.write_all(format!("{encoded}\n").as_bytes()) {
                 record_failure(error.to_string());
@@ -348,21 +281,10 @@ pub(crate) fn write(path: &Path, level: &str, event: &str, mut details: Value) {
 }
 
 /// Local time as RFC 3339 with milliseconds, e.g. `2026-08-19T15:04:05.123+05:30`.
-///
-/// Local rather than UTC so that "it stopped working around three" lines up with the file
-/// without anyone converting anything, and offset-qualified so it is still unambiguous when the
-/// file is read on another machine.
 fn timestamp() -> String {
     chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false)
 }
 
-/// What this machine is, for the first line of every run.
-///
-/// A handed-over log answers "what went wrong" only if it also answers "on what". Without this
-/// every question about a report starts with a round trip asking for the version.
-///
-/// The run id is not here: every record already carries it, and describing the machine is a
-/// different question from identifying the launch.
 pub(crate) fn environment() -> serde_json::Value {
     serde_json::json!({
         "app": env!("CARGO_PKG_VERSION"),
@@ -376,10 +298,6 @@ pub(crate) fn environment() -> serde_json::Value {
 }
 
 /// The Windows edition and build, read from the registry.
-///
-/// The registry rather than an API call because `winreg` is already a dependency and this needs
-/// no unsafe block. `CurrentBuild` is what distinguishes the releases that actually behave
-/// differently; the marketing name alone does not.
 #[cfg(windows)]
 fn windows_release() -> String {
     use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
@@ -412,10 +330,6 @@ fn windows_release() -> String {
 }
 
 /// Writes a panic to the log before the process goes.
-///
-/// A crash is the one case where nothing was recorded at all: the default hook prints to a
-/// stderr no user sees. Installed once at startup, and it chains to the previous hook so the
-/// usual console output still happens while developing.
 pub(crate) fn install_panic_hook(path: std::path::PathBuf) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -488,10 +402,6 @@ mod tests {
     }
 
     /// A non-ASCII account name is still redacted.
-    ///
-    /// Windows usernames are not ASCII-only. If the needle and the haystack are lowered by
-    /// different rules the two never match, and the account name reaches the file untouched —
-    /// a silent total failure of the one thing this function exists to do.
     #[test]
     fn a_non_ascii_account_name_is_still_redacted() {
         // U+0130 lowers to two code points under full Unicode rules and is unchanged by ASCII
@@ -510,10 +420,6 @@ mod tests {
     }
 
     /// Non-ASCII text must not shift the account name out of alignment.
-    ///
-    /// Lowercasing is not length-preserving over Unicode: the Kelvin sign is three bytes and
-    /// lowers to one. An offset found in a lowered copy is therefore not an offset into the
-    /// original, and a path after such a character is cut in the wrong place.
     #[test]
     fn a_length_changing_character_does_not_break_redaction() {
         let home = r"C:\Users\suzuki";
@@ -569,9 +475,6 @@ mod tests {
     }
 
     /// A recording's name is a sample of what was said, so it never reaches the file.
-    ///
-    /// Names taken from the user's real folder: one saved by the app, which carries its id, and
-    /// one imported from YouTube, which carries the video's title instead.
     #[test]
     fn a_recording_name_is_replaced_by_its_id() {
         let recordings = r"C:\Users\me\Documents\Wonder of U Recordings";
@@ -693,9 +596,6 @@ mod tests {
 
     /// A write that cannot land has to be reported, because the alternative is a user handing
     /// over a file that is silently short.
-    ///
-    /// Deliberately only asserts that a failure IS recorded, never that none is: the context is
-    /// process-wide, so a test asserting the absence would race any other test that writes.
     #[test]
     fn a_write_that_cannot_land_is_reported() {
         let unwritable = Path::new("Z:/no-such-directory/nested/app.log");
@@ -718,9 +618,6 @@ mod tests {
     }
 
     /// Routine detail stays out of the file unless it is asked for.
-    ///
-    /// Asserted against the default environment, which is what a user runs: two events were 44%
-    /// of the file before this, and a log that is mostly routine success is one nobody reads.
     #[test]
     fn debug_records_are_dropped_unless_enabled() {
         let directory = tempfile::tempdir().unwrap();

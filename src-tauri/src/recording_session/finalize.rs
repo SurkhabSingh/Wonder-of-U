@@ -67,13 +67,6 @@ pub(super) fn finalize_recording_pipeline<R: Runtime>(
                 persisted.settings.clone()
             };
 
-            // Save the recording untranscribed and return to idle immediately so the
-            // app stays usable — finalize no longer blocks on Whisper. When
-            // transcription is enabled we hand the file to the frontend's
-            // non-blocking transcription queue via an event; that queue path
-            // (recording_library::transcription) renames the mic capture on its
-            // first transcript, stores segments, and translates after transcription
-            // exactly as a manual transcribe does.
             insert_recent_recording(&app, recent_recording.clone())?;
             update_shell_snapshot(&app, |shell| {
                 shell.phase = "idle".into();

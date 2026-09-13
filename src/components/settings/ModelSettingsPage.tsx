@@ -159,9 +159,6 @@ export function ModelSettingsPage({
         <label className="field">
           <span className="field-label-with-help">
             <span>Transcription speed</span>
-            {/* The speed win is measured, but it was measured on two recordings — how the
-                text shifts depends on the audio, so this is flagged rather than presented
-                as a settled improvement. */}
             <span className="field-experimental-tag">Experimental</span>
             <TooltipBadge
               label="?"
@@ -171,9 +168,6 @@ export function ModelSettingsPage({
           <ThemedSelect
             value={settingsDraft.whisper.decodeSpeed || "balanced"}
             options={[
-              // "Standard", not "Balanced": CPU usage two rows up already offers a
-              // Balanced, and two speed-ish controls sharing a value label with unrelated
-              // meanings is a needless trap. The stored value stays "balanced".
               { value: "balanced", label: "Standard (default)" },
               { value: "fast", label: "Faster" },
             ]}
@@ -190,9 +184,6 @@ export function ModelSettingsPage({
         </label>
       </div>
 
-      {/* Each paragraph names its own control. Without that, the reader takes whichever
-          one sits nearest — and this one is about speed, directly under a speed setting
-          whose options are not the "higher"/"lower" it describes. */}
       <p className="microcopy">
         CPU usage controls how much of the machine transcription may take: higher uses
         more cores and finishes sooner, lower uses fewer so the machine stays responsive
@@ -205,9 +196,6 @@ export function ModelSettingsPage({
         little looser in Music mode; keep it on Speech for dialogue.
       </p>
 
-      {/* The id is what the select's aria-describedby points at, so this caveat reaches a
-          screen reader — the trigger's aria-label otherwise replaces the whole label and
-          the Experimental badge with it. */}
       <p className="microcopy" id="transcription-speed-help">
         Transcription speed is <strong>experimental</strong>: Faster was 13&ndash;23%
         quicker on our test recordings without reading less accurately, but that was two
@@ -283,15 +271,6 @@ export function ModelSettingsPage({
               ) : null}
             </div>
             <UpdateResultCard result={modelUpdateResult} />
-            {/* The model is here but the speech detector is not, so transcription will refuse
-                to run — and with the model installed there is otherwise no button on this page
-                to fetch it, which left the app telling the user to do something it gave them
-                no way to do. Reached by cancelling a model download in the gap between the two
-                files, since the model is renamed into place before the detector is fetched.
-
-                This runs the ordinary model download: it skips whichever of the two files is
-                already present, so it fetches only the missing detector and leaves a multi-
-                gigabyte model untouched. */}
             {!bootstrap.whisperDetection.vadReady ? (
               <div className="update-card missing">
                 <strong>The speech detector is missing.</strong>

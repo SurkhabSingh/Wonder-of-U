@@ -14,48 +14,20 @@ use crate::app_runtime::{log_event, now_ms};
 
 /// Loopback port the desktop app listens on for the browser-extension
 /// translation worker. Mirrors the extension's default (`BRIDGE.md`).
-///
-/// Must stay clear of Anki: 8765 is AnkiConnect and 8766 is our own furigana
-/// add-on (see `anki::furigana`). Binding either would silently fail and leave
-/// the extension talking to Anki, which answers our routes with a 404.
 pub(crate) const BRIDGE_PORT: u16 = 8791;
 const BRIDGE_PROTOCOL: &str = "1";
 const WORKER_THREADS: usize = 4;
-/// How recently the extension must have polled for the bridge to count as
-/// connected. The client long-polls with `wait=25`, so it refreshes this at least
-/// that often; the window has to be comfortably wider than one poll, or a single
-/// slow round trip reads as a disconnection.
+
 const CONNECTION_TTL: Duration = Duration::from_secs(60);
 const MAX_LONG_POLL_SECONDS: u64 = 30;
 /// How long to keep trying to claim the port before giving up.
-///
-/// Windows does not release a listening socket the instant its process dies, so an app that
-/// is killed rather than closed — a crash, Task Manager, a rebuild — leaves the port held for
-/// a few seconds. Binding once meant the next launch lost the race and the bridge stayed dead
-/// for the entire session, with nothing on screen saying so. Retrying costs a few seconds in
-/// the rare case and fixes the common one.
 const BIND_ATTEMPTS: usize = 10;
 const BIND_RETRY_DELAY: Duration = Duration::from_millis(600);
 /// How long a claimed job may go unanswered before it is handed back out.
-///
-/// The client gives the browser 120s to translate and then reports the failure
-/// itself, so under normal operation the lease never fires — it exists for the
-/// case where the client process dies mid-job, which previously lost the job
-/// silently and made the caller wait out its entire timeout for nothing.
 const LEASE_TIMEOUT: Duration = Duration::from_secs(135);
-/// One retry. A job that two separate claims could not translate is not going to
-/// start working on a third.
 const MAX_ATTEMPTS: u32 = 2;
-/// Back-pressure. A caller submits one job and blocks on it, so the queue only
-/// grows past a handful if something is badly wrong.
 const MAX_QUEUE_DEPTH: usize = 64;
-/// Ceiling on a `/complete` or `/fail` body. Everything else the broker owns is
-/// bounded — the queue, the lease bookkeeping, every map — and this was the one
-/// that was not: the body was read straight into a `String` with no limit, so a
-/// local process could hand a worker thread a multi-gigabyte POST and have it
-/// faithfully buffer the lot. A translation of a transcript sentence is a few
-/// hundred bytes; 1 MiB is already absurdly generous for one, and the source
-/// text it answers had to fit through `submit` in the first place.
+/// Ceiling on a `/complete` or `/fail` body.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Serialize)]
@@ -83,26 +55,16 @@ struct ClaimedJob {
 #[derive(Default)]
 struct BridgeInner {
     pending: VecDeque<BridgeJob>,
-    /// Jobs the client has taken but not yet resolved. Without this a claimed job
-    /// existed nowhere: `claim_next` popped it off `pending` and tracked it
-    /// nowhere, so a client that died mid-job dropped it on the floor.
     claimed: HashMap<String, ClaimedJob>,
     results: HashMap<String, JobOutcome>,
-    /// Ids a caller is currently blocked on. `resolve` refuses to record a result
-    /// for anything not in here, which is what keeps `results` bounded: it used to
-    /// accept any id at all, so late, duplicate, and unsolicited posts accumulated
-    /// for the lifetime of the process.
     waiting: HashSet<String>,
     attempts: HashMap<String, u32>,
     seq: u64,
     last_seen_at: Option<Instant>,
-    /// Whether the port was actually claimed. See `mark_listening`.
     listening: bool,
 }
 
-/// Shared translation job broker. The `translate` command submits a job and
-/// blocks on `await_result`; the HTTP worker threads hand jobs to the extension
-/// and record the outcome.
+/// Shared translation job broker.
 pub(crate) struct TranslationBridge {
     inner: Mutex<BridgeInner>,
     signal: Condvar,
@@ -122,9 +84,7 @@ impl TranslationBridge {
         }
     }
 
-    /// Records that the port was claimed. Until this happens there is no bridge at all, so
-    /// "the extension has not called" and "there was nothing for it to call" look identical
-    /// from the outside — and only one of them is the extension's fault.
+    /// Records that the port was claimed.
     pub(crate) fn mark_listening(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.listening = true;
@@ -205,8 +165,6 @@ impl TranslationBridge {
                 return None;
             }
 
-            // Wake at least once a second so an expired lease is noticed even when
-            // no new job arrives to signal us.
             let slice = (deadline - now).min(Duration::from_secs(1));
             let (guard, _) = self
                 .signal
@@ -233,7 +191,6 @@ impl TranslationBridge {
             };
 
             if !inner.waiting.contains(&id) {
-                // Nobody is listening any more; drop it.
                 inner.attempts.remove(&id);
                 continue;
             }
@@ -253,8 +210,7 @@ impl TranslationBridge {
         }
     }
 
-    /// Records a completion or failure. Unknown ids are ignored: a result nobody
-    /// is waiting for is either a duplicate post, a late one, or not ours.
+    /// Records a completion or failure.
     fn resolve(&self, id: &str, outcome: JobOutcome) -> bool {
         let mut inner = self.inner.lock().expect("translation bridge poisoned");
         inner.claimed.remove(id);
@@ -263,7 +219,6 @@ impl TranslationBridge {
             return false;
         }
 
-        // First writer wins, so a retried POST cannot overwrite a stored result.
         if inner.results.contains_key(id) {
             return true;
         }
@@ -280,9 +235,6 @@ impl TranslationBridge {
 
         loop {
             if let Some(outcome) = inner.results.remove(id) {
-                // Clear the job from everywhere, not just from `results`. A result
-                // can land before the job was ever claimed, and a `pending` entry
-                // left behind would later be handed out as a phantom job.
                 inner.pending.retain(|job| job.id != id);
                 inner.claimed.remove(id);
                 inner.waiting.remove(id);
@@ -295,7 +247,6 @@ impl TranslationBridge {
 
             let now = Instant::now();
             if now >= deadline {
-                // Stop tracking the job everywhere, so nothing about it lingers.
                 inner.pending.retain(|job| job.id != id);
                 inner.claimed.remove(id);
                 inner.waiting.remove(id);
@@ -402,30 +353,7 @@ struct FailBody {
     error: String,
 }
 
-/// Keeps browsers off the bridge. Three checks, none of which authenticates:
-///
-///   * **Fetch Metadata.** Browsers attach `Sec-Fetch-Site`/`-Mode`/`-Dest` to
-///     every request they make, loopback subresources included; a plain Node
-///     `http.request` — which is all our client is (`native-host.js` sends only
-///     `Accept`, plus `Content-Type`/`Content-Length` on a POST, and whatever
-///     Node adds: `Host` and `Connection`) — sends none. So any `Sec-Fetch-*`
-///     header at all means a browser made the request, and it is refused.
-///   * **Origin.** Kept, but it is not the load-bearing check and never was. The
-///     docstring here used to claim a page "cannot suppress `Origin`", and that
-///     is simply false: `Origin` rides on fetch/XHR and CORS-relevant requests,
-///     not on subresource GETs. `<img src="http://127.0.0.1:8791/v1/translation
-///     /next?wait=30">` on any page the user visits arrives with no `Origin` at
-///     all. The page cannot read the reply — but `claim_next` has already popped
-///     the job, so the user's translation dies waiting, and four such tags
-///     occupy every worker thread we have.
-///   * **Host.** The usual DNS-rebinding guard: a name that resolves to
-///     127.0.0.1 still arrives carrying its own `Host`.
-///
-/// What this does NOT do is prove identity. It separates "a browser sent this"
-/// from "our Node client did"; any other local process can still speak the
-/// contract and be believed. That is the bridge's pre-existing trust boundary —
-/// closing it needs a shared secret negotiated over the native-messaging port,
-/// which is a change to `native-host.js` and not to this file.
+/// Keeps browsers off the bridge.
 fn is_authorized(request: &Request) -> bool {
     let mut host_ok = false;
 
@@ -484,10 +412,6 @@ fn handle_request(bridge: &TranslationBridge, version: &str, mut request: Reques
         return;
     }
 
-    // `complete` and `fail` answer 200 even for an id the bridge no longer knows,
-    // as the contract requires (BRIDGE.md): a retried post must be a harmless
-    // no-op rather than something that corrupts state. `accepted` tells the client
-    // whether the result was actually recorded.
     if method == Method::Post {
         if let Some(id) = job_id_for(&path, "/complete") {
             let Some(body) = read_body(&mut request) else {
@@ -552,13 +476,6 @@ fn parse_wait_seconds(query: &str) -> u64 {
 }
 
 /// Reads a request body, refusing anything over `MAX_BODY_BYTES`.
-///
-/// The declared `Content-Length` is checked first so an oversized POST is
-/// rejected before a single byte is buffered, but it is only a hint — a chunked
-/// or lying client sends no usable length — so the read itself is capped too,
-/// with one byte of headroom to tell "exactly at the limit" apart from "over
-/// it". Reading is `take`n rather than aborted outright because the reply still
-/// has to go back down the same connection.
 fn read_body(request: &mut Request) -> Option<String> {
     if request
         .body_length()
@@ -574,11 +491,8 @@ fn read_body(request: &mut Request) -> Option<String> {
         .read_to_string(&mut content);
 
     match read {
-        // A body that fills the headroom byte had more behind it.
         Ok(_) if content.len() > MAX_BODY_BYTES => None,
         Ok(_) => Some(content),
-        // Non-UTF-8 or a truncated read. Either way there is no JSON here, and
-        // the caller answers the same way it would for an unparseable body.
         Err(_) => Some(String::new()),
     }
 }
@@ -627,7 +541,6 @@ mod tests {
         assert_eq!(job.source_text, "hello");
         assert_eq!(job.source_lang, "ja");
         assert_eq!(job.target_lang, "en");
-        // claim_next records extension activity.
         assert!(bridge.is_connected());
 
         assert!(bridge.resolve(&id, JobOutcome::Done("world".into())));
@@ -636,7 +549,6 @@ mod tests {
             .expect("a result should be available");
         assert_eq!(result, "world");
 
-        // Nothing is left behind once the caller has its answer.
         assert_eq!(bridge.queue_depth(), (0, 0, 0));
     }
 
@@ -678,8 +590,6 @@ mod tests {
         assert!(!bridge.resolve("job-nobody-asked-for", JobOutcome::Done("junk".into())));
         assert_eq!(bridge.queue_depth(), (0, 0, 0));
 
-        // A duplicate post after the caller already collected its result is a no-op
-        // rather than a fresh, permanent entry.
         let id = submit_test_job(&bridge);
         assert!(bridge.resolve(&id, JobOutcome::Done("world".into())));
         assert_eq!(
@@ -723,7 +633,6 @@ mod tests {
         assert_eq!(claimed.id, id);
         assert_eq!(bridge.queue_depth(), (0, 1, 0), "the job is now leased");
 
-        // Nothing is pending while the lease is live, so it is not handed out twice.
         assert!(bridge.claim_next(Duration::from_millis(50)).is_none());
 
         expire_all_leases(&bridge);
@@ -734,8 +643,6 @@ mod tests {
         assert_eq!(requeued.id, id, "the same job, not a new one");
     }
 
-    /// ...but it is not handed out forever. After MAX_ATTEMPTS the caller is told
-    /// what happened instead of waiting for a client that clearly is not coming back.
     #[test]
     fn an_abandoned_job_fails_after_its_retry() {
         let bridge = TranslationBridge::new();
@@ -861,8 +768,6 @@ mod tests {
         assert_eq!(health["protocol"], "1");
         assert_eq!(health["version"], "9.9.9");
 
-        // An empty queue answers 204 so the client simply polls again, rather than
-        // reading a bodyless 200 as a malformed job.
         let empty = client
             .get(format!("{base}/v1/translation/next?wait=1"))
             .send()
@@ -935,8 +840,6 @@ mod tests {
         assert_eq!(error, "The extension reported a translation failure.");
     }
 
-    /// The fetch shape: a page calling us from script sends an `Origin`, and a page
-    /// has no business claiming jobs or injecting results.
     #[test]
     fn requests_from_a_web_page_are_refused() {
         let bridge = Arc::new(TranslationBridge::new());
@@ -953,7 +856,6 @@ mod tests {
             .unwrap();
         assert_eq!(response.status().as_u16(), 403);
 
-        // And the native client, which sends no Origin, still gets through.
         let allowed = client.get(format!("{base}/v1/health")).send().unwrap();
         assert!(allowed.status().is_success());
     }
@@ -986,7 +888,6 @@ mod tests {
             );
         }
 
-        // A single Sec-Fetch header is enough on its own: only a browser sends any.
         let response = client
             .get(format!("{base}/v1/health"))
             .header("Sec-Fetch-Dest", "empty")
@@ -995,8 +896,6 @@ mod tests {
         assert_eq!(response.status().as_u16(), 403);
     }
 
-    /// The exact header set `native-host.js` sends must still be authorized, or the
-    /// guard above has locked out the only real client.
     #[test]
     fn the_native_client_is_still_authorized() {
         let bridge = Arc::new(TranslationBridge::new());
@@ -1011,9 +910,6 @@ mod tests {
         assert!(response.status().is_success());
     }
 
-    /// `read_body` used to read a POST into a String with no ceiling at all, so a
-    /// local process could hand a worker thread a body of any size and have it
-    /// buffer the whole thing.
     #[test]
     fn oversized_bodies_are_refused_not_buffered() {
         let bridge = Arc::new(TranslationBridge::new());
@@ -1028,7 +924,6 @@ mod tests {
             .unwrap();
         assert_eq!(response.status().as_u16(), 413);
 
-        // A body inside the ceiling is still read and answered normally.
         let response = client
             .post(format!("{base}/v1/translation/jobs/job-7/complete"))
             .header("Content-Type", "application/json")

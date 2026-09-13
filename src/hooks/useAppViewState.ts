@@ -63,8 +63,6 @@ export function useAppViewState({
   useEffect(() => {
     const root = document.documentElement.style;
     if (readingFontFamily.trim()) {
-      // Kept ahead of the built-in stack rather than replacing it, so a font that lacks
-      // Japanese glyphs still falls back instead of rendering tofu.
       root.setProperty(
         "--font-reading",
         `${readingFontFamily}, var(--font-sans)`,
@@ -108,13 +106,9 @@ export function useAppViewState({
   // the download status: the two disagree in the gap between queue items, where the status is
   // already terminal but the phase is still held.
   const isDownloadingAssets = bootstrap.shell.phase === "downloading-model";
-  // Transcription now always runs through the non-blocking transcription queue
-  // (including auto-transcribe-after-recording), so it never raises this overlay.
   const recorderBusy =
     isRecording ||
     isSaving ||
-    // Start was only ever going to fail here — into the top banner, which the next progress
-    // emit wiped a fraction of a second later. The card that holds the phase says why.
     isDownloadingAssets ||
     busyAction === "start" ||
     busyAction === "stop";

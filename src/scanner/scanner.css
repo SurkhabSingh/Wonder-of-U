@@ -1,13 +1,3 @@
-/* The scanner overlay's own layout.
- *
- * Everything here paints over live video, so the rules are deliberately few and opaque
- * where they need to be readable. Colours come from the shared tokens; the popup brings
- * its own stylesheet.
- */
-
-/* The window must stay see-through. Stated here as well as in the document head because
-   this file is imported LAST, so it is the final word — an imported stylesheet that sets
-   a canvas colour on :root paints the video black, which is exactly what happened once. */
 :root,
 body {
   background: transparent;

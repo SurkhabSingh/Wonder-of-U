@@ -20,7 +20,6 @@ import { TooltipWrap } from "../ui/Tooltip";
 type RecordingAction = (filePaths: string[]) => void | Promise<void>;
 type SingleRecordingAction = (filePath: string) => void | Promise<void>;
 type PushAction = (filePaths: string[], deckName?: string) => void | Promise<void>;
-// `force` re-runs translation on a recording that already has one.
 type TranslateAction = (
   filePaths: string[],
   force?: boolean,
@@ -71,8 +70,6 @@ export function RecordingCard({
   onOpenChange: (filePath: string | null) => void;
   onPlay: SingleRecordingAction;
   onTranscribe: RecordingAction;
-  // Force re-runs transcription on a recording that already has one (e.g. to redo it
-  // after switching Audio type to Music, or changing the model/language).
   onReTranscribe: RecordingAction;
   onPushToAnki: PushAction;
   onAddFurigana: RecordingAction;
@@ -123,9 +120,6 @@ export function RecordingCard({
     recordingPushedToCurrentAnkiDeck,
   );
 
-  // The full provenance — paths, the deleted-audio explanation, and every
-  // transcribed language — lives in the row's hover title so the visible chip
-  // row can stay to a single line of the most-relevant state.
   const stateRowTitleParts: string[] = [];
   if (recording.audioDeleted) {
     stateRowTitleParts.push("Transcript only — local audio deleted");
@@ -145,14 +139,9 @@ export function RecordingCard({
   }
   const stateRowTitle = stateRowTitleParts.join("\n");
 
-  // The single most-relevant next step, surfaced as a one-click primary button.
-  // Priority mirrors recordingChips(); each case invokes the same handler its
-  // matching overflow-menu item uses, so no new behavior is introduced.
   const primaryAction = !hasSelectedTranscript
     ? {
         label: "Transcribe",
-        // Enqueues into the non-blocking transcription queue — stays enabled
-        // (re-clicks dedupe on file path), like the YouTube queue's Add.
         onClick: () => void onTranscribe([recording.filePath]),
         disabled: false,
       }

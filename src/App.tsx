@@ -73,9 +73,6 @@ function App() {
     useState<WhisperAssetUpdateResult | null>(null);
   const [recordingActionMessage, setRecordingActionMessage] = useState("");
 
-  // The Library status microcopy is never cleared by its setters, so it lingers
-  // on the page. Clear it ~6s after it becomes non-empty; the cleanup means each
-  // new message resets the timer rather than stacking timeouts.
   useEffect(() => {
     if (!recordingActionMessage) return;
     const id = setTimeout(() => setRecordingActionMessage(""), 6000);
@@ -90,20 +87,11 @@ function App() {
     toast.success(message, { duration: 3500 });
   }
 
-  // Errors from the video library are notices about one action, not conditions of the app.
-  // As cards they sat on the page until something else replaced them; as a toast the report
-  // arrives, can be dismissed, and leaves. Longer than a success because a failure is worth
-  // reading.
   function showError(message: string) {
     toast.error(message, { duration: 5000 });
-    // Every failed command already funnels through here, so this is the one place that catches
-    // them without fifty call sites each remembering to log.
     logToFile("ERROR", "action_failed", message);
   }
 
-  // The engine reports a user Cancel as an ordinary Err carrying this exact string, so
-  // without recognising it a deliberate stop arrived as a red failure toast reading
-  // "transcription cancelled." — lowercase, an internal constant shown verbatim.
   const TRANSCRIPTION_CANCELLED = "transcription cancelled.";
 
   function reportCancellable(caught: unknown, fallback: string, cancelledMessage: string) {
@@ -137,12 +125,6 @@ function App() {
     setActivePage("recordings");
   }
 
-  // A recording's audio is RENAMED when its first transcript lands (the new stem is
-  // derived from the transcript), so the path the viewer was opened with stops
-  // resolving at exactly the moment a first-time transcription finishes. `createdAtMs`
-  // survives the rename, so it is remembered while the lookup works and used to follow
-  // the recording to its new path when it stops — otherwise watching a first
-  // transcription live would end in "Recording unavailable".
   const viewedCreatedAtRef = useRef<number | null>(null);
   const viewingRecording = (() => {
     if (viewingRecordingPath === null) {
@@ -160,9 +142,7 @@ function App() {
     if (createdAtMs === null) {
       return null;
     }
-    // `createdAtMs` is wall-clock milliseconds and is not enforced unique — a batch
-    // import can stamp two files identically. Adopt only an unambiguous match: showing
-    // the wrong recording's transcript would be worse than reporting it unavailable.
+
     const matches = bootstrap.recentRecordings.filter(
       (recording) => recording.createdAtMs === createdAtMs,
     );
@@ -207,7 +187,6 @@ function App() {
   });
   const { minedSentences, minedWarning, minedReadCount, refreshMinedSentences } =
     useMinedSentences();
-  // Reads only while the page is open; nothing here changes while it is.
   const {
     report: progressReport,
     readCount: progressReadCount,
@@ -216,15 +195,10 @@ function App() {
   } = useProgress(activePage);
   const watch = useWatchSession();
   const watchSubtitles = useWatchSubtitles();
-  // Rows mined in this watch session, and the per-mine padding overrides. "" means
-  // "use the Settings value", resolved in Rust so a later settings change still applies.
   const [watchMinedKeys, setWatchMinedKeys] = useState<Set<string>>(() => new Set());
   const [watchMiningKey, setWatchMiningKey] = useState<string | null>(null);
   const [padBeforeMs, setPadBeforeMs] = useState("");
   const [padAfterMs, setPadAfterMs] = useState("");
-  // The sidecar file the session was opened with. Remembered because alass rewrites a
-  // subtitle FILE, and mpv's snapshot only reports the line on screen — an embedded track
-  // has no path to hand it.
   const [watchSubtitlePath, setWatchSubtitlePath] = useState<string | null>(null);
   const [isSyncingSubtitles, setIsSyncingSubtitles] = useState(false);
   const [watchSyncResult, setWatchSyncResult] = useState<{
@@ -235,10 +209,6 @@ function App() {
   // Realign the subtitle file against the video's own audio, then reload the corrected
   // file into both mpv (done in Rust, so the player never shows subtitles the app thinks
   // it has fixed) and the app's cue list.
-  // Transcribe the picked video's own audio into a subtitle file, then adopt it as the
-  // session's sidecar. Adopting it is the point: from there it is an ordinary subtitle file,
-  // so the alass Sync button below applies to it exactly like a downloaded one — which is
-  // what makes the transcribe-time-realign chain testable end to end.
   const [isGeneratingSubtitles, setIsGeneratingSubtitles] = useState(false);
   const generateWatchSubtitles = useCallback(
     async (videoPath: string) => {
@@ -274,18 +244,12 @@ function App() {
     [watch.snapshot.path, watchSubtitles],
   );
 
-  // The video library. Selection and the generate-progress live here rather than in WatchPage
-  // so they survive leaving the page — the whole point of remembering a pairing is that it
-  // outlives the visit that made it.
   const [generateProgress, setGenerateProgress] = useState<number | null>(null);
   const [missingVideoPaths, setMissingVideoPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   const watchedVideos = bootstrap.watchedVideos;
 
-  // Check which remembered videos are still on disk, whenever the list changes. A missing file
-  // dims its row rather than removing it: the row carries the subtitle mapping, and a
-  // disconnected drive should not cost a pairing.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -295,8 +259,6 @@ function App() {
           setMissingVideoPaths(new Set(missing));
         }
       } catch {
-        // A failed check must not dim every row — better to show them all as present than
-        // to tell the user their whole library has vanished because one call failed.
       }
     })();
     return () => {
@@ -304,9 +266,6 @@ function App() {
     };
   }, [watchedVideos]);
 
-  // The generator reuses the library's transcription-progress channel, so the bar is fed by
-  // the same event the queue uses. Only listened to while a generation is in flight, so a
-  // library batch running elsewhere cannot paint this bar.
   useEffect(() => {
     if (!isGeneratingSubtitles) {
       setGenerateProgress(null);
@@ -327,8 +286,6 @@ function App() {
           await invoke<AppBootstrap>("mark_watched_video_opened", { videoPath }),
         );
       } catch {
-        // Playback has already started. Failing to note the timestamp is not worth an error
-        // in front of someone who just pressed play.
       }
     },
     [applyBootstrap],
@@ -389,8 +346,6 @@ function App() {
     if (watch.error) {
       showError(watch.error);
     }
-    // Deliberately keyed on the message only: the same failure twice in a row is two
-    // attempts and deserves to be reported twice.
   }, [watch.error]);
 
   const addWatchedVideo = useCallback(
@@ -437,8 +392,6 @@ function App() {
   const forgetWatchedVideo = useCallback(
     async (videoPath: string) => {
       try {
-        // Inside the try, not before it: the previous version awaited outside, so a rejected
-        // confirm escaped as an unhandled promise and the whole action looked like a no-op.
         const confirmed = await confirmDialog({
           title: "Remove this video?",
           message:
@@ -478,8 +431,6 @@ function App() {
       );
       setWatchSubtitlePath(synced.path);
       await watchSubtitles.load(videoPath, synced.path, null);
-      // alass's own report of what it shifted. Shown rather than swallowed: a sync can
-      // succeed and still be wrong, and this is the only thing that says by how much.
       setWatchSyncResult({
         ok: true,
         message: `Saved as ${fileNameFromPath(synced.path)} and loaded.${
@@ -636,9 +587,6 @@ function App() {
     showWarning,
   });
 
-  // Sequential frontend queue over the single-URL YouTube import: a paste of
-  // many links fetches one at a time on the shared download slot. Navigation to
-  // the Library is deferred until the whole queue is done, not per URL.
   const youtubeQueue = useYoutubeQueue({
     importYoutube,
     onAllComplete: (landed) => {
@@ -648,20 +596,12 @@ function App() {
     },
   });
 
-  // Sequential frontend queue over the single-file transcribe command, so
-  // transcription runs NON-blocking (the app stays usable while this queue shows
-  // progress) instead of the old full-screen busy overlay. Each item applies its
-  // returned bootstrap, so the Library refreshes as transcripts land.
   const transcriptionQueue = useTranscriptionQueue({
     applyBootstrap,
     persistSettingsIfNeeded,
-    // A refusal — the whisper slot already taken, the engine not ready — used to reach the
-    // user only as a "failed" chip with the reason in a tooltip.
     onFailure: showWarning,
   });
 
-  // Adapt the shared `(filePaths, force)` action shape the Transcribe buttons use
-  // to the queue's enqueue, stamping each row with the recording's display name.
   const enqueueTranscriptions = useCallback(
     (filePaths: string[], force = false) => {
       const files = filePaths.map((filePath) => {
@@ -678,12 +618,6 @@ function App() {
     [bootstrap.recentRecordings, transcriptionQueue],
   );
 
-  // A finished mic recording is now saved untranscribed and hands itself off for
-  // transcription through this event, so auto-transcribe-after-recording runs on
-  // A stale Anki mapping is said out loud, once per distinct problem. Everything else this
-  // read can report — Anki closed, nothing mapped yet — stays quiet by design; those are
-  // states the user is already in on purpose. This one looks identical from the outside
-  // (no marks appear) and is the only one they can act on.
   const reportedMinedWarningRef = useRef<string | null>(null);
   useEffect(() => {
     if (minedWarning && reportedMinedWarningRef.current !== minedWarning) {
@@ -695,17 +629,11 @@ function App() {
     }
   }, [minedWarning]);
 
-  // Read by the mined-line listener below, which must not re-subscribe every time the cue
-  // list changes — an event arriving during that gap would be lost.
+
   const cuesRef = useRef(watchSubtitles.cues);
   cuesRef.current = watchSubtitles.cues;
 
   // A watch line was mined — mark its row, whichever of the three ways started it.
-  //
-  // The subtitle row used to record this itself, which is why only that one showed the
-  // mark: the Mine button never recorded it, and the hotkey CANNOT, because it fires in
-  // Rust while mpv has focus and never reaches this window. The backend emits at the one
-  // point all three pass through, so the mark no longer depends on which control was used.
   useEffect(() => {
     const unlisten = listen<{ startMs: number; endMs: number; text: string }>(
       "watch-line-mined",
@@ -713,11 +641,6 @@ function App() {
         if (!payload) {
           return;
         }
-        // Matched by TIME, not by rebuilding the row's key from the payload. mpv reports
-        // the line it is currently showing, and neither its bounds nor its text have to
-        // agree exactly with the cue our own parser produced — a millisecond of rounding,
-        // or ASS line-break markup stripped differently, is enough to miss. The row to
-        // mark is simply the one covering the moment that was mined.
         const midpoint =
           payload.startMs + (payload.endMs - payload.startMs) / 2;
         const cue = cuesRef.current.find(
@@ -743,9 +666,6 @@ function App() {
     };
   }, [refreshMinedSentences]);
 
-  // the same non-blocking queue as a manual transcribe instead of blocking the app
-  // with the full-screen overlay. `force = false`; the queue dedupes by file path,
-  // so a duplicate event is a harmless no-op.
   useEffect(() => {
     const unlisten = listen<{ filePath: string; title?: string }>(
       "recording-transcribe-request",
@@ -764,21 +684,9 @@ function App() {
     };
   }, [transcriptionQueue.enqueue]);
 
-  // Sentence mining needs a mapped expression field to write to and a reachable
-  // Anki. `offline` is the only catalog status that definitively means "not
-  // reachable"; idle/ready are treated as reachable (the click still reports
-  // honestly if Anki turns out to be down).
   const expressionFieldMapped = Boolean(settingsDraft.anki.fields.transcription);
   const ankiReachable = displayedAnkiCatalog.status !== "offline";
 
-  // Reading the whole mining deck is too heavy to poll, so it is refreshed only when
-  // the transcript viewer opens — the one place the marks are shown — and again after
-  // a successful mine. `ankiReachable` is a dependency because starting Anki while a
-  // transcript is already open must bring the marks in; without it the page would show
-  // enabled Mine buttons and no marks at all until the user navigated away and back.
-  // The viewed path is one for the same reason: today every recording switch goes
-  // through the library, but a "next recording" control inside the viewer would
-  // otherwise silently leave the marks stale.
   useEffect(() => {
     if (activePage === "transcript") {
       void refreshMinedSentences();
@@ -790,10 +698,6 @@ function App() {
     refreshMinedSentences,
   ]);
 
-  // App-wide, not per page: a word should be lookupable wherever it is read — a transcript,
-  // the live transcript as it streams, or the watch subtitle list. The hook listens on the
-  // document and finds its target by walking up from the pointer, so one instance covers
-  // every surface and a second would fire every lookup twice.
   const lookup = useWordScanner({
     modifier: settingsDraft.scanner.modifier,
     releaseBehavior: settingsDraft.scanner.releaseBehavior,
@@ -801,20 +705,11 @@ function App() {
   });
 
   // Lines this session has turned into cards, however they were mined.
-  //
-  // App sees BOTH paths — a row's Mine button and the popup's — so one set covers
-  // both, and word-mining a line the row already mined reads as already mined
-  // rather than as a duplicate failure.
-  //
-  // Keyed by moment and text, the way the viewer keys its own markers, so editing a
-  // line by merging or splitting it correctly reads as a different line.
   const [minedLineKeys, setMinedLineKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   const minedLineKey = (text: string, startMs: number, endMs: number) =>
     `${startMs}:${endMs}:${text}`;
-  // The text back out of a key. Sliced past the second colon rather than split on it: the two
-  // timestamps can never contain one, but a transcript line certainly can.
   const sentenceOfMinedKey = (key: string) => {
     const firstColon = key.indexOf(":");
     const secondColon = key.indexOf(":", firstColon + 1);
@@ -826,38 +721,18 @@ function App() {
 
   // Everything the transcript page has mined, folded in so the popup knows about it
   // too — a line mined by "Mine all" is as much a card as one mined from the popup.
-  //
-  // Stable identity, because the page reports through an effect: a new function each
-  // render would make that effect fire every render.
   const absorbMinedLines = useCallback((keys: ReadonlySet<string>) => {
     setMinedLineKeys((previous) => {
       const missing = [...keys].filter((key) => !previous.has(key));
-      // Same set back when nothing is new, so React bails out of the re-render
-      // rather than looping through the effect that called this.
       return missing.length === 0 ? previous : new Set([...previous, ...missing]);
     });
   }, []);
 
-  // A different recording is a different set of lines; carrying the old keys over
-  // would mark rows in the new one that were never mined.
   useEffect(() => {
     setMinedLineKeys(new Set());
   }, [viewingRecording?.filePath]);
 
   // Forget a line whose card is no longer in Anki.
-  //
-  // A key here is a memory of having MADE a card, not an observation that one exists. Delete
-  // the card in Anki and the memory outlives it — and because this set survives navigation,
-  // clearing it needed an app restart: a row stayed spent with nothing behind it.
-  //
-  // **No new scanning.** This runs on the read that already happens when the transcript opens,
-  // and changes what that read means rather than how often anything reads. Deleting in Anki is
-  // rare enough that stepping out of the transcript and back is a fair price for it.
-  //
-  // Gated on a read having SUCCEEDED. An empty `minedSentences` means "the deck is empty" and
-  // "we could never look" alike — offline, unmapped and error all return nothing — so expiring
-  // against one would wipe every marker the moment Anki closed, which is a far worse bug than
-  // the one this fixes.
   useEffect(() => {
     if (minedReadCount === 0) {
       return;
@@ -866,17 +741,10 @@ function App() {
       const survivors = [...previous].filter((key) =>
         minedSentences.has(normalizeSegmentText(sentenceOfMinedKey(key))),
       );
-      // Same set back when nothing expired, so React bails out rather than re-rendering
-      // every consumer on every read.
       return survivors.length === previous.size ? previous : new Set(survivors);
     });
   }, [minedReadCount, minedSentences]);
 
-  // Mining a word from the popup is offered only when everything it needs is on
-  // hand: a recording open with its audio still present, and a scanned line that
-  // carries a moment. A translation row and a live transcript segment both have
-  // text and nothing behind it, so neither gets the button rather than getting one
-  // that fails.
   const scannedLine = lookup.target;
   const canMineScannedWord = Boolean(
     viewingRecording &&
@@ -894,9 +762,6 @@ function App() {
     if (startMs === undefined || endMs === undefined || !text) {
       return;
     }
-    // The line goes in as the sentence, exactly as mining that row would send it,
-    // so a word card and a sentence card from the same line are the same card plus
-    // a word — and Anki's duplicate check sees the same first field either way.
     const result = await mineSegment(
       viewingRecording.filePath,
       text,
@@ -906,26 +771,17 @@ function App() {
       word,
     );
     const item = result?.items[0];
-    // Remembered on a duplicate as well as on success: the card exists either way,
-    // and the button saying "Mine" next to a line that already has one is the thing
-    // being fixed. The phrase is the one `user_friendly_anki_error` writes for
-    // Anki's duplicate refusal — both ends of that string are ours.
     if (
       item &&
       (item.status === "success" || item.message.includes("already exists"))
     ) {
       rememberMinedLine(text, startMs, endMs);
     }
-    // Left open on purpose, unlike before. The button turning to "Mined" IS the
-    // confirmation, and closing the popup the instant it changes would hide it.
   };
 
   return (
     <main className="app-shell">
       <TooltipPrimitive.Provider delayDuration={180}>
-        {/* `expand`: sonner stacks toasts on top of each other by default and only fans
-            them out on hover, so two at once read as one damaged toast. Expanded is the
-            resting state now — every toast is legible without pointing at it. */}
         <Toaster
           position="top-right"
           richColors
@@ -975,8 +831,6 @@ function App() {
                   isDownloadingAssets={isDownloadingAssets}
                   downloadIsActive={downloadIsActive}
                   downloadSnapshot={bootstrap.modelDownload}
-                  // The shared group, so pressing this disables the six Settings download
-                  // buttons and vice versa — which is what that group exists to do.
                   downloadBusy={isDownloadBusy(busyAction)}
                   onDownloadMissing={() => void downloadMissingEssentials()}
                   onTogglePause={() => void toggleDownloadPause()}
@@ -1003,8 +857,6 @@ function App() {
               isImporting={busyAction === "importMedia"}
               onImportMedia={(paths) => {
                 void importMedia(paths).then((result) => {
-                  // Only jump to the Library when a file actually landed, so a
-                  // wholly-failed import leaves the user on Home to read why.
                   const landed = result?.items.some(
                     (item) => item.status === "success",
                   );
@@ -1126,8 +978,6 @@ function App() {
                 setWatchSyncResult(null);
                 void watch.start(videoPath, subtitlePath);
                 void watchSubtitles.load(videoPath, subtitlePath, null);
-                // Records the open, and re-records the pairing this session actually used —
-                // so the list's "opened" line is true and the mapping matches what played.
                 void setWatchedVideoOpened(videoPath);
               }}
               onSetSubtitleDelay={(delayMs) => void watch.setSubtitleDelay(delayMs)}
@@ -1152,13 +1002,9 @@ function App() {
               onCancelGenerate={() => {
                 void emit("transcription-cancel");
               }}
-              // Available for any picked video, playing or not — a subtitle-free file is
-              // usually discovered before pressing play.
               onGenerateSubtitles={(videoPath) =>
                 void generateWatchSubtitles(videoPath)
               }
-              // Only a sidecar file can be realigned: alass rewrites a subtitle file, and an
-              // embedded track has none of its own.
               onSyncSubtitles={
                 watchSubtitlePath && watch.snapshot.path
                   ? () => void syncWatchSubtitles()
@@ -1167,15 +1013,11 @@ function App() {
               scanner={settingsDraft.scanner}
               onToggleOverlay={(enabled) => {
                 updateSettings({ scanner: { overlayEnabled: enabled } });
-                // The backend owns mpv's own subtitle visibility, so the toggle has to
-                // reach it directly rather than waiting on the settings autosave.
                 void invoke("set_scanner_overlay", { enabled });
               }}
               onStop={() => {
                 setWatchSubtitlePath(null);
                 setWatchSyncResult(null);
-                // Take the overlay down with the video. A scanner window left tracking a
-                // dead player is the one way it could end up stranded on screen.
                 void invoke("set_scanner_overlay", { enabled: false });
                 void watch.stop();
                 watchSubtitles.clear();
@@ -1188,8 +1030,6 @@ function App() {
               cues={watchSubtitles.cues}
               subtitlesError={watchSubtitles.error}
               minedKeys={watchMinedKeys}
-              // The deck-wide marks reuse the same normalized set the transcript viewer
-              // uses, so a line already in Anki is flagged here too.
               deckMinedKeys={
                 new Set(
                   watchSubtitles.cues
@@ -1225,8 +1065,6 @@ function App() {
                     padBeforeMs === "" ? null : Number(padBeforeMs),
                     padAfterMs === "" ? null : Number(padAfterMs),
                   )
-                  // The mark and the deck refresh come from the `watch-line-mined` event,
-                  // which every mining route emits — this one no longer records its own.
                   .finally(() =>
                     setWatchMiningKey((current) =>
                       current === key ? null : current,
@@ -1236,8 +1074,6 @@ function App() {
               onMerge={(index) =>
                 watchSubtitles.merge(
                   index,
-                  // CJK runs without inter-word spaces; a space would leave an
-                  // unnatural gap in the merged sentence and on the card.
                   /[぀-ヿ㐀-鿿]/.test(
                     watchSubtitles.cues[index]?.text ?? "",
                   )
@@ -1297,10 +1133,6 @@ function App() {
                     ? transcriptionQueue.activeProgress
                     : null
                 }
-                // How the last run for THIS recording ended. Without it, cancelling from
-                // inside the viewer just drops the live pane and lands on an empty
-                // transcript — indistinguishable from whisper having crashed, or from a
-                // recording that was never transcribed at all.
                 lastTranscriptionOutcome={(() => {
                   const item = [...transcriptionQueue.items]
                     .reverse()
@@ -1330,8 +1162,6 @@ function App() {
                     item && item.status === "success" && item.noteId !== null,
                   );
                   if (mined) {
-                    // Keep the persistent set in step with the card that was just
-                    // written, so the mark survives leaving and reopening the viewer.
                     void refreshMinedSentences();
                   }
                   return mined;
@@ -1346,9 +1176,6 @@ function App() {
                     ? transcriptionQueue.activeSegments.segments
                     : []
                 }
-                // Cancel is offered only while THIS recording is the active run —
-                // cancelActive kills whatever whisper is working on, so exposing it
-                // for a queued-but-not-started file would stop the wrong one.
                 onCancelTranscription={
                   transcriptionQueue.items.some(
                     (item) =>
@@ -1448,8 +1275,6 @@ function App() {
           result={lookup.result}
           isLoading={lookup.isLoading}
           error={lookup.error}
-          // `useAppViewState` stamps the resolved theme on <html>; reading it here beats
-          // threading the same value down to one attribute.
           theme={document.documentElement.dataset.theme === "light" ? "light" : "dark"}
           fontFamily={settingsDraft.scanner.fontFamily}
           fontSizePx={settingsDraft.scanner.fontSizePx}

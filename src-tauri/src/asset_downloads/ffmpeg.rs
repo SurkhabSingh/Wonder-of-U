@@ -20,9 +20,6 @@ use super::transfer::{
 };
 
 /// Where ffmpeg's archive is staged and where it unpacks to.
-///
-/// Staged through the shared `downloads/` directory and removed only on success, the same way
-/// the dictionary does it — and the opposite of alass.
 struct FfmpegPaths {
     archive: PathBuf,
     install: PathBuf,
@@ -44,11 +41,6 @@ fn find_existing_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> 
 }
 
 /// As with the whisper runtime: a managed ffmpeg that will not run is not one we have.
-///
-/// This path was less badly off than whisper's — the broken binary was removed, so a
-/// second click did download a working one — but the first click reported "FFmpeg
-/// download failed" without having attempted a download, and the recovery depended on
-/// the user trying the same button twice after being told it failed.
 fn find_runnable_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> {
     first_runnable_binary(
         collect_managed_ffmpeg_candidates(asset_directory),
@@ -57,10 +49,6 @@ fn find_runnable_managed_ffmpeg_path(asset_directory: &Path) -> Option<PathBuf> 
 }
 
 /// `reinstall` fetches a fresh copy even when a working one is installed.
-///
-/// Ordinary downloads skip in that case; a reinstall is the request that means "replace what is
-/// there", which is the only way to move off a build the app no longer wants to use. The old
-/// copy survives until extraction, so a failed reinstall leaves the working one in place.
 pub(super) fn ffmpeg_plan<R: Runtime>(
     app: &AppHandle<R>,
     reinstall: bool,
@@ -76,7 +64,6 @@ pub(super) fn ffmpeg_plan<R: Runtime>(
     ensure_directory_exists(&paths.install)?;
 
     let shell_start_text = format!("Downloading FFmpeg to {}...", paths.install.display());
-    // Names the archive while fetching; the finished card names the binary that was found.
     let starting_target_path = paths.archive.clone();
 
     Ok(AssetDownloadPlan {
@@ -93,18 +80,12 @@ pub(super) fn ffmpeg_plan<R: Runtime>(
         failure_log_event: "ffmpeg.download_failed",
         install: Box::new(move |context| {
             // Skip-if-runnable, and note the test is *runnable*, not *present*.
-            //
-            // The skip answers "I have no ffmpeg" and must not answer "replace the one I have":
-            // a reinstall that skipped would report success having downloaded nothing, which is
-            // exactly the dead end the hidden Settings button used to create. So the request
-            // says which it means, and only a non-reinstall may skip.
             let installed = if reinstall {
                 None
             } else {
                 find_runnable_managed_ffmpeg_path(&asset_directory)
             };
             let ffmpeg_path = match installed {
-                // Already run by the search, so nothing to check again here.
                 Some(existing_path) => existing_path,
                 None => {
                     context.fetch(
@@ -118,8 +99,6 @@ pub(super) fn ffmpeg_plan<R: Runtime>(
                         .ok_or_else(|| {
                             "FFmpeg downloaded, but ffmpeg.exe was not found.".to_string()
                         })?;
-                    // Detection trusts ffmpeg.exe by existence, so one that no longer runs
-                    // has to go rather than keep reporting ready.
                     verify_managed_binary_or_remove(&downloaded_path, verify_ffmpeg_binary)?;
                     downloaded_path
                 }
@@ -129,8 +108,7 @@ pub(super) fn ffmpeg_plan<R: Runtime>(
                 "archivePath": paths.archive.display().to_string(),
                 "ffmpegPath": ffmpeg_path.display().to_string()
             });
-            // Success only, like the dictionary. A no-op on the skip path, where no
-            // archive was ever fetched.
+
             let _ = fs::remove_file(&paths.archive);
 
             Ok(Installed {

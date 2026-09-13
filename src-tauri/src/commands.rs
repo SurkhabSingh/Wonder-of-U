@@ -68,11 +68,6 @@ use crate::{
 };
 
 /// Writes a line the interface produced.
-///
-/// The frontend has no file access of its own, and it should not: the backend owns the path,
-/// the redaction and the rotation, so a record from either side is treated identically. The
-/// level is clamped rather than trusted — a value from the webview must not be able to invent
-/// a severity the file has never carried.
 #[tauri::command]
 pub(crate) fn log_from_ui(
     app: AppHandle,
@@ -94,9 +89,6 @@ pub(crate) fn log_from_ui(
 }
 
 /// Shows the log file in the file manager, with it selected.
-///
-/// Spawning the file manager rather than adding an opener plugin: one process spawn against a
-/// path the app itself owns, which is a thing this codebase already does in several places.
 #[tauri::command]
 pub(crate) fn open_log_folder(app: AppHandle) -> Result<(), String> {
     let path = app.state::<crate::app_types::AppPathsState>().inner().log_file.clone();
@@ -110,8 +102,6 @@ pub(crate) fn open_log_folder(app: AppHandle) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        // `/select,` highlights the file itself. Without it the user lands in a folder and has
-        // to work out which of several rotated files is the current one.
         let argument = if path.exists() {
             format!("/select,{}", path.display())
         } else {
@@ -119,8 +109,6 @@ pub(crate) fn open_log_folder(app: AppHandle) -> Result<(), String> {
         };
         std::process::Command::new("explorer.exe")
             .arg(argument)
-            // explorer returns a non-zero exit code even when it succeeds, so the status is
-            // deliberately not checked; only a failure to spawn is a real failure.
             .spawn()
             .map_err(|error| error.to_string())?;
     }
@@ -187,11 +175,6 @@ pub(crate) fn download_recommended_ffmpeg(app: AppHandle) -> Result<AppBootstrap
 }
 
 /// Fetches a fresh FFmpeg over a working one.
-///
-/// Separate from the download above because the download deliberately skips when a runnable
-/// copy is already there. That skip left no way at all to replace an installed FFmpeg — the
-/// Settings button was hidden exactly when this is the thing you need. The old copy is not
-/// removed up front: extraction replaces it, so a reinstall that fails leaves the working one.
 #[tauri::command]
 pub(crate) fn reinstall_ffmpeg(app: AppHandle) -> Result<AppBootstrap, String> {
     enqueue_download(&app, QueuedDownload::Ffmpeg { reinstall: true })?;
@@ -219,10 +202,6 @@ pub(crate) fn download_recommended_ytdlp(app: AppHandle) -> Result<AppBootstrap,
 }
 
 /// Fetches everything a fresh install is still missing, from one press.
-///
-/// Which downloads those are is not decided here: `missing_essential_downloads` reads the same
-/// list transcription refuses on, so this cannot offer to fix something transcription does not
-/// need, or miss something it does.
 #[tauri::command]
 pub(crate) fn download_missing_essentials(app: AppHandle) -> Result<AppBootstrap, String> {
     download_missing_essentials_inner(&app)?;
@@ -341,10 +320,6 @@ pub(crate) async fn load_anki_catalog(
 }
 
 /// Lists the dictionaries the Anki add-on can look words up in.
-///
-/// Read-only: which are enabled, and in what order, belongs to the add-on's own
-/// dictionary manager. This only reports them so a subset can be chosen for mined
-/// cards without changing what the reading popup sees.
 #[tauri::command]
 pub(crate) async fn lookup_dictionaries() -> Result<LookupDictionaries, String> {
     tauri::async_runtime::spawn_blocking(lookup_dictionaries_inner)
@@ -353,10 +328,6 @@ pub(crate) async fn lookup_dictionaries() -> Result<LookupDictionaries, String> 
 }
 
 /// Mines several lines from one recording in one pass.
-///
-/// Every line handed in comes back with what became of it, successes included: a
-/// batch that reports "3 of 35 failed" without saying which three is a batch that
-/// has to be redone from the top.
 #[tauri::command]
 pub(crate) async fn mine_segments_to_anki(
     app: AppHandle,
@@ -371,13 +342,6 @@ pub(crate) async fn mine_segments_to_anki(
 }
 
 /// Counts the words in each line that are not yet known.
-///
-/// Takes the lines themselves rather than a recording, because the rows on screen
-/// are not always the rows on disk — the viewer can merge and split them, and a
-/// ranking keyed to the sidecar would describe the transcript's previous shape.
-///
-/// Off the UI thread: a long episode is several hundred lines, and the first call
-/// after launch also loads the dictionary.
 #[tauri::command]
 pub(crate) async fn rank_transcript_lines(
     app: AppHandle,
@@ -389,13 +353,6 @@ pub(crate) async fn rank_transcript_lines(
 }
 
 /// Looks through the collection for note types that hold vocabulary.
-///
-/// Proposes; it never writes. The suggestions become settings only when the user
-/// accepts one, which is the point — a wrong field here fails silently, and the
-/// samples riding along with each suggestion are what make it checkable.
-///
-/// Off the UI thread: it walks every note type in the collection and tokenizes a
-/// sample of each candidate field.
 #[tauri::command]
 pub(crate) async fn scan_vocabulary_sources(
     app: AppHandle,
@@ -407,24 +364,11 @@ pub(crate) async fn scan_vocabulary_sources(
 
 /// Rebuilds the known-word list from Anki. Manual by design — see
 /// `refresh_known_words_inner`.
-///
-/// Off the UI thread: a serious collection is tens of thousands of notes across a
-/// hundred round trips, and the whole point of a button is that the window stays
-/// alive while it runs.
 #[tauri::command]
 pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnapshot, String> {
     let app_for_blocking = app.clone();
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
         let snapshot = refresh_known_words_inner(&app_for_blocking);
-        // Measured here, INSIDE the blocking task, for two reasons. It is blocking work,
-        // and every command in this file keeps that off the async runtime. And a panic here
-        // is caught by the same `spawn_blocking` that catches one in the rebuild — placed
-        // after the await instead, a panic would leave the invoke promise unsettled and the
-        // button disabled until the app restarts, because the frontend clears its busy flag
-        // in a `finally` that never runs.
-        //
-        // Only on `ready`: the offline and empty paths return before an index exists, and a
-        // reading taken against no index would be a reading of nothing.
         if snapshot.as_ref().is_ok_and(|ready| ready.status == "ready") {
             crate::anki::record_comprehension_sample(&app_for_blocking);
         }
@@ -432,18 +376,10 @@ pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnap
     })
     .await
     .map_err(|error| error.to_string())??;
-    // The list the rest of the app sees has changed, so everything showing a count
-    // or an age is now wrong until it hears about it.
     emit_app_snapshot(&app);
     Ok(snapshot)
 }
 
-/// What the Progress page shows.
-///
-/// Reads local files only and never contacts Anki, so the page opens at the same speed
-/// whether Anki is running or not. It also takes no reading: a reading is only ever taken
-/// where the word list is rebuilt, because that is the only thing that can move the number,
-/// and doing it here would put a full tokenize pass behind opening a page.
 #[tauri::command]
 pub(crate) async fn load_progress(app: AppHandle) -> Result<ProgressReport, String> {
     tauri::async_runtime::spawn_blocking(move || load_progress_inner(&app))
@@ -452,10 +388,6 @@ pub(crate) async fn load_progress(app: AppHandle) -> Result<ProgressReport, Stri
 }
 
 /// How many cards in the open collection came from this app.
-///
-/// Separate from `load_progress` on purpose: that reads local files and must open the page
-/// at the same speed whether Anki is running or not. This is the one number that needs
-/// Anki, so it is asked for on its own and a closed Anki answers rather than fails.
 #[tauri::command]
 pub(crate) async fn count_mined_cards() -> Result<Measured<usize>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -483,8 +415,6 @@ pub(crate) async fn start_watch_session(
     subtitle_path: Option<String>,
 ) -> Result<WatchSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        // Settings and the resume point come out of one lock. Two reads would mean releasing
-        // and reacquiring for values that belong to the same launch decision.
         let (settings, resume_position_ms) = {
             let persisted_state = app.state::<SharedPersistedState>();
             let persisted = persisted_state
@@ -503,9 +433,6 @@ pub(crate) async fn start_watch_session(
             "mpv is required to watch a video. Download it in Settings, under Storage."
                 .to_string()
         })?;
-        // The stored value is already the answer: `resume_point_ms` judged it when it was
-        // written, so there is nothing to re-decide here. A video never played, or played to
-        // the end, simply has `None` and starts from the beginning.
         start_watch_session_inner(
             Path::new(&executable_path),
             Path::new(&video_path),
@@ -514,12 +441,6 @@ pub(crate) async fn start_watch_session(
         )?;
 
         // Re-apply the overlay setting to the player that just started.
-        //
-        // "mpv's subtitles are off exactly when ours are on" is an invariant of the SESSION,
-        // not of the toggle that last changed it: mpv is a fresh process with its own
-        // defaults every time, and the setting outlives it. Leaving this to the frontend's
-        // toggle handler meant a user who had the overlay switched on from a previous
-        // session saw mpv's own subtitles until they toggled it off and on again.
         set_scanner_overlay_enabled(&app, settings.scanner.overlay_enabled)?;
 
         watch_snapshot_inner()
@@ -538,10 +459,6 @@ pub(crate) async fn watch_snapshot() -> Result<WatchSnapshot, String> {
 }
 
 /// Mines the line mpv currently has on screen.
-///
-/// Reads the player fresh rather than trusting anything the UI passed: the user presses
-/// the hotkey because of what they are hearing right now, and a stale line would make a
-/// card for the wrong sentence.
 #[tauri::command]
 pub(crate) async fn mine_watched_line(app: AppHandle) -> Result<RecordingBatchResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -559,9 +476,6 @@ pub(crate) async fn mine_watched_line(app: AppHandle) -> Result<RecordingBatchRe
         else {
             return Err("There is no subtitle on screen to mine.".into());
         };
-        // Both bounds come from mpv. Without them there is nothing to cut, and guessing a
-        // window around the current position would produce a clip that does not match the
-        // line on the card.
         let (Some(start_ms), Some(end_ms)) = (snapshot.subtitle_start_ms, snapshot.subtitle_end_ms)
         else {
             return Err("mpv did not report this line's timing.".into());
@@ -573,9 +487,6 @@ pub(crate) async fn mine_watched_line(app: AppHandle) -> Result<RecordingBatchRe
 }
 
 /// The whole cue list for the video being watched, plus which subtitle tracks it has.
-///
-/// A sidecar the user picked wins; otherwise the requested embedded track. The frontend
-/// parses the returned text, because the parser is shared with the rest of the UI.
 #[tauri::command]
 pub(crate) async fn load_watch_subtitles(
     app: AppHandle,
@@ -604,11 +515,6 @@ pub(crate) async fn load_watch_subtitles(
 }
 
 /// Mines a specific line from the subtitle list, with optional per-mine padding.
-///
-/// Deliberately separate from `mine_watched_line`, which takes no arguments and re-reads
-/// mpv so the hotkey always captures what you are hearing. This one mines the row you
-/// picked — including one you scrolled back to, or one you merged — so it must be told
-/// the bounds rather than discovering them.
 #[tauri::command]
 pub(crate) async fn mine_watch_line_at(
     app: AppHandle,
@@ -635,10 +541,6 @@ pub(crate) async fn mine_watch_line_at(
 }
 
 /// Looks a word up in the Anki add-on's dictionary.
-///
-/// Takes the sentence and a character offset rather than a word, because the backend
-/// deinflects prefix candidates and picks the longest match — segmenting first would be
-/// a second, worse segmenter.
 #[tauri::command]
 pub(crate) async fn lookup_term(
     text: String,
@@ -651,9 +553,6 @@ pub(crate) async fn lookup_term(
 }
 
 /// Shifts the subtitles against the audio, in milliseconds.
-///
-/// The cheap fix for the common fault — a file off by a constant. Nothing is written to
-/// disk and it is instantly reversible, which is why it is offered before alass.
 #[tauri::command]
 pub(crate) async fn set_watch_subtitle_delay(delay_ms: i64) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || set_watch_subtitle_delay_inner(delay_ms))
@@ -670,13 +569,6 @@ pub(crate) struct SubtitleSyncResult {
 }
 
 /// Realigns a subtitle file against the video's audio with alass, returning the new path.
-///
-/// For the harder fault, where the drift varies across the episode and no single offset
-/// works. Writes beside the original rather than over it.
-/// Remember a video, with a thumbnail and its duration, before it has ever been played.
-///
-/// Adding is deliberately separate from playing: a video you have queued up but not started is
-/// still one you want the app to keep, along with whatever subtitle you pair with it.
 #[tauri::command]
 pub(crate) async fn add_watched_video(
     app: AppHandle,
@@ -688,9 +580,6 @@ pub(crate) async fn add_watched_video(
             return Err(format!("The video is no longer at {}", path.display()));
         }
 
-        // One lock for both facts. The second one decides whether to spend an ffmpeg call
-        // below, so reading it here keeps that decision out of the closure — which runs while
-        // the state is locked, and is no place to be shelling out to ffmpeg.
         let (settings, already_has_thumbnail) = {
             let persisted_state = app.state::<SharedPersistedState>();
             let persisted = persisted_state
@@ -705,18 +594,10 @@ pub(crate) async fn add_watched_video(
             (persisted.settings.clone(), has_thumbnail)
         };
 
-        // Both are best-effort. ffmpeg missing is a perfectly ordinary state for a new install,
-        // and it must cost a thumbnail and a duration, not the ability to add a video.
         let ffmpeg = detect_local_ffmpeg(&settings).executable_path;
         let duration_ms = probe_duration_ms(ffmpeg.as_deref(), &path);
         let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
         let added_at_ms = now_ms();
-        // Skipped when one is already stored, because the update below keeps the existing
-        // thumbnail. `capture_thumbnail` names its file after the moment it ran, so an
-        // unconditional capture wrote a fresh .jpg that nothing would reference and
-        // `remove_watched_video` — which deletes only the path it has stored — would never
-        // clean up. Re-adding a video is ordinary rather than exceptional (it is how its
-        // duration gets refreshed), so those accumulated one per add, forever.
         let thumbnail = if already_has_thumbnail {
             None
         } else {
@@ -735,9 +616,6 @@ pub(crate) async fn add_watched_video(
         upsert_watched_video(&app, &video_path, |video| {
             video.duration_ms = duration_ms;
             video.bytes = bytes;
-            // Re-adding a video that is already listed refreshes its facts but keeps the
-            // subtitle it is paired with — losing that to a second Add would be the one
-            // outcome this feature exists to prevent.
             if video.thumbnail_path.is_none() {
                 video.thumbnail_path = thumbnail.map(|path| path.display().to_string());
             }
@@ -749,9 +627,6 @@ pub(crate) async fn add_watched_video(
 }
 
 /// Note that a video was just opened, adding it to the library if it was not already there.
-///
-/// Opening is how a video most often enters the list — you find a file, watch it, and expect it
-/// to be there next time without having thought about "adding" anything.
 #[tauri::command]
 pub(crate) async fn mark_watched_video_opened(
     app: AppHandle,
@@ -768,14 +643,6 @@ pub(crate) async fn mark_watched_video_opened(
 }
 
 /// Remember where the user is in a video, so the next open picks it up there.
-///
-/// Takes `duration_ms` from the caller's live snapshot rather than reading the stored entry:
-/// mpv is playing the file and knows its length exactly, while the stored duration is a probe
-/// that may be 0 for a video that could not be read at add time. The "have I finished this"
-/// question is only answerable against a real length.
-///
-/// Writes through `upsert_watched_video` like every other mutation, so a video played from
-/// outside the library still lands in it — the same way `mark_watched_video_opened` behaves.
 #[tauri::command]
 pub(crate) async fn set_watched_video_position(
     app: AppHandle,
@@ -794,10 +661,6 @@ pub(crate) async fn set_watched_video_position(
 }
 
 /// Which remembered videos are no longer on disk.
-///
-/// On demand rather than a field on the entry: this stats every video, and the snapshot that
-/// carries the library is emitted on every download progress tick. A per-emit filesystem walk
-/// is exactly the kind of hot-path work that had to be reverted once already.
 #[tauri::command]
 pub(crate) async fn missing_watched_videos(app: AppHandle) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -854,10 +717,6 @@ pub(crate) async fn forget_watched_video(
 }
 
 /// Transcribe the playing/selected video's own audio into a subtitle file beside it.
-///
-/// Blocking work on the blocking pool, like every other whisper pass. The result is handed
-/// back rather than loaded here: the caller sets it as the session's sidecar, which is what
-/// makes it eligible for the alass Sync button exactly like a downloaded subtitle.
 #[tauri::command]
 pub(crate) async fn generate_watch_subtitles(
     app: AppHandle,
@@ -865,9 +724,6 @@ pub(crate) async fn generate_watch_subtitles(
 ) -> Result<GeneratedSubtitles, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let generated = generate_watch_subtitles_inner(&app, Path::new(&video_path))?;
-        // Recorded here rather than left to the caller: the backend knows for certain which
-        // file it just wrote and for which video, and a mapping that depends on the frontend
-        // remembering to report it is a mapping that will eventually be wrong.
         upsert_watched_video(&app, &video_path, |video| {
             video.subtitle_path = Some(generated.path.clone());
             video.subtitle_origin = Some(ORIGIN_GENERATED.to_string());
@@ -896,18 +752,11 @@ pub(crate) async fn sync_watch_subtitles(
         let outcome =
             sync_subtitles_with_alass(&settings, Path::new(&video_path), Path::new(&subtitle_path))?;
         let synced = outcome.output_path.display().to_string();
-        // Same reasoning as the generated case: alass has just rewritten which file this video
-        // should be watched with, and that is the mapping.
+
         upsert_watched_video(&app, &video_path, |video| {
             video.subtitle_path = Some(synced.clone());
             video.subtitle_origin = Some(ORIGIN_SYNCED.to_string());
         })?;
-        // Hand the corrected file to the player when one is running: reporting success while
-        // mpv keeps showing the old subtitles would have the user trusting a fix they are not
-        // watching. When nothing is playing there is nothing to mislead — realigning from the
-        // library is exactly that case — and the file is on disk with the mapping pointing at
-        // it, so the next open uses it. This previously failed the whole call, which also
-        // meant closing mpv mid-align reported a failure for a sync that had worked.
         add_watch_subtitle_file_if_playing(&synced);
         Ok(SubtitleSyncResult {
             path: synced,
@@ -970,9 +819,6 @@ pub(crate) async fn jimaku_files(
 }
 
 /// Downloads a Jimaku subtitle file next to the video, and returns where it landed.
-///
-/// Saved beside the video rather than into a temp directory because it is the user's file
-/// now: they will re-open it, and alass will write its corrected copy alongside.
 #[tauri::command]
 pub(crate) async fn jimaku_download(
     app: AppHandle,
@@ -1010,9 +856,6 @@ pub(crate) async fn jimaku_download(
 }
 
 /// Turns the scannable subtitle overlay over mpv on or off.
-///
-/// Also flips mpv's own subtitle rendering the other way — two layers at once would draw
-/// every line twice.
 #[tauri::command]
 pub(crate) async fn set_scanner_overlay(app: AppHandle, enabled: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || set_scanner_overlay_enabled(&app, enabled))
@@ -1021,9 +864,6 @@ pub(crate) async fn set_scanner_overlay(app: AppHandle, enabled: bool) -> Result
 }
 
 /// The overlay reporting whether a dictionary popup is on screen.
-///
-/// Needed because click-through is a property of the whole window: without this, releasing
-/// the scan modifier would make the popup unclickable the instant it appeared.
 #[tauri::command]
 pub(crate) fn set_scanner_popup(app: AppHandle, open: bool) {
     set_scanner_popup_open(&app, open);
@@ -1111,10 +951,6 @@ pub(crate) async fn push_recordings_to_anki_deck(
 }
 
 /// Cuts the sentence the viewer is about to play, and answers with the clip's path.
-///
-/// Playback cannot seek a variable-bitrate MP3 accurately — the WebView interpolates between
-/// 100 index points and lands up to a second out — so the sentence is cut with ffmpeg, which
-/// is exact, and played whole.
 #[tauri::command]
 pub(crate) async fn preview_segment_clip(
     app: AppHandle,
@@ -1143,8 +979,6 @@ pub(crate) async fn mine_segment_to_anki(
     start_ms: u64,
     end_ms: u64,
     translation: Option<String>,
-    // Present when the mine came from the lookup popup: the card is being made FOR
-    // this word, with the line as its context, rather than for the line itself.
     target_word: Option<String>,
 ) -> Result<RecordingBatchResult, String> {
     let app_for_blocking = app.clone();

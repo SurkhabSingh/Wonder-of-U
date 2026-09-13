@@ -10,15 +10,8 @@ type UseFileDropOptions = {
   onDrop: (paths: string[]) => void;
 };
 
-/**
- * File drag-and-drop for the Tauri webview.
- *
- * Tauri owns drag-and-drop at the window level (`dragDropEnabled` defaults to
- * on), and while it does, the HTML5 `ondrop` event NEVER fires on Windows — the
- * native handler swallows it. So this listens to the webview's own drag-drop
- * event instead of the DOM. The payload discriminates on `type`:
- * `enter`/`drop` carry `paths`, `over` carries only a position, `leave` is bare.
- */
+// File drag-and-drop for the Tauri webview.
+
 export function useFileDrop({ enabled, onDrop }: UseFileDropOptions) {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
@@ -33,17 +26,12 @@ export function useFileDrop({ enabled, onDrop }: UseFileDropOptions) {
 
   useEffect(() => {
     enabledRef.current = enabled;
-    // If the zone is disabled mid-drag (an import started), drop the highlight
-    // so it cannot get stuck in an accent state it will no longer honour.
     if (!enabled) {
       setIsDraggingOver(false);
     }
   }, [enabled]);
 
   useEffect(() => {
-    // Registration is async, so the component can unmount before the listener
-    // resolves. `active` guards every setState, and the late-resolving unlisten
-    // is called immediately in that case so the listener is never leaked.
     let active = true;
     let unlisten: UnlistenFn | null = null;
 

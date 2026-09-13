@@ -1,14 +1,3 @@
-//! Dictionary definitions for the words a mined card is meant to teach.
-//!
-//! A card made from an i+1 line exists because of one word. This looks that word
-//! up in the dictionary the popup already uses and writes what it finds onto the
-//! card, so the answer is on the card rather than one lookup away at review time.
-//!
-//! Which words those are is not asked of the caller — it is re-derived here from
-//! the line, the tokenizer and the known-word index, exactly as the badge derives
-//! it. Passing them in would mean a card whose definitions could disagree with the
-//! badge that recommended it.
-
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Runtime};
@@ -22,43 +11,24 @@ use super::{
 };
 
 /// How many dictionary entries to keep per word.
-///
-/// The popup shows twenty because it is being read interactively and scrolled.
-/// A card is glanced at during a review, and eighteen senses from seven
-/// dictionaries is not a card anyone reads — it is a wall that gets skipped.
 const ENTRIES_PER_WORD: usize = 3;
 
 /// How many glosses to keep from one entry, for the same reason.
 const GLOSSES_PER_ENTRY: usize = 4;
 
 /// How many entries to ASK for.
-///
-/// Higher than the cap kept above, because the add-on applies `limit` before this
-/// module's dictionary filter can see the entries — ask for three from seven
-/// dictionaries and a selection of one can be trimmed away entirely.
 const LOOKUP_LIMIT: u32 = 12;
 
 /// How much of one gloss to keep.
-///
-/// A monolingual dictionary hands back the whole article — 旺文社's entry for a
-/// common kanji runs to stroke order, compounds and several senses, newlines and
-/// all. Whole, it is a page; cut, it is the definition.
 const MAX_GLOSS_CHARS: usize = 220;
 
 /// How long to stop attempting lookups after one fails.
-///
-/// The lookup waits up to four seconds, and the usual reason for failing is that
-/// the add-on is not running — which will still be true for the next line. Without
-/// this, mining forty lines with the add-on down would spend nearly three minutes
-/// discovering the same thing forty times. One failure answers for the next minute.
 const BACKOFF_MS: u64 = 60_000;
 
 static UNAVAILABLE_UNTIL_MS: Mutex<Option<u64>> = Mutex::new(None);
 
 fn lookups_are_worth_attempting() -> bool {
     let Ok(until) = UNAVAILABLE_UNTIL_MS.lock() else {
-        // A poisoned lock degrades to trying, not to silently never enriching a
-        // card again for the life of the process.
         return true;
     };
     match *until {
@@ -87,10 +57,6 @@ fn escape(value: &str) -> String {
 }
 
 /// Flattens one gloss to a single line and cuts it to length.
-///
-/// Newlines first: the add-on joins a dictionary's senses with them, and left
-/// alone they collapse in HTML anyway, welding 「① 一個…」「② セット…」 into one
-/// run of text without even a space between.
 fn tidy_gloss(gloss: &str) -> String {
     let flattened = gloss.split_whitespace().collect::<Vec<_>>().join(" ");
     if flattened.chars().count() <= MAX_GLOSS_CHARS {
@@ -101,21 +67,7 @@ fn tidy_gloss(gloss: &str) -> String {
 }
 
 /// Renders one word's entries as the card will show them.
-///
-/// The reading rides with the headword rather than in its own column, because a
-/// card field is read as prose and 修理【しゅうり】 is how a dictionary prints it.
-/// The dictionary's name is kept: with several installed, which one a gloss came
-/// from is part of judging it.
 fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
-    // Taken as the add-on returned them, in its priority order.
-    //
-    // There used to be a filter here rejecting any entry whose headword was not the
-    // word asked for. It was written when the request carried every PREFIX of the
-    // word and half the answers were about カフ; sending the exact word solved that,
-    // and the filter then did nothing but harm — the add-on DEINFLECTS, so asking
-    // about 出会える correctly answers 出会う【であう】 with `inflection_reasons:
-    // ["potential"]`, and the filter threw both entries away and left the card blank.
-    // The add-on knows better than this module which entries are about the word.
     let rendered: Vec<String> = entries
         .iter()
         .take(ENTRIES_PER_WORD)
@@ -161,31 +113,16 @@ fn entries_html(word: &str, entries: &[LookupEntry]) -> Option<String> {
 }
 
 /// What a definitions attempt produced.
-///
-/// Three states, not two, because "there was nothing to add" and "it could not be
-/// fetched" are different things to tell the user. The first is an ordinary card;
-/// the second is a card missing something they switched on and expect to be there.
 pub(super) enum Definitions {
-    /// Nothing to write, and nothing wrong: no new words in the line, or the
-    /// feature is not set up far enough to know.
     NothingToAdd,
-    /// Something to write, and possibly some words the dictionaries had nothing for.
-    /// Both, because a card can carry one meaning and be missing another, and only
-    /// saying which is missing lets the reader judge whether to widen their choice.
     Ready {
         html: String,
         missing: Vec<String>,
     },
-    /// Asked for and not obtained.
     Unavailable(String),
 }
 
 /// Looks one chosen word up, for a card mined FOR that word.
-///
-/// Skips `line_unknown_words` entirely, and that is the point: the user pointed at
-/// this word. Whether the known-word index already has it, whether the tokenizer
-/// would have picked it out of the line, and whether the feature is set up far
-/// enough to judge are all beside the point once someone has asked for it.
 pub(super) fn definitions_for_word<R: Runtime>(
     app: &AppHandle<R>,
     word: &str,
@@ -225,12 +162,6 @@ pub(super) fn definitions_for_word<R: Runtime>(
 }
 
 /// Looks up every word this line is meant to teach and renders them for the card.
-///
-/// Never returns an error. A definition is something added to a card, and failing
-/// to add it must not be a reason the card is not made — but it IS a reason to say
-/// so, which is what `Unavailable` is for. The first version of this collapsed
-/// every outcome into `None`, and a card silently missing what the toggle promised
-/// is indistinguishable from a toggle that does nothing.
 pub(super) fn definitions_for<R: Runtime>(
     app: &AppHandle<R>,
     line: &str,
@@ -258,15 +189,9 @@ pub(super) fn definitions_for<R: Runtime>(
                 note_lookups_available();
                 match entries_html(&word, &result.entries) {
                     Some(html) => sections.push(html),
-                    // A word the chosen dictionaries simply do not have. Recorded
-                    // rather than passed over: "no entry for this" and "the lookup
-                    // failed" are different answers, and until this was reported the
-                    // only symptom of either was a card that looked untouched.
                     None => missing.push(word.clone()),
                 }
             }
-            // Anything else means the add-on did not answer. Stop for a while
-            // rather than paying the timeout again on every remaining line.
             Ok(result) => {
                 note_lookups_unavailable();
                 problem = Some(result.message);
@@ -286,9 +211,6 @@ pub(super) fn definitions_for<R: Runtime>(
             missing,
         },
         (true, Some(problem)) => Definitions::Unavailable(problem),
-        // Nothing rendered and nothing broke: the chosen dictionaries have no entry
-        // for any of these words. Said out loud, because the alternative is a card
-        // that looks exactly like the feature being switched off.
         (true, None) if !missing.is_empty() => Definitions::Unavailable(format!(
             "your chosen dictionaries have no entry for {}",
             missing.join("、")
@@ -342,11 +264,6 @@ mod tests {
     }
 
     /// The bug that left cards blank, and the reason there is no headword filter.
-    ///
-    /// The add-on deinflects: asking about 出会える answers 出会う【であう】 with
-    /// `inflection_reasons: ["potential"]`. A filter comparing the headword to the
-    /// word asked for threw exactly those entries away — the useful ones — and the
-    /// card came out empty with nothing to say why.
     #[test]
     fn a_deinflected_entry_is_kept() {
         let html = entries_html(
@@ -388,7 +305,7 @@ mod tests {
         assert!(html.find("First") < html.find("Second"), "{html}");
     }
 
-    /// A monolingual entry arrives as a whole article    /// A monolingual entry arrives as a whole article, newlines and all. Left as
+    /// A monolingual entry arrives as a whole article, newlines and all. Left as
     /// they are, HTML collapses them and welds the senses into one run of text.
     #[test]
     fn a_gloss_is_flattened_and_cut_to_length() {

@@ -9,8 +9,6 @@ export type PageNavigationItem = {
   id: AppPage;
   label: string;
   description: string;
-  // Optional count shown as a `.status-chip-count` badge beside the label
-  // (Library item total, Setup steps-done fraction).
   count?: string;
 };
 
@@ -40,25 +38,17 @@ export function createWorkflowPages(
       description: "Play a video and mine as you go",
       count: String(videoCount),
     },
-    // No count badge, deliberately. `createWorkflowPages` runs on every render of
-    // `useAppViewState` with no memo, so a badge whose value changes would re-render the
-    // sidebar on every progress read for no benefit.
     { id: "progress", label: "Progress", description: "How much you can read" },
   ];
 }
 
 export type SetupChecklistStep = {
   id: string;
-  // The Settings section this row deep-links to. Multiple rows (CLI, model,
-  // status) point at the single "whisper" section.
   target: SettingsSection;
   label: string;
   description: string;
   done: boolean | null;
   required: boolean;
-  // The step's current configured value (model name, deck, runtime version,
-  // theme), shown in place of the generic description so the checklist reads
-  // as a status board. Null falls back to the description.
   value?: string | null;
 };
 
@@ -69,8 +59,7 @@ export type SetupChecklistSummary = {
 };
 
 // The Setup checklist ("setup") and the single Settings page ("settings") both
-// live behind the sidebar's "Setup" entry. This group keeps that entry
-// highlighted while the user drills into a Settings section from the checklist.
+// live behind the sidebar's "Setup" entry.
 export const SETUP_PAGE_IDS: AppPage[] = ["setup", "settings"];
 
 export function isSetupPage(page: AppPage): boolean {
@@ -79,15 +68,6 @@ export function isSetupPage(page: AppPage): boolean {
 
 /**
  * Which Setup rows are required, taken from what transcription actually demands.
- *
- * The backend answers this — `transcription_requirements` — and the answer arrives on the
- * bootstrap. It is read rather than restated because restating it is how FFmpeg came to be
- * described here as "Install FFmpeg for optional MP3 conversion" while transcription would not
- * run without it: a new user could finish every required step and still do nothing.
- *
- * A row whose id is not a requirement is genuinely optional. An unknown id defaults to optional
- * rather than required, so a requirement the backend adds and this file has no row for shows up
- * as a missing row rather than a step nobody can complete.
  */
 function requirementLookup(
   transcriptionRequirements: TranscriptionRequirement[],
@@ -129,9 +109,6 @@ export function createSetupChecklist({
         ? "Runtime installed"
         : "Install the Whisper runtime",
       done: cliReady,
-      // Both this row and the model below map onto the one "whisper" requirement: detection
-      // reports the CLI and the model as a pair, and the checklist splits them only so the
-      // user can see which half is missing.
       required: isRequired("whisper"),
       value: cliReady ? runtimeVersion ?? null : null,
     },
@@ -171,9 +148,6 @@ export function createSetupChecklist({
     {
       id: "storage",
       target: "storage",
-      // Was "MP3 Compression", described as optional. FFmpeg is what decodes audio for
-      // Whisper, so nothing transcribes without it; MP3 conversion is the smaller of the two
-      // things it does and was the only one this row mentioned.
       label: "Audio Processing",
       description: ffmpegReady
         ? "FFmpeg ready"

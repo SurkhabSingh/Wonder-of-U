@@ -29,8 +29,7 @@ use crate::{
 };
 
 /// Returns a path inside `directory` that does not exist yet, appending `_1`,
-/// `_2`, ... to the stem until it is free. The "does not exist" guarantee is what
-/// keeps an import from ever writing onto its own source file.
+/// `_2`, ... to the stem until it is free. 
 pub(crate) fn unique_path_with_suffix(
     directory: &Path,
     file_stem: &str,

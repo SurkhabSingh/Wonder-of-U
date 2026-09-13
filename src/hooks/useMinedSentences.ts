@@ -15,16 +15,8 @@ export function useMinedSentences() {
   // user can fix, and without it the only symptom is marks that never appear.
   const [minedWarning, setMinedWarning] = useState<string | null>(null);
   // When the deck was last read SUCCESSFULLY, as a counter rather than a boolean.
-  //
-  // Callers need to tell "we have looked and the deck is empty" from "we have never managed
-  // to look", because an empty `minedSentences` means both. A counter also lets an effect fire
-  // once per read rather than once per change in contents — the point of expiring a stale
-  // marker is that a read HAPPENED, not that the answer differed.
   const [readCount, setReadCount] = useState(0);
   const inFlightRef = useRef(false);
-  // A refresh asked for while another was running. Dropping it outright would lose
-  // the update for good — there is no poll to retry it — so the request is remembered
-  // and replayed once, which still keeps at most one read of the deck in flight.
   const pendingRef = useRef(false);
 
   const refreshMinedSentences = useCallback(async () => {
@@ -37,10 +29,6 @@ export function useMinedSentences() {
       do {
         pendingRef.current = false;
         const result = await invoke<MinedSentences>("load_mined_sentences");
-        // Only a successful read describes the deck. "offline" / "unmapped" / "error"
-        // all carry an empty list that means "could not look", not "you have mined
-        // nothing" — overwriting with it would wipe correct marks the moment Anki
-        // closed, and quietly claim every sentence was unmined.
         if (result.status === "ready") {
           setMinedSentences(new Set(result.sentences));
           setMinedWarning(null);
@@ -52,10 +40,6 @@ export function useMinedSentences() {
         }
       } while (pendingRef.current);
     } catch (error) {
-      // Marking sentences is an enhancement, so a failure stays silent: mining itself
-      // already reports why it cannot run, and this must never block reading a
-      // transcript. The backend degrades to an Ok status for offline/unmapped, so
-      // reaching here means the IPC call itself failed.
       if (import.meta.env.DEV) {
         console.debug("load_mined_sentences failed:", error);
       }

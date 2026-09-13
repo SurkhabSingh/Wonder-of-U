@@ -30,8 +30,6 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
     app.manage(ModelDownloadState(Mutex::new(
         ModelDownloadSnapshot::default(),
     )));
-    // The queue of waiting downloads. Empty at startup on purpose: a queue is something
-    // you are watching, not a background job that survives a restart.
     app.manage(ModelDownloadQueueState(Mutex::new(DownloadQueue::default())));
     app.manage(ModelDownloadControlState {
         control: Mutex::new(ModelDownloadControl::default()),
@@ -97,15 +95,8 @@ pub(crate) fn initialize_app_state(app: &mut App) -> Result<Vec<String>, tauri::
         ));
     }
 
-    // After the settings are managed, since it judges the saved list against them,
-    // and deliberately not a warning on failure: a missing or unreadable word list
-    // is a Refresh away from fixed and says so in its own snapshot. It must never
-    // be a reason the app opens complaining.
     restore_known_words_index(&app_handle);
 
-    // Beside the word list and for the same reason: never fatal. A statistics file that
-    // cannot be created must not be able to stop the app opening, so this reports through
-    // the log and returns nothing a caller could propagate with `?`.
     if let Err(reason) = crate::progress::store::ensure(
         &paths.progress_file,
         crate::progress::day::today(),

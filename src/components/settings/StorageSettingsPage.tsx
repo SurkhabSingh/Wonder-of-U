@@ -86,13 +86,6 @@ export function StorageSettingsPage({
         ) : null}
       </div>
 
-      {/* Reachable in BOTH states, deliberately. Offering this only while FFmpeg was missing
-          meant the app's own copy could never be replaced — no repair when it broke, and no way
-          to move to a different build. The install path is the same either way; only the
-          question differs, so the label is what changes.
-
-          Gated on `managed`, not on `status`: detection reports "ready" for an FFmpeg found on
-          PATH too, and there is nothing of ours to reinstall in that case. */}
       <div className="action-row inline-actions">
         {bootstrap.ffmpegDetection.managed ? (
           <button
@@ -209,12 +202,6 @@ export function StorageSettingsPage({
         ) : null}
       </div>
 
-      {/* Offered even when a system mpv was found, because that one is not ours to rely on:
-          it can be uninstalled or upgraded to something the app cannot drive.
-
-          The managed case sends a REINSTALL, not a download. The plain download skips when a
-          runnable copy is present, so a button offering to replace one would have reported a
-          download it never made. */}
       <div className="action-row inline-actions">
         {bootstrap.mpvDetection.managed ? (
           <button
@@ -285,8 +272,6 @@ export function StorageSettingsPage({
           {alassReady ? "Re-download alass" : "Download alass"}
         </button>
       </div>
-      {/* alass had a button and no progress card, so downloading it showed nothing at all —
-          and because every card checks the one shared snapshot, it hid the others too. */}
       <DownloadProgressCard
         snapshot={bootstrap.modelDownload}
         kind="alass"

@@ -1,21 +1,3 @@
-//! Persistence for the known-word index: its own file beside `state.json`, loaded
-//! at startup so ranking works on launch, re-written on every successful Refresh.
-//!
-//! Stored as plain text — one word per line under a single header line — rather
-//! than as a serialized blob. The index this replaces stalled on being empty after
-//! a restart with no way to see why; a file you can open, count and diff answers
-//! "did it save my words?" in one look, and that is the whole reason for the format.
-//!
-//! The original index was memory-only, on the reasoning that a cache of a
-//! collection edited since is worse than nothing. That reasoning was half right:
-//! the answer to staleness is to SHOW the age and flag a source change, not to
-//! throw the index away every launch and leave ranking silently unavailable until
-//! the user remembers to rebuild. This module is that showing-and-flagging layer.
-//!
-//! It lives in its own file for blast-radius reasons: the word list can run to tens
-//! of thousands of entries, and a parse failure here must never reach settings or
-//! the recording library the way a bad `state.json` would.
-
 use std::{fs, io::ErrorKind, path::Path};
 
 use serde::{Deserialize, Serialize};
@@ -30,11 +12,7 @@ use crate::{
     },
 };
 
-/// The header line: everything about the index that is not a word.
-///
-/// JSON on one line rather than prose, because the note type and field names are
-/// arbitrary user text — a human-readable `Mining → Expression` cannot be read back
-/// unambiguously once someone's field is called `Word → Reading`.
+/// The header line: everything about the index that is not a word..
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct KnownWordsHeader {
@@ -50,9 +28,6 @@ struct PersistedKnownWords {
     header: KnownWordsHeader,
 }
 
-/// What reading `known_words.txt` found. `Missing` is a genuine first run and is
-/// silent; anything present-but-unusable is `Corrupt` and gets logged, never
-/// crashed on.
 enum KnownWordsFile {
     Missing,
     Corrupt(String),
@@ -60,18 +35,6 @@ enum KnownWordsFile {
 }
 
 /// Splits the file into its header and its words.
-///
-/// **The first line is the header and every other line is one word — decided by
-/// position, not by content.** No comment marker, no sentinel: a vocabulary field
-/// can hold any text at all, so any character reserved for markup is a character
-/// that silently eats a real word the day someone's deck contains it. Position
-/// cannot be spoofed by the data.
-///
-/// Blank lines are skipped rather than kept, since a trailing newline is not a
-/// word; `\r` is trimmed so a file opened and saved in a Windows editor still
-/// loads. Words are otherwise taken verbatim — `normalize_expression` has already
-/// collapsed every whitespace run to a single space, so a word can never span two
-/// lines and the format cannot lose one.
 fn parse_known_words(raw: &str) -> Result<PersistedKnownWords, String> {
     let mut lines = raw.lines();
     let header_line = lines
@@ -96,8 +59,6 @@ fn read_known_words_file(path: &Path) -> KnownWordsFile {
             Err(reason) => KnownWordsFile::Corrupt(reason),
         },
         Err(error) if error.kind() == ErrorKind::NotFound => KnownWordsFile::Missing,
-        // Present but unreadable (locked, permissions). Not a first run, but not
-        // usable either — treat it as needing a Refresh, same as a parse failure.
         Err(error) => KnownWordsFile::Corrupt(error.to_string()),
     }
 }
@@ -110,14 +71,7 @@ fn index_from_persisted(persisted: PersistedKnownWords) -> KnownWordIndex {
     }
 }
 
-/// Writes the index out atomically. Reuses `write_file_atomically` — the same
-/// temp+fsync+rename `state.json` relies on — so a crash mid-write can never leave
-/// a truncated file the next launch would choke on.
-///
-/// Words are sorted, not written in `HashSet` order. The point of a file you can
-/// open is a file you can compare: unsorted, two rebuilds of an identical
-/// collection produce two completely different files, and "what changed since
-/// yesterday" stops being answerable.
+/// Writes the index out atomically.
 pub(super) fn persist_index(
     known_words_file: &Path,
     index: &KnownWordIndex,
@@ -140,11 +94,6 @@ pub(super) fn persist_index(
 }
 
 /// Removes the cache file, ignoring a file that is already gone.
-///
-/// Called when a Refresh lands on "nothing configured" or "nothing found": the
-/// in-memory index is cleared to `None`, and the file has to go with it, or the
-/// next launch would restore an index for a selection the user has abandoned and
-/// quietly resume ranking against it.
 pub(super) fn remove_known_words_file(known_words_file: &Path) -> Result<(), String> {
     match fs::remove_file(known_words_file) {
         Ok(()) => Ok(()),
@@ -160,16 +109,7 @@ fn ready_message(word_count: usize, source_count: usize) -> String {
     )
 }
 
-/// Describes the index against the settings as they stand — the single place the
-/// "is this index still for what I use?" question is answered, shared by startup
-/// and by every app snapshot the frontend receives.
-///
-/// The order of checks matters. No configured sources is "off" first, whatever is
-/// cached: a stale index for decks the user has removed must not present itself as
-/// a working list. Then a present index either matches the current build (`ready`)
-/// or does not (`stale` — still shown with its age and count so the user sees what
-/// would be replaced). An absent index with sources set is `unbuilt`: a Refresh
-/// will fill it, and it is the state a corrupt file degrades to.
+/// Describes the index against the settings as they stand.
 fn snapshot_for_index(
     index: Option<&KnownWordIndex>,
     current: &KnownWordsBuild,
@@ -198,9 +138,6 @@ fn snapshot_for_index(
         },
         Some(index) => KnownWordsSnapshot {
             status: "stale".into(),
-            // Deliberately covers both a source change and a threshold change
-            // without naming which: either way the list on disk was built under a
-            // rule that is no longer the user's, and the action is the same.
             message: "Your vocabulary settings changed since this list was built — Refresh to update."
                 .into(),
             word_count: index.words.len(),
@@ -218,11 +155,6 @@ fn current_build<R: Runtime>(app: &AppHandle<R>) -> KnownWordsBuild {
 }
 
 /// The known-word snapshot for the current state, for the startup/emit bootstrap.
-///
-/// Takes the build it judges against as an argument rather than reading it, so
-/// `build_app_bootstrap` — which already holds the settings — does not lock them a
-/// second time. Only `KnownWordsState` is locked here, and never across anything
-/// blocking.
 pub(crate) fn known_words_snapshot_from_state<R: Runtime>(
     app: &AppHandle<R>,
     current: &KnownWordsBuild,
@@ -234,12 +166,6 @@ pub(crate) fn known_words_snapshot_from_state<R: Runtime>(
 }
 
 /// Restores the index from disk into `KnownWordsState` at startup.
-///
-/// Best-effort and non-fatal by contract: a missing file is a silent first run, a
-/// corrupt one is logged and left as "no index" (a Refresh rebuilds it), and
-/// neither ever touches settings or the recording library. When the user has no
-/// sources configured the feature is off, so a leftover file is not loaded into
-/// memory — it must not resurrect ranking the user turned off.
 pub(crate) fn restore_known_words_index<R: Runtime>(app: &AppHandle<R>) {
     if current_build(app).sources.is_empty() {
         return;
@@ -346,8 +272,6 @@ mod tests {
         let lines: Vec<&str> = raw.lines().collect();
         assert_eq!(lines.len(), 4, "one header line and three words");
         assert!(lines[0].starts_with('{'), "the header is line 1");
-        // Sorted, so two rebuilds of an unchanged collection produce an identical
-        // file and "what changed" stays answerable by diff.
         assert_eq!(&lines[1..], ["本", "見る", "食べる"]);
     }
 
@@ -427,8 +351,6 @@ mod tests {
 
     #[test]
     fn a_file_saved_by_a_windows_editor_still_loads() {
-        // CRLF and a trailing blank line are what an editor leaves behind, and this
-        // file exists to be opened in one.
         let persisted =
             parse_known_words("{\"builtAtMs\":42,\"matureAfterDays\":21}\r\n見る\r\n本\r\n\r\n")
                 .unwrap();

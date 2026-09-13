@@ -29,8 +29,6 @@ pub(crate) struct Header {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SampleItem {
     pub(crate) key: String,
-    /// What the text was when counted. A re-transcribe rewrites in place, so without this
-    /// the same key names different words on two dates and the difference reads as learning.
     pub(crate) fingerprint: String,
     pub(crate) content_tokens: u32,
     pub(crate) known_tokens: u32,
@@ -43,12 +41,8 @@ pub(crate) struct Sample {
     pub(crate) kind: String,
     pub(crate) taken_at_ms: u64,
     pub(crate) day: DayKey,
-    /// The settings this was measured under. Samples from different builds are not
-    /// comparable; stored whole so a reader can say which setting moved.
     pub(crate) build: KnownWordsBuild,
     pub(crate) index_built_at_ms: u64,
-    /// In-scope documents that could not be read. Kept on the row, because a denominator
-    /// that quietly shrank moves the share with no visible cause.
     #[serde(default)]
     pub(crate) unread_items: u32,
     pub(crate) items: Vec<SampleItem>,
@@ -76,7 +70,6 @@ impl Sample {
     }
 
     /// Pooled, not averaged per item, so a two-word clip cannot outvote an episode.
-    /// Playback count is not a weight: looping one easy sentence must not move it.
     pub(crate) fn totals(&self) -> (u32, u32) {
         self.items.iter().fold((0, 0), |(content, known), item| {
             (content + item.content_tokens, known + item.known_tokens)
@@ -89,19 +82,14 @@ const KIND_SAMPLE: &str = "sample";
 #[derive(Debug, Default)]
 pub(crate) struct ProgressStore {
     pub(crate) samples: Vec<Sample>,
-    /// Rows this build did not model, written back untouched: rebuilding from the parsed
-    /// model alone deletes what a newer build wrote, on the first write after a rollback.
     pub(crate) passthrough: Vec<String>,
     pub(crate) newer: usize,
-    /// Rows this build could not read. Kept in `passthrough` too, so a write cannot erase
-    /// what it could not parse.
     pub(crate) damaged: usize,
 }
 
 #[derive(Debug)]
 pub(crate) enum Loaded {
     Missing,
-    /// Present but unreadable. Never treated as empty: that overwrites months of history.
     Unreadable(String),
     Present {
         header: Header,
@@ -109,8 +97,7 @@ pub(crate) enum Loaded {
     },
 }
 
-/// Only a missing file means nothing to keep. A caller that collapses missing and
-/// unreadable will rewrite a file it merely failed to open.
+/// Only a missing file means nothing to keep.
 pub(crate) fn load(path: &Path) -> Loaded {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -139,7 +126,6 @@ pub(crate) fn load(path: &Path) -> Loaded {
         };
         let version = value.get("v").and_then(serde_json::Value::as_u64);
         if version != Some(u64::from(RECORD_VERSION)) {
-            // Kept verbatim: read under this build's assumptions it is confidently wrong.
             store.newer += 1;
             store.passthrough.push(line.to_string());
             continue;
@@ -148,8 +134,6 @@ pub(crate) fn load(path: &Path) -> Loaded {
             Some(KIND_SAMPLE) => match serde_json::from_value::<Sample>(value) {
                 Ok(sample) => store.samples.push(sample),
                 Err(_) => {
-                    // The branch that matters most: a row refused by the model is what a
-                    // change to `Sample` looks like, and dropping it takes the history.
                     store.damaged += 1;
                     store.passthrough.push(line.to_string());
                 }
@@ -177,7 +161,6 @@ pub(crate) fn ensure(path: &Path, today: DayKey, now_ms: u64) -> Result<(), Stri
             write_all(path, &header, &ProgressStore::default())
         }
         Loaded::Unreadable(reason) => {
-            // Moved aside, not overwritten, so a recovery by hand is still possible.
             let moved = path.with_file_name(format!(
                 "{}.corrupt-{now_ms}",
                 path.file_name()
@@ -197,8 +180,6 @@ pub(crate) fn ensure(path: &Path, today: DayKey, now_ms: u64) -> Result<(), Stri
     }
 }
 
-/// Adds one sample, keeping the rest. A failed read aborts without writing: rewriting
-/// after one replaces the whole history with a single row.
 pub(crate) fn append_sample(path: &Path, sample: Sample) -> Result<(), String> {
     let _guard = WRITE.lock();
     let (header, mut store) = match load(path) {

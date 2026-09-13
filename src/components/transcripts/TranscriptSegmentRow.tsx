@@ -38,9 +38,6 @@ export function TranscriptSegmentRow({
   query: string;
   selected: boolean;
   linked: boolean;
-  // Timing is present only for rows built from the segments sidecar. Untimed
-  // rows (older recordings, translations) leave these null and keep the
-  // placeholder dot with no play control.
   startMs: number | null;
   endMs: number | null;
   playing: boolean;
@@ -48,18 +45,9 @@ export function TranscriptSegmentRow({
   onSelect: () => void;
   onActivate: () => void;
   onDeactivate: () => void;
-  // Sentence-mining + merge/split controls. Only timed transcript rows are
-  // editable; when false none of the controls below render.
   editable?: boolean;
-  // Undefined when mining is unavailable (local audio deleted). When present but
-  // `mineDisabled`, the button is inert and explains itself via the tooltip.
   onMine?: () => void;
-  // Mined during THIS session: a card was just created from this exact row, so the
-  // action is spent and the button goes away.
   mined?: boolean;
-  // The same sentence already exists somewhere in the deck, from any past session.
-  // Worth flagging, but NOT worth blocking: short lines ("はい。", "Yeah.") recur
-  // across recordings, and the user may well want this one with its own audio.
   minedInDeck?: boolean;
   mineBusy?: boolean;
   mineDisabled?: boolean;
@@ -68,15 +56,8 @@ export function TranscriptSegmentRow({
   canMerge?: boolean;
   onSplit?: () => void;
   canSplit?: boolean;
-  // How many words in this line are still new. Null when nothing has ranked it —
-  // no vocabulary sources, no dictionary, no list built yet — in which case the row
-  // simply carries no badge.
   ranking?: LineRanking | null;
-  // Why a batch mine could not make a card of this line. Shown on the row itself,
-  // because "3 of 35 failed" is only actionable next to the three.
   mineFailure?: string | null;
-  // Which occurrence of the search term in this line is the one being stepped to,
-  // or null when the active match is elsewhere.
   activeMatchOccurrence?: number | null;
 }) {
   const [copied, setCopied] = useState(false);
@@ -84,21 +65,15 @@ export function TranscriptSegmentRow({
   const canPlay = hasTiming && onPlaySegment !== undefined;
 
   async function copySegment(event: MouseEvent<HTMLButtonElement>) {
-    // The copy control lives inside a selectable row; don't toggle the row's
-    // selection when the user only meant to copy the line.
     event.stopPropagation();
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // Clipboard access can be denied. Leave the label untouched rather than
-      // reporting a copy that did not happen.
-    }
+    } catch {}
   }
 
   function playSegment(event: MouseEvent<HTMLButtonElement>) {
-    // Same as copy: keep a play tap from also selecting the row.
     event.stopPropagation();
     if (startMs !== null && endMs !== null) {
       onPlaySegment?.(startMs, endMs);
@@ -115,9 +90,6 @@ export function TranscriptSegmentRow({
       onMouseEnter={onActivate}
       onMouseLeave={onDeactivate}
     >
-      {/* The badge sits in the gutter beside the timestamp rather than in the
-          aside, so a column of them can be read straight down while scrolling —
-          which is how you find the lines worth mining. */}
       <span
         className={`transcript-segment-gutter ${hasTiming ? "has-timing" : ""}`}
       >
@@ -142,9 +114,6 @@ export function TranscriptSegmentRow({
         ) : null}
         {ranking && ranking.contentWordCount > 0 ? (
           <span
-            // Three states, not two. Grey used to mean both "more than one word away" and
-            // "one word away but nothing to learn it from" — opposite problems sharing a
-            // colour, which is exactly what made a +1 beside a +2 unreadable.
             className={`transcript-segment-newness ${
               isBareWord(ranking)
                 ? "is-bare-word"
@@ -154,15 +123,11 @@ export function TranscriptSegmentRow({
                     ? "is-known"
                     : ""
             }`}
-            // The words themselves, not just how many. On a line one word away,
-            // that word is the entire reason to mine it.
             title={
               ranking.unknownWords.length === 0
                 ? "You know every word in this line."
                 : isBareWord(ranking)
-                  ? // The count alone left this looking identical to a +2, and the user asked
-                    // why. Say the actual reason.
-                    `New here: ${ranking.unknownWords.join(
+                  ? `New here: ${ranking.unknownWords.join(
                       "、",
                     )} — but this line has nothing else in it to learn the word from.`
                   : `New here: ${ranking.unknownWords.join("、")}`
@@ -174,9 +139,6 @@ export function TranscriptSegmentRow({
           </span>
         ) : null}
       </span>
-      {/* Every transcript line is scannable: the dictionary popup is app-wide, so a word
-          can be looked up wherever it is read, not only on the watch page. Search
-          highlighting is unaffected — the scanner reads text nodes, not elements. */}
       <p className="transcript-segment-body">
         <ScannableText
           ownerKey={`row:${segmentKey}`}
@@ -230,10 +192,6 @@ export function TranscriptSegmentRow({
             {onMine ? (
               <>
                 {mined || minedInDeck ? (
-                  // A green "Mined" beside a live "Mine again" button would
-                  // contradict itself, so the deck match gets its own quieter chip
-                  // and wording: it reports a fact, it does not claim the action is
-                  // finished.
                   <span
                     className={`transcript-segment-mined${
                       mined ? "" : " is-in-deck"

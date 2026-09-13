@@ -1,22 +1,6 @@
 import type { RecordingSegment } from "../types";
 
 // SubRip (.srt) / WebVTT (.vtt) / Advanced SubStation Alpha (.ass) parser.
-//
-// Ported from the browser extension's `overlay/subtitle-parser.js`, which had no
-// Chrome or DOM dependencies — only the classic-script IIFE wrapper needed removing.
-// `.ass` support matters because much of the Jimaku corpus is ASS-only.
-//
-// Why the app parses subtitles at all, when mpv already does: mpv answers "what is on
-// screen right now" over IPC and nothing more. It cannot be asked for the whole cue
-// list, and the subtitle list needs every line at once.
-//
-// A cue is exactly a `RecordingSegment`, so the merge/split/mine-key helpers in
-// `lib/segments.ts` apply to subtitles with no adaptation.
-
-// Hours are optional (VTT allows MM:SS.mmm); the fraction separator is `,` (SRT) or
-// `.` (VTT/ASS), and the fraction is read as a fraction of a second so 1-, 2-, or
-// 3-digit values all map correctly (",5" = 500ms, ".05" = 50ms, ASS centiseconds
-// ".50" = 500ms).
 const TIMESTAMP = /(?:(\d{1,2}):)?(\d{1,2}):(\d{1,2})[.,](\d{1,3})/;
 
 function toMs(

@@ -1,6 +1,3 @@
-//! What a stretch of playback is worth. Media advance is the liveness gate: a position
-//! that did not move is not time spent. The error runs one way — under-report, never invent.
-
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -30,8 +27,6 @@ pub(crate) struct Credit {
     pub(crate) unmeasured_ms: u64,
 }
 
-/// `min(wall, media advanced / rate)`: wall alone invents the nine hours a closed lid
-/// never spent, media alone doubles 2x playback and invents five minutes on a seek.
 pub(crate) fn credit_ms(
     previous: Option<&PlaybackSample>,
     next: &PlaybackSample,
@@ -47,8 +42,6 @@ pub(crate) fn credit_ms(
     let wall_ms = u64::try_from(wall_elapsed.as_millis()).unwrap_or(u64::MAX);
     let advance_ms = next.position_ms.saturating_sub(previous.position_ms);
 
-    // Before crediting, not after: the other order returns early on every stalled gap
-    // and nothing is ever reported unmeasured.
     if advance_ms == 0 {
         return Credit {
             credited_ms: 0,

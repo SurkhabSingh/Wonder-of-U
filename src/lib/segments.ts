@@ -1,14 +1,7 @@
 import type { RecordingSegment } from "../types";
 
 // Segment editing shared by every surface that mines a timed line: the transcript
-// viewer, and the subtitle list of a watch session. These were private to the
-// transcript viewer until the watch feature needed exactly the same behaviour —
-// copying them would have been two implementations of "what counts as the same
-// sentence", which is the thing the mined/not-mined marker depends on.
-//
-// Everything here is a pure function over `{text, startMs, endMs}`. A subtitle cue
-// from the parser has that exact shape, so nothing needs adapting.
-
+// viewer, and the subtitle list of a watch session.
 const SENTENCE_ENDINGS = new Set([
   "。",
   "！",
@@ -21,15 +14,12 @@ const SENTENCE_ENDINGS = new Set([
 ]);
 
 // A stable, content-derived key for a segment so an already-mined row keeps its
-// "✓ Mined" marker across re-renders. Merging/splitting produces a new sentence
-// (new text/timing), so its key differs and the marker naturally resets.
+// "✓ Mined" marker across re-renders. 
 export function segmentMineKey(segment: RecordingSegment): string {
   return `${segment.startMs}:${segment.endMs}:${segment.text}`;
 }
 
-// Merge row i with row i+1 into one sentence spanning both time ranges. The
-// joiner is script-aware: CJK scripts run without inter-word spaces, so a space
-// would leave an unnatural gap in the merged sentence (and in a mined card).
+// Merge row i with row i+1 into one sentence spanning both time ranges.
 export function mergeSegmentAt(
   segments: RecordingSegment[],
   index: number,
@@ -49,8 +39,7 @@ export function mergeSegmentAt(
 }
 
 // Split row i at the first sentence-ending punctuation at or after the text
-// midpoint, else at the character midpoint. Time is divided proportionally by
-// the character cut index so each half keeps a plausible span.
+// midpoint, else at the character midpoint.
 export function splitSegmentAt(
   segments: RecordingSegment[],
   index: number,
@@ -68,7 +57,6 @@ export function splitSegmentAt(
   let cutIndex = midpoint;
   for (let position = midpoint; position < text.length; position += 1) {
     if (SENTENCE_ENDINGS.has(text[position])) {
-      // Keep the punctuation with the first sentence.
       cutIndex = position + 1;
       break;
     }
@@ -101,13 +89,6 @@ export function splitSegmentAt(
 }
 
 // Index of the segment covering `positionMs`, or -1.
-//
-// This exists because the reading pane originally identified the playing row by
-// exact start/end equality — safe only because the audio player handed back the
-// very segment object the row was built from. A player's clock gives a POSITION,
-// not an identity, and after a merge or split no row's bounds match a cue any
-// more. Searching by containment is what keeps the highlight correct once rows
-// can be edited.
 export function segmentIndexAt(
   segments: RecordingSegment[],
   positionMs: number,

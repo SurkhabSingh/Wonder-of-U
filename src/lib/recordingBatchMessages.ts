@@ -19,10 +19,6 @@ export function formatBatchToastMessage(
   const failedItems = result.items.filter((item) => item.status === "failed");
   const failedCount = failedItems.length;
   const firstFailure = failedItems[0]?.message;
-  // Skips have reasons too. Conversion alone has four of them — no transcript, audio already
-  // deleted after an Anki push, not a WAV, and the source file gone — and a single fixed
-  // sentence for all four told a user with a missing audio file that only transcribed WAVs can
-  // be converted, about a recording that was transcribed.
   const firstSkip = result.items.find((item) => item.status === "skipped")?.message;
   const furiganaSkippedCount = result.items.filter((item) =>
     item.message.toLowerCase().includes("furigana was skipped"),
@@ -84,9 +80,7 @@ export function formatBatchToastMessage(
   }
 
   // Import deliberately does not transcribe, so a successful import is only a
-  // half-finished job — say where the files went and what is left to do. A file
-  // that needed ffmpeg and did not find it fails on its own without taking the
-  // rest of the batch down, so a partial result must name that failure.
+  // half-finished job — say where the files went and what is left to do.
   if (action === "import") {
     if (failedCount > 0 && successCount === 0) {
       return firstFailure ?? "No files were imported.";
@@ -104,10 +98,7 @@ export function formatBatchToastMessage(
   }
 
   // A link import, like a file import, deliberately stops short of transcribing —
-  // so a success is only half the job. A failed fetch (private/blocked video,
-  // missing yt-dlp) must name the reason. And one link is not always one video: a
-  // tweet can hold several clips, so this batch can come back part-landed, and
-  // saying only what arrived would report half a result as a whole one.
+  // so a success is only half the job.
   if (action === "youtube") {
     if (failedCount > 0 && successCount === 0) {
       return firstFailure ?? "That link could not be imported.";

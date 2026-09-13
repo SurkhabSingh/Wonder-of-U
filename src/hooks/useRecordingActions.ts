@@ -34,10 +34,6 @@ export function useRecordingActions({
   // A batch that could not run at all ("unavailable"), only partly ran ("partial"), or was
   // stopped by the user ("cancelled") is not a success. Reporting one with a green check is
   // how "the browser extension is not connected" ended up looking like good news.
-  //
-  // A denylist rather than an allowlist was the original mistake: "cancelled" was added to
-  // the backend later and inherited the green check by simply not being listed. Asking what
-  // DID go right instead means a status invented tomorrow is quiet by default.
   const notifyBatchResult = useCallback(
     (result: RecordingBatchResult, message: string) => {
       if (result.status === "completed") {
@@ -56,7 +52,9 @@ export function useRecordingActions({
         setBusyAction("playRecording");
         await invoke("play_recording", { filePath });
       } catch (error) {
-        setLoadError(errorMessage(error, "The audio file could not be played."));
+        setLoadError(
+          errorMessage(error, "The audio file could not be played."),
+        );
       } finally {
         setBusyAction(null);
       }
@@ -87,12 +85,20 @@ export function useRecordingActions({
         setRecordingActionMessage("Recording deleted.");
         showSuccess("Recording deleted.");
       } catch (error) {
-        setLoadError(errorMessage(error, "The recording could not be deleted."));
+        setLoadError(
+          errorMessage(error, "The recording could not be deleted."),
+        );
       } finally {
         setBusyAction(null);
       }
     },
-    [applyBootstrap, setBusyAction, setLoadError, setRecordingActionMessage, showSuccess],
+    [
+      applyBootstrap,
+      setBusyAction,
+      setLoadError,
+      setRecordingActionMessage,
+      showSuccess,
+    ],
   );
 
   const deleteRecordings = useCallback(
@@ -146,7 +152,9 @@ export function useRecordingActions({
         await persistSettingsIfNeeded();
         const targetDeck = deckName?.trim();
         const result = await invoke<RecordingBatchResult>(
-          targetDeck ? "push_recordings_to_anki_deck" : "push_recordings_to_anki",
+          targetDeck
+            ? "push_recordings_to_anki_deck"
+            : "push_recordings_to_anki",
           targetDeck ? { filePaths, deckName: targetDeck } : { filePaths },
         );
         applyBootstrap(result.bootstrap);
@@ -188,9 +196,7 @@ export function useRecordingActions({
   );
 
   // Sentence mining: creates ONE Anki card for a single sentence from the
-  // reading view. Mirrors pushRecordingsToAnki (persist → invoke → applyBootstrap
-  // → routed toast) but returns the batch result so the caller can mark the row
-  // "mined" from the note id — mining does not mutate RecentRecording in v1.
+  // reading view.
   const mineSegment = useCallback(
     async (
       filePath: string,
@@ -198,21 +204,22 @@ export function useRecordingActions({
       startMs: number,
       endMs: number,
       translation: string | null,
-      // Set when the mine came from the lookup popup: the card is FOR this word,
-      // with the line as its context.
       targetWord?: string | null,
     ): Promise<RecordingBatchResult | null> => {
       try {
         setBusyAction("mineSegment");
         await persistSettingsIfNeeded();
-        const result = await invoke<RecordingBatchResult>("mine_segment_to_anki", {
-          filePath,
-          text,
-          startMs,
-          endMs,
-          translation,
-          targetWord: targetWord ?? null,
-        });
+        const result = await invoke<RecordingBatchResult>(
+          "mine_segment_to_anki",
+          {
+            filePath,
+            text,
+            startMs,
+            endMs,
+            translation,
+            targetWord: targetWord ?? null,
+          },
+        );
         applyBootstrap(result.bootstrap);
         const message = result.message;
         setRecordingActionMessage(message);
@@ -247,8 +254,7 @@ export function useRecordingActions({
 
   // Media import: acquire → normalize → register with NO transcript, so the file
   // lands in the Library as "Needs transcript" and every existing action works
-  // on it unchanged. Returns the batch result so the caller can navigate to the
-  // Library only when something actually landed.
+  // on it unchanged.
   const importMedia = useCallback(
     async (paths: string[]): Promise<RecordingBatchResult | null> => {
       if (paths.length === 0) {
@@ -264,9 +270,6 @@ export function useRecordingActions({
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("import", result);
         setRecordingActionMessage(message);
-        // A batch where every file failed (an unconvertible format, no ffmpeg)
-        // can still come back with a non-error status. Nothing landed, so it is
-        // not success — warn rather than show a green check.
         const importedCount = result.items.filter(
           (item) => item.status === "success",
         ).length;
@@ -298,9 +301,7 @@ export function useRecordingActions({
 
   // YouTube import: fetch a video's audio with yt-dlp and register it with NO
   // transcript, exactly like importMedia — the file lands in the Library as
-  // "Needs transcript". Returns the outcome rather than the bare batch: a
-  // rejection (livestream, dead link, missing yt-dlp) has a reason worth showing
-  // but no bootstrap, so it gets its own branch instead of a lossy null.
+  // "Needs transcript".
   const importYoutube = useCallback(
     async (url: string): Promise<YoutubeImportOutcome> => {
       const trimmed = url.trim();
@@ -317,9 +318,6 @@ export function useRecordingActions({
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("youtube", result);
         setRecordingActionMessage(message);
-        // A fetch that failed (private/blocked video, missing yt-dlp) can still
-        // come back with a non-error status. Nothing landed, so it is not a
-        // success — warn rather than show a green check.
         const importedCount = result.items.filter(
           (item) => item.status === "success",
         ).length;
@@ -330,13 +328,7 @@ export function useRecordingActions({
         }
         return { ok: true, result };
       } catch (error) {
-        const message = errorMessage(
-          error,
-          "That link could not be imported.",
-        );
-        // Surface the failure as a transient toast only — matching transcription
-        // and translation. Avoid `setLoadError`, which pins a permanent banner
-        // (e.g. a rejected livestream would otherwise linger at the top).
+        const message = errorMessage(error, "That link could not be imported.");
         showWarning(message);
         return { ok: false, message };
       } finally {
@@ -358,9 +350,12 @@ export function useRecordingActions({
       try {
         setBusyAction("addFurigana");
         await persistSettingsIfNeeded();
-        const result = await invoke<RecordingBatchResult>("add_furigana_to_anki", {
-          filePaths,
-        });
+        const result = await invoke<RecordingBatchResult>(
+          "add_furigana_to_anki",
+          {
+            filePaths,
+          },
+        );
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("furigana", result);
         setRecordingActionMessage(message);
@@ -401,22 +396,26 @@ export function useRecordingActions({
   // import queue) so the app stays usable while whisper-cli works.
 
   const translateRecordings = useCallback(
-    // `force` bypasses the has-translation skip so a recording that is already
-    // translated can be re-translated (deterministic overwrite of the sidecar).
     async (filePaths: string[], force = false) => {
       try {
         setBusyAction("translateRecording");
-        const result = await invoke<RecordingBatchResult>("translate_recordings", {
-          filePaths,
-          force,
-        });
+        const result = await invoke<RecordingBatchResult>(
+          "translate_recordings",
+          {
+            filePaths,
+            force,
+          },
+        );
         applyBootstrap(result.bootstrap);
         const message = formatBatchToastMessage("translate", result);
         setRecordingActionMessage(message);
         notifyBatchResult(result, message);
       } catch (error) {
         setLoadError(
-          errorMessage(error, "The translation request could not be completed."),
+          errorMessage(
+            error,
+            "The translation request could not be completed.",
+          ),
         );
       } finally {
         setBusyAction(null);

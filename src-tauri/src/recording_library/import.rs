@@ -32,13 +32,8 @@ use super::{insert_recent_recording, unique_path_with_suffix};
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Formats whisper.cpp reads directly. The file is copied into the recordings
-/// folder byte-for-byte: re-encoding here would only lose quality and time.
 const PASSTHROUGH_EXTENSIONS: [&str; 4] = ["wav", "mp3", "flac", "ogg"];
 
-/// Container/codec combinations whisper.cpp cannot open. These are transcoded to
-/// MP3 (the same libmp3lame/128k profile the WAV compressor uses), so ffmpeg is
-/// mandatory for them and only for them.
 const CONVERT_EXTENSIONS: [&str; 10] = [
     "m4a", "opus", "mp4", "webm", "aac", "mkv", "mov", "m4v", "wma", "aiff",
 ];
@@ -49,11 +44,8 @@ const FFMPEG_REQUIRED_MESSAGE: &str =
 /// What an imported file needs before it can land in the library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImportPlan {
-    /// whisper.cpp reads it as-is: copy it verbatim.
     Passthrough,
-    /// whisper.cpp cannot read it: transcode the first audio stream to MP3.
     ConvertToMp3,
-    /// Not an audio/video container we can do anything useful with.
     Unsupported,
 }
 
@@ -98,9 +90,7 @@ fn supported_extensions_sentence() -> String {
 }
 
 /// Builds the ffmpeg argument list that transcodes any container's first audio
-/// stream into MP3. Kept pure so the profile can be asserted without spawning
-/// ffmpeg. `-vn` plus `-map 0:a:0` is what keeps an mp4/mkv from dragging its
-/// video stream (or a cover-art "video" stream) into the output.
+/// stream into MP3.
 fn convert_ffmpeg_args(input: &str, output: &str) -> Vec<String> {
     vec![
         "-y".into(),
@@ -121,9 +111,6 @@ fn convert_ffmpeg_args(input: &str, output: &str) -> Vec<String> {
     ]
 }
 
-/// ffprobe ships beside ffmpeg in every distribution we detect (managed unpack or
-/// PATH), so we look for it as a sibling of the resolved ffmpeg binary, keeping
-/// the executable suffix (`ffmpeg.exe` -> `ffprobe.exe`).
 fn ffprobe_path_for(ffmpeg_executable: &str) -> PathBuf {
     let ffmpeg_path = Path::new(ffmpeg_executable);
     let file_name = match ffmpeg_path.extension().and_then(|value| value.to_str()) {
@@ -137,8 +124,6 @@ fn ffprobe_path_for(ffmpeg_executable: &str) -> PathBuf {
     }
 }
 
-/// Parses ffprobe's `format=duration` output (fractional seconds) into whole
-/// milliseconds. `N/A`, empty output, or a negative value yield `None`.
 fn parse_ffprobe_duration_ms(stdout: &str) -> Option<u64> {
     let seconds = stdout.trim().lines().next()?.trim().parse::<f64>().ok()?;
     if !seconds.is_finite() || seconds <= 0.0 {
@@ -147,9 +132,6 @@ fn parse_ffprobe_duration_ms(stdout: &str) -> Option<u64> {
     Some((seconds * 1000.0).round() as u64)
 }
 
-/// Best-effort duration probe. A missing or failing ffprobe is never an import
-/// failure — the recording simply lands with `duration_ms = 0`, exactly as an
-/// unprobeable file recovered from disk does.
 pub(crate) fn probe_duration_ms(ffmpeg_executable: Option<&str>, audio_path: &Path) -> u64 {
     if let Some(ffmpeg_executable) = ffmpeg_executable {
         let ffprobe = ffprobe_path_for(ffmpeg_executable);
@@ -258,8 +240,6 @@ fn transcode_to_mp3<R: Runtime>(
             }),
         );
         return Err(if stderr_indicates_no_audio(&stderr) {
-            // `-map 0:a:0` on a video with no audio track. The user handed over a
-            // silent file, which is a normal thing to do and not a conversion fault.
             NO_AUDIO_REJECTED_MESSAGE.to_string()
         } else if stderr.is_empty() {
             "FFmpeg did not produce a playable MP3 for this file.".to_string()
@@ -271,9 +251,6 @@ fn transcode_to_mp3<R: Runtime>(
     Ok(())
 }
 
-/// Acquires one file into the recordings folder and returns the registered
-/// recording. Every error here is scoped to this file: the caller turns it into a
-/// failed item and moves on to the next path in the batch.
 fn import_single_file<R: Runtime>(
     app: &AppHandle<R>,
     settings: &AppSettings,
@@ -322,8 +299,6 @@ fn import_single_file<R: Runtime>(
 
     let suffix = match plan {
         ImportPlan::ConvertToMp3 => ".mp3".to_string(),
-        // Keep the original container: whisper reads it, and re-encoding would
-        // only cost quality.
         ImportPlan::Passthrough => format!(
             ".{}",
             source
@@ -334,9 +309,6 @@ fn import_single_file<R: Runtime>(
         ),
         ImportPlan::Unsupported => unreachable!("unsupported files are rejected above"),
     };
-    // `unique_path_with_suffix` only ever returns a path that does not exist, so
-    // the target can never be the (existing) source. The explicit guard below
-    // keeps that invariant honest even if the helper changes.
     let target = unique_path_with_suffix(&output_directory, &file_stem, &suffix);
     if is_same_file(&source, &target) {
         return Err(format!(
@@ -408,8 +380,6 @@ fn import_single_file<R: Runtime>(
 }
 
 /// Imports every path into the recordings folder as a transcript-less recording.
-/// Import deliberately never transcribes: the file lands in the library as "Needs
-/// transcript" and the user decides when to spend the compute.
 pub(crate) fn import_media_inner<R: Runtime>(
     app: &AppHandle<R>,
     paths: Vec<String>,
@@ -487,11 +457,6 @@ const OVERSIZE_REJECTED_MESSAGE: &str =
 const NO_AUDIO_REJECTED_MESSAGE: &str =
     "This video has no sound, so there is nothing to import.";
 
-/// True when yt-dlp's stderr indicates a live/upcoming/premiere video was rejected.
-/// Matched case-insensitively because the wording differs across yt-dlp versions
-/// (the `--match-filter` rejection prints `has not passed filter` on current
-/// releases, not the older `does not pass filter`) and across the live/upcoming
-/// cases (`premieres in`, `live event will begin`).
 fn stderr_indicates_livestream(stderr: &str) -> bool {
     let lower = stderr.to_ascii_lowercase();
     [
@@ -505,10 +470,6 @@ fn stderr_indicates_livestream(stderr: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
-/// True when yt-dlp's stderr indicates `--max-filesize` skipped the download. Such a
-/// skip is not an error to yt-dlp: it prints this, downloads nothing, and exits 0, so
-/// without this check the user is told the file is inexplicably "missing". Matched
-/// case-insensitively for the same reason as the livestream wordings above.
 fn stderr_indicates_oversize(stderr: &str) -> bool {
     let lower = stderr.to_ascii_lowercase();
     ["larger than max-filesize", "larger than --max-filesize"]
@@ -517,15 +478,6 @@ fn stderr_indicates_oversize(stderr: &str) -> bool {
 }
 
 /// The lines of yt-dlp's stderr that say why the run FAILED.
-///
-/// yt-dlp prefixes fatal output with `ERROR:` and advisory output with `WARNING:`,
-/// and the two must never be conflated. Current releases print
-/// `WARNING: [youtube] No supported JavaScript runtime could be found` on EVERY
-/// YouTube extraction when no runtime is installed, including runs that go on to
-/// succeed. Matching that text anywhere in stderr made every YouTube failure — an
-/// unavailable video, a network drop — look like the nsig challenge: each was
-/// retried three times and then reported as "install a JavaScript runtime",
-/// whatever had actually gone wrong.
 fn fatal_stderr_lines(stderr: &str) -> impl Iterator<Item = &str> {
     stderr
         .lines()
@@ -533,15 +485,6 @@ fn fatal_stderr_lines(stderr: &str) -> impl Iterator<Item = &str> {
         .filter(|line| line.starts_with("ERROR:"))
 }
 
-/// True when yt-dlp failed because it needs a JavaScript runtime to solve YouTube's
-/// `nsig` challenge. YouTube serves this challenge intermittently, so the SAME url
-/// usually succeeds on a later attempt — the importer keys its auto-retry off this.
-/// Matched case-insensitively because the wording varies across yt-dlp versions
-/// ("Failed to extract nsig", "requires a JavaScript interpreter", "no supported
-/// JavaScript runtime", "install a JS runtime"), and only against the run's fatal
-/// lines: the identical words appear in a warning that every YouTube extraction
-/// emits, so reading the whole of stderr matched failures that had nothing to do
-/// with a JS runtime. See `fatal_stderr_lines`.
 fn stderr_indicates_js_runtime(stderr: &str) -> bool {
     fatal_stderr_lines(stderr).any(|line| {
         let lower = line.to_ascii_lowercase();
@@ -558,30 +501,18 @@ fn stderr_indicates_js_runtime(stderr: &str) -> bool {
     })
 }
 
-/// Shown when every attempt hit the JS-runtime challenge. Frames it as the usually-
-/// transient issue it is and points at the durable fix (installing a JS runtime),
-/// rather than dumping yt-dlp's raw interpreter error on the user.
 const JS_RUNTIME_REJECTED_MESSAGE: &str =
     "YouTube couldn't be read this time — it asked for a JavaScript runtime to unlock this video. This is usually temporary, so try the import again. Installing Deno or Node.js makes it reliable.";
 
-/// The metadata a single up-front probe collects: the video's `live_status` (so a
-/// live/upcoming/premiere can be refused without downloading) plus its `title` and
-/// `id`, which pin a guaranteed-unique output path before the fetch begins.
 struct VideoMetadata {
     live_status: String,
     title: String,
     id: String,
 }
 
-/// Quick metadata-only probe of a URL before any download. One `--print` returns
-/// `live_status<TAB>title<TAB>id` on a clean run; on failure it returns `Err`
-/// carrying yt-dlp's stderr (network/unavailable). The caller treats a failing
-/// probe as advisory — a flaky probe must never block a normal video — but uses the
-/// title/id it does return to name a collision-proof output file.
 fn probe_video_metadata(ytdlp_executable: &str, url: &str) -> Result<VideoMetadata, String> {
     let mut command = Command::new(ytdlp_executable);
     hide_command_window(&mut command);
-    // Same frozen-Python buffering caveat as the fetch; harmless here.
     command.env("PYTHONUNBUFFERED", "1");
     command.args([
         "--ignore-config",
@@ -602,11 +533,6 @@ fn probe_video_metadata(ytdlp_executable: &str, url: &str) -> Result<VideoMetada
     Ok(parse_probe_metadata_line(stdout.lines().next().unwrap_or("")))
 }
 
-/// Splits the probe's `live_status<TAB>title<TAB>id` line. Anchored from BOTH ends —
-/// `live_status` off the front, `id` off the back — because the title is arbitrary
-/// uploader text that may itself contain a tab, and a left-to-right split would then
-/// fold the title's tail into `id` and name the output file after it. `live_status`
-/// and `id` are yt-dlp-controlled and tab-free, so the two anchors always hold.
 fn parse_probe_metadata_line(line: &str) -> VideoMetadata {
     let (live_status, rest) = line.split_once('\t').unwrap_or((line, ""));
     let (title, id) = rest.rsplit_once('\t').unwrap_or((rest, ""));
@@ -617,12 +543,6 @@ fn parse_probe_metadata_line(line: &str) -> VideoMetadata {
     }
 }
 
-/// Builds the output stem from probed metadata. The id goes through
-/// `sanitize_recording_name` exactly like the title does: it is yt-dlp's raw
-/// `%(id)s`, and yt-dlp serves hundreds of extractors whose ids are not YouTube's
-/// `[A-Za-z0-9_-]{11}` — one carrying a `:` or a path separator would otherwise build
-/// an invalid Windows path, or one that escapes the recordings folder and dies on the
-/// containment check with nothing useful to show the user.
 fn youtube_output_stem(title: &str, id: &str) -> String {
     let sanitized_title = sanitize_recording_name(title);
     let sanitized_id = sanitize_recording_name(id);
@@ -635,37 +555,13 @@ fn youtube_output_stem(title: &str, id: &str) -> String {
 }
 
 /// How many entries a run announced (`[download] Downloading item 2 of 3` -> 3).
-///
-/// A single-video link never prints this line, so its absence is what "one video"
-/// looks like. It is the only way the fetch can tell that a link held more videos
-/// than it produced files for: yt-dlp reports the run's exit status, not a per-entry
-/// tally, so without this a tweet whose second clip failed to download looks
-/// identical to a tweet that only ever had one.
 fn parse_ytdlp_item_total(line: &str) -> Option<usize> {
     let rest = line.strip_prefix("[download] Downloading item ")?;
     let (_, total) = rest.split_once(" of ")?;
     total.trim().parse().ok()
 }
 
-/// Builds yt-dlp's `-o` value for a caller-precomputed literal path. yt-dlp reads `%`
-/// as the start of a format spec and its docs require `%%` for a literal one, so a
-/// `100% Real` title otherwise dies on "ERROR: Invalid output template". The
-/// directory is escaped alongside the stem — a recordings folder may itself be
-/// `C:\100%\clips` — and the intended `%(ext)s` is appended afterwards, unescaped.
-/// The caller's `expected_output` deliberately keeps its single literal `%`: yt-dlp
-/// writes the UNESCAPED name to disk, and the two must name the same file.
-///
-/// One link is not always one video. A tweet can carry several clips, and its
-/// extractor returns them as a genuine playlist that `--no-playlist` does not
-/// collapse (that flag only picks a video OUT of a playlist a URL points into).
-/// Every entry then renders the same template, so a template naming one fixed file
-/// made entry 1 win and yt-dlp skip the rest as "already downloaded" — the second
-/// clip of a two-clip tweet was downloaded to nowhere, and if the first happened to
-/// be silent the whole import failed with a usable video sitting right there.
-///
-/// `%(playlist_index& {}|)s` appends ` 1`, ` 2`, … for playlist entries and NOTHING
-/// at all for a standalone video, so the ordinary single-video path still produces
-/// exactly `<stem>.<ext>` and `expected_output` still names it.
+/// Builds yt-dlp's `-o` value for a caller-precomputed literal path.
 fn ytdlp_output_template(output_directory: &Path, unique_stem: &str) -> String {
     let literal_path = output_directory.join(unique_stem).display().to_string();
     format!(
@@ -674,21 +570,11 @@ fn ytdlp_output_template(output_directory: &Path, unique_stem: &str) -> String {
     )
 }
 
-/// True when a probed `live_status` marks a stream we must never download.
 fn live_status_is_stream(live_status: &str) -> bool {
     matches!(live_status, "is_live" | "is_upcoming" | "post_live")
 }
 
 /// Owns the import's `youtube-cancel` listener for the whole command.
-///
-/// It is registered before the metadata probe, not inside the fetch: the probe is a
-/// blocking network round-trip, and a Cancel clicked during it would reach no
-/// listener at all and be lost — the download then ran uncancellable.
-///
-/// `Drop` is what unregisters it. A `once` handler is only consumed when it fires, so
-/// every import that completed normally used to leave its handler (and the `Arc` it
-/// pins) registered for the rest of the session; a guard is the only way to also
-/// cover the `?` early-returns between here and the fetch.
 struct CancelListener<R: Runtime> {
     app: AppHandle<R>,
     event_id: EventId,
@@ -727,13 +613,6 @@ impl<R: Runtime> Drop for CancelListener<R> {
 
 /// Why a fetch failed, decided from yt-dlp's own output while that output is still
 /// intact.
-///
-/// Carried as a value rather than a sentence because the caller has to ACT on it: the
-/// JS-runtime challenge is retried, everything else is not. It used to be decided
-/// here, rendered into a sentence, and then decided again by re-reading that
-/// sentence — which stopped working the moment the sentence gained a prefix and a
-/// length cap, because the fatal `ERROR:` line the second read looks for was no
-/// longer at the start of a line, and on a chatty run was no longer present at all.
 enum FetchFailure {
     JsRuntime,
     Livestream,
@@ -743,8 +622,6 @@ enum FetchFailure {
 }
 
 impl FetchFailure {
-    /// The sentence the user reads. Every named reason has one written for it; only
-    /// `Other` falls back to what the tool said.
     fn message(self) -> String {
         match self {
             FetchFailure::JsRuntime => JS_RUNTIME_REJECTED_MESSAGE.to_string(),
@@ -757,12 +634,6 @@ impl FetchFailure {
 }
 
 /// The part of a failed run's output worth showing when nothing else explains it.
-///
-/// Prefers the fatal `ERROR:` lines, and otherwise keeps the END of the text. Which
-/// end is not a detail: yt-dlp opens with progress and warnings and closes with the
-/// line that says what went wrong, so a cap taken from the front reliably shows the
-/// least useful 600 characters of a long failure — the same mistake, one step later,
-/// as the buffer that used to keep only the first 8 KiB.
 fn failure_detail(stderr: &str) -> String {
     let fatal = fatal_stderr_lines(stderr).collect::<Vec<_>>().join("\n");
     let source = if fatal.is_empty() { stderr } else { fatal.as_str() };
@@ -773,12 +644,6 @@ fn failure_detail(stderr: &str) -> String {
     characters[characters.len() - 600..].iter().collect()
 }
 
-/// yt-dlp echoes our own inputs back — the URL it was given, and the output path it
-/// was told to write — so the phrases a classifier looks for can arrive in text the
-/// USER supplied rather than text yt-dlp wrote. A video titled "...premieres in
-/// Hollywood" would otherwise be refused as a livestream, naming a reason that is not
-/// merely unhelpful but false. Removing our own inputs first leaves only what yt-dlp
-/// said about the video, which is the only thing worth classifying.
 fn without_reflected_inputs(stderr: &str, url: &str, stem: &str) -> String {
     let stripped = stderr.replace(url, " ");
     if stem.is_empty() {
@@ -787,26 +652,14 @@ fn without_reflected_inputs(stderr: &str, url: &str, stem: &str) -> String {
     stripped.replace(stem, " ")
 }
 
-/// What a completed yt-dlp fetch produced, or the signal that the user cancelled.
-/// Normally one path — the caller's precomputed `expected_output`, or a same-stem
-/// fallback the resolver found if the literal name was munged — but a link carrying
-/// several videos yields one per entry, in playlist order.
 enum FetchOutcome {
     Completed {
         paths: Vec<PathBuf>,
-        /// One message per entry the link announced but did not produce a file for.
-        /// Normally empty. A run that lands some entries and loses others exits
-        /// non-zero as a whole, so without this the lost ones would leave no trace
-        /// and part of a link would be reported as all of it.
         missing: Vec<String>,
     },
     Cancelled,
 }
 
-/// The sentence shown for an entry that never produced a file, on a run where other
-/// entries did. The run's own output is all there is to go on — yt-dlp does not say
-/// which entry an error belonged to — so this names the condition when it can and
-/// quotes the tool when it cannot.
 fn entry_failure_message(classifiable: &str, stderr: &str) -> String {
     if stderr_indicates_no_audio(classifiable) {
         NO_AUDIO_REJECTED_MESSAGE.to_string()
@@ -825,11 +678,6 @@ fn entry_failure_message(classifiable: &str, stderr: &str) -> String {
 }
 
 /// True when `name` is a file the import owning `stem` produced, or part-produced.
-///
-/// The name must be the stem, then an optional ` <digits>` playlist index, then an
-/// extension. That boundary is the whole point: it tells our own `Cats [ab12] 2.mp3`
-/// apart from an unrelated `Cats [ab12] live.mp3` that a shared recordings folder may
-/// already hold, so a sweep can never reach past this import's own work.
 fn is_own_import_artifact(name: &str, stem: &str) -> bool {
     let Some(remainder) = name.strip_prefix(stem) else {
         return false;
@@ -850,9 +698,6 @@ fn strip_playlist_index(remainder: &str) -> &str {
     &rest[digits..]
 }
 
-/// The playlist index a produced file's name carries (`clip [id] 2.mp3` -> 2), or 0
-/// when it carries none. Orders a multi-video link's files the way the link presents
-/// them rather than the way the filesystem happens to list them.
 fn artifact_playlist_index(name: &str, stem: &str) -> u32 {
     name.strip_prefix(stem)
         .and_then(|remainder| remainder.strip_prefix(' '))
@@ -866,25 +711,6 @@ fn artifact_playlist_index(name: &str, stem: &str) -> u32 {
 }
 
 /// Picks a stem no file already in the recordings folder could belong to.
-///
-/// `unique_path_with_suffix` guarantees `<stem>.mp3` is free, which was the whole
-/// requirement while an import produced exactly that one file. It no longer is: a
-/// link carrying several videos produces `<stem> 1.mp3`, `<stem> 2.mp3`, … and never
-/// takes `<stem>.mp3` at all, so importing the same link a second time would be
-/// handed the same stem again — and the failure sweep, which removes everything the
-/// stem owns, would take the first import's recordings with it.
-///
-/// Exclusive ownership of the stem is the invariant `sweep_import_artifacts` rests
-/// on, so it is established here rather than assumed — and a folder that cannot be
-/// read is an error rather than an empty one. Treating "I could not look" as "nothing
-/// is there" would claim a stem that another import already owns, and the first
-/// failure or Cancel would then sweep that import's recordings away.
-///
-/// Compared case-insensitively, because the target filesystem is. `NARUTO OP [ab].mp3`
-/// and the stem `Naruto OP [ab]` are the same file on Windows, and yt-dlp would find
-/// it "already downloaded" and write nothing. Only the freeness test folds case — the
-/// sweep's own predicate stays byte-exact, since widening what may be DELETED is the
-/// opposite of what is wanted.
 fn unique_import_stem(directory: &Path, base_stem: &str) -> Result<String, String> {
     let base = if base_stem.is_empty() {
         "youtube"
@@ -917,14 +743,6 @@ fn unique_import_stem(directory: &Path, base_stem: &str) -> Result<String, Strin
 }
 
 /// True when this is the file a fetch set out to produce.
-///
-/// Only `.mp3`, because `--audio-format mp3` produces nothing else. Accepting the
-/// other audio containers looked harmless and was not: `-x` downloads the source
-/// first and converts second, so a failed extract leaves the untouched download —
-/// often a `.webm` or `.m4a` — sitting under this import's own stem. Counting that as
-/// the produced recording turned a failed run into a reported success AND put a
-/// container in the Library that whisper cannot read and that the local-import path
-/// would have refused.
 fn is_produced_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
@@ -933,13 +751,6 @@ fn is_produced_audio(path: &Path) -> bool {
 }
 
 /// Resolves the audio files a fetch produced, in playlist order.
-///
-/// Normally there is exactly one and it is exactly `expected_output`. A link carrying
-/// several videos writes one numbered file per entry instead (see
-/// `ytdlp_output_template`), and those are found by the same ownership test, so a
-/// produced download is never reported as missing.
-///
-/// Empty means nothing was produced — a filter/livestream skip on a clean exit.
 fn resolve_downloaded_audio_files(output_directory: &Path, expected_output: &Path) -> Vec<PathBuf> {
     let Some(stem) = expected_output.file_stem().and_then(|value| value.to_str()) else {
         return Vec::new();
@@ -966,10 +777,6 @@ fn resolve_downloaded_audio_files(output_directory: &Path, expected_output: &Pat
     produced.into_iter().map(|(_, path)| path).collect()
 }
 
-/// Validates a user-supplied import URL with a light parse: it must carry an
-/// `http`/`https` scheme and a non-empty host. Returns the trimmed URL (original
-/// case preserved) so it can be handed to yt-dlp verbatim as a single argv
-/// element — the URL never reaches a shell.
 fn validate_import_url(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -992,12 +799,6 @@ fn validate_import_url(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-/// Parses a progress line into a 0..=100 percent. The `download:` in a
-/// `--progress-template "download:…"` is yt-dlp's *type selector* — it is consumed,
-/// never emitted — so the template prefixes an explicit `YTDLP_PCT` marker that DOES
-/// reach stdout. The emitted line is e.g. `YTDLP_PCT   42.3%`; we strip the marker
-/// and the trailing `%`. Anything unparseable (`N/A`, ANSI colouring) is treated as
-/// "no update" and yields `None`.
 fn parse_ytdlp_progress_line(line: &str) -> Option<f64> {
     let rest = line.trim().strip_prefix("YTDLP_PCT")?;
     let value = rest
@@ -1009,20 +810,6 @@ fn parse_ytdlp_progress_line(line: &str) -> Option<f64> {
     (value.is_finite() && (0.0..=100.0).contains(&value)).then_some(value)
 }
 
-/// Builds the yt-dlp argument list. Kept pure so the profile can be asserted
-/// without spawning yt-dlp. `output_template` is a caller-precomputed, guaranteed
-/// unique path (`…/<stem>.%(ext)s`), so the final file lands at a location we
-/// already know — there is no `--print` to parse back off stdout.
-///
-/// The `--progress-template` emits an explicit `YTDLP_PCT` marker and, crucially,
-/// ends in a literal `\n` so each progress render is its own line — that is what
-/// lets the stdout drain yield one update per line without passing `--newline`.
-///
-/// Hardening: `--ignore-config`/`--no-config-locations` lead so a stray
-/// `yt-dlp.conf` (beside the binary or in the user config path) can never merge
-/// in options like `--exec`; `--match-filter "!is_live"` rejects never-ending
-/// livestreams; `--max-filesize` bounds a hostile/huge download; and a literal
-/// `--` seals the URL as a positional argument even if validation were bypassed.
 fn ytdlp_fetch_args(
     output_template: &str,
     ffmpeg_location: Option<&str>,
@@ -1039,19 +826,6 @@ fn ytdlp_fetch_args(
         "-x".into(),
         "--audio-format".into(),
         "mp3".into(),
-        // A CONSTANT bitrate, matching what this app's own conversions produce, and the
-        // reason is seeking rather than quality.
-        //
-        // yt-dlp's default is `--audio-quality 5`, which is LAME VBR. In a variable-bitrate
-        // MP3 there is no fixed relationship between a byte offset and a moment in time, so
-        // the webview's audio element estimates one — and the error grows the further into
-        // the file you seek. That is why per-sentence playback drifted late in a recording
-        // while the transcript's own timestamps were exact: mining cuts with ffmpeg, which
-        // decodes forward to the real position, but playback can only ask the browser.
-        //
-        // Measured on this library: YouTube imports probe at 109 and 116 kbps, neither of
-        // them a nominal rate. At a constant 128k the byte offset is exactly proportional to
-        // time and the estimate cannot be wrong.
         "--audio-quality".into(),
         "128K".into(),
     ];
@@ -1060,13 +834,6 @@ fn ytdlp_fetch_args(
         args.push(location.to_string());
     }
     args.extend([
-        // The trailing `\n` is essential: it forces one newline-terminated line per
-        // progress render so the stdout loop reads updates as they stream. NB: no
-        // `--restrict-filenames`. `output_template` is an already-sanitized,
-        // caller-precomputed literal path; that flag would rewrite the literal
-        // (spaces→underscores, brackets/non-ASCII stripped) so the produced file's
-        // name would no longer equal `expected_output` — the file would then be
-        // "missing" and the import fail. yt-dlp writes the literal path verbatim.
         "--progress-template".into(),
         "YTDLP_PCT %(progress._percent_str)s\n".into(),
         "-o".into(),
@@ -1077,11 +844,6 @@ fn ytdlp_fetch_args(
     args
 }
 
-/// True when `candidate` resolves to a location inside `root`. Both sides are
-/// canonicalized (resolving `..`, symlinks, and Windows verbatim prefixes) so a
-/// crafted output template can never smuggle the produced file outside the
-/// recordings folder. A candidate that cannot be canonicalized is treated as
-/// outside — it is refused rather than registered.
 fn path_is_within(root: &Path, candidate: &Path) -> bool {
     match (root.canonicalize(), candidate.canonicalize()) {
         (Ok(root), Ok(candidate)) => candidate.starts_with(&root),
@@ -1089,24 +851,6 @@ fn path_is_within(root: &Path, candidate: &Path) -> bool {
     }
 }
 
-/// Runs yt-dlp to completion, emitting a `youtube-progress` percent per line, and
-/// BLOCKS until the download finishes. `output_template` (`…/<stem>.%(ext)s`) and
-/// `expected_output` (`…/<stem>.mp3`) are precomputed and collision-proof, so the
-/// fetch never has to parse the produced path back off stdout: on a clean exit it
-/// just resolves `expected_output`.
-///
-/// This mirrors vibe's proven downloader: `cancel` is the caller's `AtomicBool`, fed
-/// by the `youtube-cancel` listener it registered before the probe; stdout and stderr
-/// are each drained on their own thread (stderr into a bounded buffer, so a chatty
-/// one can never fill the pipe and wedge yt-dlp); this thread then waits, reaps the
-/// child, and joins both. Every path reaches `wait()`, so the command always returns
-/// cleanly — the frontend `await` resolves.
-///
-/// The stdout drain is a thread rather than a loop on this thread because the cancel
-/// flag could otherwise only be read when a line happened to arrive: the post-download
-/// ffmpeg `--extract-audio` phase and a stalled network are both minutes of silence in
-/// which Cancel did nothing. Waiting on a channel instead lets this thread wake on a
-/// timer regardless of what the pipe is doing.
 fn fetch_youtube_audio<R: Runtime>(
     app: &AppHandle<R>,
     cancel: Arc<AtomicBool>,
@@ -1121,8 +865,6 @@ fn fetch_youtube_audio<R: Runtime>(
 
     let mut command = Command::new(ytdlp_executable);
     hide_command_window(&mut command);
-    // yt-dlp is a PyInstaller-frozen Python binary; `PYTHONUNBUFFERED=1` keeps its
-    // stdout unbuffered so progress lines flush as they happen rather than in a burst.
     command.env("PYTHONUNBUFFERED", "1");
     command
         .args(&args)
@@ -1139,17 +881,9 @@ fn fetch_youtube_audio<R: Runtime>(
         FetchFailure::Other("yt-dlp produced no stderr stream.".to_string())
     })?;
 
-    // stderr carries only error/warning text for this invocation; drain it on its
-    // own thread into a bounded buffer so a chatty stderr can never fill the pipe
-    // and block yt-dlp. Joined after the child is reaped.
     let stderr_buffer: Arc<Mutex<StderrTail>> = Arc::new(Mutex::new(StderrTail::default()));
     let stderr_sink = Arc::clone(&stderr_buffer);
     let stderr_thread = thread::spawn(move || {
-        // Through `drain_lines`, because a bad byte must not end this drain: yt-dlp is
-        // frozen Python whose stdio encoding follows the console codepage (it reports
-        // `out cp1252` on this machine), so a non-ASCII video title is enough to produce
-        // one — and stopping here would stop collecting the very output a failure is
-        // explained from.
         for line in drain_lines(stderr) {
             if let Ok(mut sink) = stderr_sink.lock() {
                 sink.push(line);
@@ -1157,24 +891,13 @@ fn fetch_youtube_audio<R: Runtime>(
         }
     });
 
-    // Drain stdout on its own thread, emitting a plain percent number on
-    // `youtube-progress` per `YTDLP_PCT …%` line. It never sends on the channel:
-    // dropping the `Sender` when the drain ends IS the signal, so the wait below
-    // returns `Disconnected` the moment yt-dlp closes stdout.
     let (done_sender, done_receiver) = mpsc::channel::<()>();
     let app_for_stdout = app.clone();
-    // Written by the drain as yt-dlp announces entries, read once the child is reaped.
     let announced_entries = Arc::new(AtomicUsize::new(0));
     let announced_sink = Arc::clone(&announced_entries);
     let stdout_thread = thread::spawn(move || {
         let _done_sender = done_sender;
-        // Ending this drain early is worse than losing text: this thread owns the EOF
-        // signal, so the sender drops, the wait loop below breaks on `Disconnected` and
-        // stops polling the cancel flag, and the import blocks in `wait()` on a child
-        // that is still downloading and can no longer be cancelled.
         for line in drain_lines(stdout) {
-            // Every `\r`, not just a trailing one: a stalled render can pack several
-            // progress updates into one line, and the parser reads from the start.
             let line = line.replace('\r', "");
             let line = line.trim();
             if let Some(percent) = parse_ytdlp_progress_line(line) {
@@ -1186,21 +909,11 @@ fn fetch_youtube_audio<R: Runtime>(
         }
     });
 
-    // Wake every tick regardless of whether the pipe said anything, so Cancel lands
-    // during the silent ffmpeg extract phase too. The interval is short enough that
-    // Cancel feels instant and long enough that the poll costs nothing.
     loop {
         match done_receiver.recv_timeout(CANCEL_POLL_INTERVAL) {
-            // The drain thread dropped its sender: stdout hit EOF, so yt-dlp has
-            // closed its pipes and `wait` below will reap it immediately.
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if cancel.load(Ordering::Relaxed) {
-                    // Sweep the tree FIRST, while yt-dlp is still alive: `taskkill /T`
-                    // walks to the ffmpeg grandchild through its parent, and killing
-                    // yt-dlp beforehand would orphan ffmpeg out of that walk. Then kill
-                    // yt-dlp directly as the backstop — that one cannot fail to land,
-                    // so `wait` below always returns even if `taskkill` did nothing.
                     kill_process_tree(child.id());
                     let _ = child.kill();
                     break;
@@ -1209,8 +922,6 @@ fn fetch_youtube_audio<R: Runtime>(
         }
     }
 
-    // Reap on EVERY path — a killed child still has to be waited on — and only then
-    // join the drains, which end as soon as the reaped process's pipes close.
     let exit_status = child
         .wait()
         .map_err(|error| FetchFailure::Other(format!("yt-dlp did not exit cleanly: {error}")))?;
@@ -1223,40 +934,26 @@ fn fetch_youtube_audio<R: Runtime>(
         .map(|guard| guard.text().trim().to_string())
         .unwrap_or_default();
 
-    // The stem every file this import produced is named from. Derived the same way
-    // the caller derived it, so the sweep below can only ever reach our own work.
     let unique_stem = expected_output
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or_default();
 
-    // A Cancel reached the child (killed in the loop above and reaped by `wait`):
-    // take everything this import wrote with it — finished entries included, because
-    // a cancelled import leaves nothing behind — and report the cancellation.
     if cancel.load(Ordering::Relaxed) {
         sweep_import_artifacts(output_directory, unique_stem, &[]);
         return Ok(FetchOutcome::Cancelled);
     }
 
-    // Classified against yt-dlp's own words only — see `without_reflected_inputs`.
     let classifiable = without_reflected_inputs(&stderr_text, url, unique_stem);
 
-    // What landed is read BEFORE the exit status, because the two disagree on a link
-    // carrying several videos: one entry can fail (a silent clip) while another
-    // succeeds, and yt-dlp reports non-zero for the run as a whole. Judging by the
-    // exit status alone would sweep away a perfectly good recording sitting right
-    // there. A file outside the recordings folder is refused rather than kept.
     let produced: Vec<PathBuf> = resolve_downloaded_audio_files(output_directory, expected_output)
         .into_iter()
         .filter(|path| path_is_within(output_directory, path))
         .collect();
 
     if !produced.is_empty() {
-        // Whatever else the run wrote — the video a failed extract left whole, a
-        // stranded fragment — goes now, while the produced audio stays.
         sweep_import_artifacts(output_directory, unique_stem, &produced);
-        // An announced entry with no file is one that did not arrive. Counted rather
-        // than inferred from the exit status, which is one value for the whole run.
+
         let shortfall = announced_entries
             .load(Ordering::Relaxed)
             .saturating_sub(produced.len());
@@ -1269,13 +966,9 @@ fn fetch_youtube_audio<R: Runtime>(
         });
     }
 
-    // Nothing usable landed, so nothing this import wrote should outlive it.
     sweep_import_artifacts(output_directory, unique_stem, &[]);
 
     if !exit_status.success() {
-        // The raw stderr is logged before it is translated: every branch below
-        // replaces it with a sentence written for the user, and without this the
-        // reason a link failed would be unrecoverable the moment it was rendered.
         log_event(
             app,
             "WARN",
@@ -1287,18 +980,12 @@ fn fetch_youtube_audio<R: Runtime>(
             }),
         );
 
-        // Upcoming/premiere videos fail on this non-zero-exit path (the filter only
-        // fires for already-live streams).
         if stderr_indicates_livestream(&classifiable) {
             return Err(FetchFailure::Livestream);
         }
-        // A video with no audio track is a normal thing to be handed, and yt-dlp
-        // reports it as an ffprobe malfunction. Say what it is instead.
         if stderr_indicates_no_audio(&classifiable) {
             return Err(FetchFailure::NoAudio);
         }
-        // The retry the caller runs keys off this, so it is decided here — where the
-        // output is whole — rather than re-read from the sentence built below.
         if stderr_indicates_js_runtime(&classifiable) {
             return Err(FetchFailure::JsRuntime);
         }
@@ -1310,11 +997,6 @@ fn fetch_youtube_audio<R: Runtime>(
         }));
     }
 
-    // A clean exit that produced nothing is what a skip looks like — yt-dlp downloads
-    // nothing and exits 0 — so stderr is what distinguishes the skips we can name (a
-    // `--match-filter` livestream rejection, a `--max-filesize` oversize video) from a
-    // genuinely inexplicable empty run. These are NOT scoped to fatal lines: on a
-    // clean exit there is no `ERROR:` line to scope to.
     if stderr_indicates_livestream(&classifiable) {
         Err(FetchFailure::Livestream)
     } else if stderr_indicates_oversize(&classifiable) {
@@ -1330,13 +1012,6 @@ fn fetch_youtube_audio<R: Runtime>(
 
 /// yt-dlp's stderr, bounded so a chatty extractor can never fill the pipe and block
 /// the child, and bounded at the FRONT.
-///
-/// Which end gets dropped decides whether a failure can be explained at all. yt-dlp
-/// prints its warnings while it works and its one fatal `ERROR:` line last, so a
-/// buffer that keeps the first N bytes and discards the rest throws away precisely
-/// the line that says what went wrong — and does it only on the chattiest runs,
-/// which is the kind of failure hardest to reproduce on purpose. Dropping the oldest
-/// lines instead keeps the end of the run, which is the part that explains it.
 #[derive(Default)]
 struct StderrTail {
     lines: VecDeque<String>,
@@ -1349,8 +1024,6 @@ impl StderrTail {
     fn push(&mut self, line: String) {
         self.bytes += line.len() + 1;
         self.lines.push_back(line);
-        // Never empties itself: one line longer than the cap is still the best
-        // account of the failure we have.
         while self.bytes > Self::MAX_BYTES && self.lines.len() > 1 {
             if let Some(dropped) = self.lines.pop_front() {
                 self.bytes -= dropped.len() + 1;
@@ -1371,10 +1044,6 @@ impl StderrTail {
 /// silent. This bounds how long Cancel can appear to do nothing.
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Best-effort kill of the whole process tree rooted at `pid`. yt-dlp spawns
-/// ffmpeg as a child for `--extract-audio`; a bare `child.kill()` leaves that
-/// grandchild running on Windows, so we `taskkill /T` the tree. Errors are
-/// swallowed: the process may already be gone, which is the desired end state.
 #[cfg(target_os = "windows")]
 fn kill_process_tree(pid: u32) {
     let mut command = Command::new("taskkill");
@@ -1387,23 +1056,6 @@ fn kill_process_tree(pid: u32) {
 #[cfg(not(target_os = "windows"))]
 fn kill_process_tree(_pid: u32) {}
 
-/// Best-effort sweep of everything this import put in the recordings folder,
-/// after a cancellation or a failure. yt-dlp writes `.part` (and fragment/temp)
-/// files it only renames on success, so a mid-download kill can strand them.
-///
-/// It also removes what a FAILED extract leaves whole. `-x` downloads the video
-/// first and converts second, so a postprocessor that gives up returns a non-zero
-/// exit with the full `<stem>.mp4` still on disk — invisible to the Library, which
-/// reads only audio, but real on the user's disk, and worse than dead weight: the
-/// next attempt at the same link recomputes the same stem (uniqueness is checked
-/// against `.mp3`, which is absent), so yt-dlp finds that file already downloaded,
-/// skips the fetch, and fails again on the stale copy for as long as it sits there.
-///
-/// Scoped to THIS import's own files, and never run without a stem. The recordings
-/// folder is user-configurable and may well be a shared one (Downloads), where an
-/// unrelated in-flight `movie.mp4.part` is none of our business — `keep` holds the
-/// files a partly-successful run produced, which must survive the tidy-up of the
-/// entries beside them that did not.
 fn sweep_import_artifacts(directory: &Path, stem: &str, keep: &[PathBuf]) {
     if stem.is_empty() {
         return;
@@ -1427,11 +1079,6 @@ fn sweep_import_artifacts(directory: &Path, stem: &str, keep: &[PathBuf]) {
     }
 }
 
-/// Probes and registers a freshly fetched YouTube file into the library, exactly
-/// like a local import but tagged with its origin URL. `ffmpeg_executable` is the
-/// path the caller already resolved to build `--ffmpeg-location`: detection walks the
-/// managed-install tree and PATH, and running it a second time per import buys
-/// nothing.
 fn register_youtube_recording<R: Runtime>(
     app: &AppHandle<R>,
     ffmpeg_executable: Option<&str>,
@@ -1478,8 +1125,6 @@ fn register_youtube_recording<R: Runtime>(
         created_at_ms: now_ms(),
         source: Some("youtube".into()),
         source_url: Some(source_url.to_string()),
-        // Falls back to the bare STEM, never the file name: a probe-failed import
-        // would otherwise be the only entry in the Library wearing a `.mp3`.
         title: title.or(Some(file_stem)),
     };
 
@@ -1487,9 +1132,6 @@ fn register_youtube_recording<R: Runtime>(
     Ok(recording)
 }
 
-/// Turns a fetch failure into the failed single-item batch the frontend renders.
-/// Cancellation is not a hard error, so this returns `Ok` with a failed item rather
-/// than `Err`.
 fn finish_youtube_failure<R: Runtime>(
     app: &AppHandle<R>,
     source_url: &str,
@@ -1520,10 +1162,6 @@ fn finish_youtube_failure<R: Runtime>(
     })
 }
 
-/// Turns a cancelled import into the single-item batch the frontend renders. A Cancel
-/// is a user action rather than an error, so like `finish_youtube_failure` this
-/// returns `Ok`. Shared by both cancel points — during the metadata probe and
-/// mid-download — so the two report identically.
 fn finish_youtube_cancelled<R: Runtime>(
     app: &AppHandle<R>,
     source_url: &str,
@@ -1570,8 +1208,6 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
         .filter(|_| ytdlp_detection.status == "ready")
         .ok_or_else(|| YTDLP_REQUIRED_MESSAGE.to_string())?;
 
-    // --extract-audio needs ffmpeg; pass its directory to yt-dlp so a managed
-    // install (not on PATH) is still found.
     let ffmpeg_executable = detect_local_ffmpeg(&settings)
         .executable_path
         .ok_or_else(|| YOUTUBE_FFMPEG_REQUIRED_MESSAGE.to_string())?;
@@ -1584,23 +1220,10 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
     ensure_directory_exists(&output_directory)
         .map_err(|error| format!("Could not open the recordings folder: {error}"))?;
 
-    // Registered here, before the probe, and unregistered by its `Drop` on every exit
-    // below — including the `?`s. The probe is a blocking network round-trip, so a
-    // listener that only existed for the download would miss a Cancel clicked during
-    // it entirely.
     let cancel_listener = CancelListener::register(app);
 
-    // One up-front probe does double duty. First, refuse a live/upcoming/premiere
-    // stream before downloading anything (`--match-filter "!is_live"` stays as a
-    // backstop, but it only catches already-live streams and its clean-exit rejection
-    // is easy to miss). Second, it returns the title and id used to pin a
-    // collision-proof output path. A probe that errors (flaky network, region block)
-    // is advisory: we fall through to the normal fetch rather than block a normal
-    // video — unless its stderr clearly names a livestream, which we still refuse.
     let probe = probe_video_metadata(&ytdlp_executable, &normalized_url);
 
-    // Honour a Cancel that arrived while the probe was blocked, rather than spending a
-    // whole download on a video the user already walked away from.
     if cancel_listener.is_cancelled() {
         return finish_youtube_cancelled(app, &normalized_url);
     }
@@ -1613,9 +1236,6 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
             Some(metadata)
         }
         Err(stderr) => {
-            // Against yt-dlp's words, not the URL it quotes back: a pasted link whose
-            // slug happens to read "...is-not-live..." would otherwise be refused as a
-            // livestream before anything was even attempted.
             if stderr_indicates_livestream(&without_reflected_inputs(&stderr, &normalized_url, "")) {
                 return Err(LIVESTREAM_REJECTED_MESSAGE.to_string());
             }
@@ -1623,48 +1243,24 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
         }
     };
 
-    // Precompute a guaranteed-unique output path from the probed title+id, the way
-    // a local import does with `unique_path_with_suffix`. This is what makes two
-    // imports of the same video (or two same-titled videos) land on DISTINCT paths
-    // instead of colliding into one library entry. yt-dlp gets a FIXED `-o` — a
-    // literal stem, not a `%(title)s [%(id)s]` template — so the final file lands
-    // exactly where we expect and no path has to be parsed back off stdout.
     let (video_title, output_stem) = match &metadata {
         Some(metadata) => {
-            // The stem is sanitized for the filesystem; the stored title keeps the
-            // uploader's original text, punctuation and all.
             let title = (!metadata.title.trim().is_empty())
                 .then(|| metadata.title.trim().to_string());
             (title, youtube_output_stem(&metadata.title, &metadata.id))
         }
-        // The probe failed but wasn't a livestream: proceed with a generic stem
-        // (uniqueness is still guaranteed by the suffixing below) and let the title
-        // fall back to the final file name.
         None => (None, "youtube".to_string()),
     };
 
-    // The stem must own nothing that already exists, not merely leave `<stem>.mp3`
-    // free — everything named from it is this import's to clean up on failure.
     let unique_stem = unique_import_stem(&output_directory, &output_stem)?;
     let expected_output = output_directory.join(format!("{unique_stem}.mp3"));
     let output_template = ytdlp_output_template(&output_directory, &unique_stem);
 
-    // Single-flight is now the frontend's sequential import loop; cancellation is
-    // the `youtube-cancel` event and the `CancelListener` flag registered above,
-    // before the probe. There is no shared control slot or model-download snapshot
-    // on this path anymore — that machinery is what kept the command from returning
-    // cleanly. Progress is streamed as `youtube-progress` events; the shell just
-    // shows a status line.
     update_shell_snapshot(app, |shell| {
         shell.status_text = "Importing audio from the link…".into();
         shell.transition_count += 1;
     })?;
 
-    // YouTube intermittently serves an `nsig` JS challenge yt-dlp can't solve without
-    // a JavaScript runtime; the same URL typically succeeds on a later attempt (the
-    // user confirmed a manual redo works). Auto-retry that specific failure a couple
-    // of times before surfacing it, so a transient challenge needs no manual redo. Any
-    // other failure — and a Cancel — breaks out immediately.
     const MAX_JS_RUNTIME_ATTEMPTS: usize = 3;
     let mut attempt = 0;
     let fetch_result = loop {
@@ -1699,9 +1295,6 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
 
     match fetch_result {
         Ok(FetchOutcome::Completed { paths, missing }) => {
-            // Normally one file. A link that carried several videos registers each on
-            // its own, so one unusable entry costs only itself — the same shape the
-            // multi-file local import already reports.
             let mut items = Vec::new();
             let mut first_failure: Option<String> = None;
 
@@ -1756,9 +1349,6 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
                 }
             }
 
-            // Entries the link announced that never produced a file. They failed
-            // inside yt-dlp rather than during registration, so nothing above has seen
-            // them — and a link that delivered half its videos must not read as whole.
             for message in missing {
                 log_event(
                     app,
@@ -1777,16 +1367,12 @@ pub(crate) fn import_youtube_inner<R: Runtime>(
             let succeeded = items.iter().filter(|item| item.status == "success").count();
             let failed = items.len() - succeeded;
 
-            // Nothing registered at all is a failed import, not an import of zero
-            // things, and it must reach the same failure reporting as a failed fetch.
             if succeeded == 0 {
                 let message = first_failure
                     .unwrap_or_else(|| "yt-dlp finished but did not produce an audio file.".into());
                 return finish_youtube_failure(app, &normalized_url, message);
             }
 
-            // The single-video wording is the file's own name, which is what a link
-            // import has always said and what nearly every link still produces.
             let message = match (succeeded, failed) {
                 (1, 0) => items
                     .iter()
@@ -1871,7 +1457,6 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "-vn"));
         assert!(args.iter().any(|arg| arg == "libmp3lame"));
         assert!(args.iter().any(|arg| arg == "128k"));
-        // Never block on stdin inside a spawned command.
         assert!(args.iter().any(|arg| arg == "-nostdin"));
     }
 
@@ -1885,7 +1470,6 @@ mod tests {
             ffprobe_path_for("/usr/local/bin/ffmpeg"),
             PathBuf::from("/usr/local/bin/ffprobe")
         );
-        // A bare PATH lookup stays a bare PATH lookup.
         assert_eq!(ffprobe_path_for("ffmpeg"), PathBuf::from("ffprobe"));
     }
 
@@ -2007,10 +1591,6 @@ mod tests {
             .expect("--audio-format present");
         assert_eq!(with_ffmpeg[format + 1], "mp3");
         assert!(with_ffmpeg.iter().any(|arg| arg == "--no-playlist"));
-        // Progress is emitted on stdout with an explicit `YTDLP_PCT` marker, and the
-        // template MUST end in a literal newline so each render is its own line the
-        // blocking stdout loop can read (the mechanism that keeps updates flowing
-        // without `--newline`).
         let progress = with_ffmpeg
             .iter()
             .position(|arg| arg == "--progress-template")
@@ -2025,7 +1605,6 @@ mod tests {
         assert!(!with_ffmpeg.iter().any(|arg| arg == "--restrict-filenames"));
         // The path is precomputed and fixed, so no `--print` is parsed back.
         assert!(!with_ffmpeg.iter().any(|arg| arg == "--print"));
-        // Config files must never merge in (e.g. a malicious --exec).
         assert!(with_ffmpeg.iter().any(|arg| arg == "--ignore-config"));
         assert!(with_ffmpeg.iter().any(|arg| arg == "--no-config-locations"));
         // Livestreams and oversized downloads are rejected.
@@ -2061,11 +1640,6 @@ mod tests {
     }
 
     /// A constant bitrate, because seeking depends on it.
-    ///
-    /// yt-dlp defaults to VBR, and in a VBR mp3 a byte offset does not map to a fixed moment
-    /// — the browser estimates one, and the estimate drifts further the later you seek. That
-    /// is the difference between a mined clip (cut by ffmpeg, decoded forward to the real
-    /// position) and per-sentence playback (which can only ask the audio element).
     #[test]
     fn youtube_audio_is_fetched_at_a_constant_bitrate() {
         let args = ytdlp_fetch_args("out.%(ext)s", None, "https://youtu.be/abc");
@@ -2089,10 +1663,6 @@ mod tests {
             vec![exact.clone()]
         );
 
-        // Same stem, but NOT the file the fetch asked for. `-x` downloads the source
-        // and converts second, so a same-stem `.opus`/`.webm`/`.m4a` is the untouched
-        // download a FAILED extract left behind. Counting it would report the failure
-        // as a success and put a container in the Library whisper cannot read.
         let expected = dir.path().join("song [id2].mp3");
         let leftover = dir.path().join("song [id2].opus");
         std::fs::write(&leftover, b"a").unwrap();
@@ -2116,7 +1686,6 @@ mod tests {
         // The video a failed extract left whole is not audio, so it is never returned
         // as a recording however it is named.
         let leftover_video = dir.path().join("tweet [id] 3.mp4");
-        // A different recording that merely starts with the same characters.
         let bystander = dir.path().join("tweet [id] extra.mp3");
         for path in [&second, &tenth, &first, &leftover_video, &bystander] {
             std::fs::write(path, b"a").unwrap();
@@ -2135,8 +1704,6 @@ mod tests {
         let output_directory = PathBuf::from("C:\\100%\\recordings");
         let template = ytdlp_output_template(&output_directory, "100% Real [abc123]");
 
-        // The extension spec is the only `%` yt-dlp is meant to parse, so it must
-        // survive the escaping untouched and unescaped.
         let literal = template
             .strip_suffix("%(playlist_index& {}|)s.%(ext)s")
             .expect("the template ends in the index and extension specs");

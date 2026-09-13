@@ -77,8 +77,6 @@ fn default_settings<R: Runtime>(
 }
 
 fn first_run_state(settings: AppSettings) -> PersistedData {
-    // Spread the derived default so a collection added later starts empty here too, rather
-    // than making first-run the one place that has to be remembered.
     PersistedData {
         settings,
         ..PersistedData::default()
@@ -86,16 +84,6 @@ fn first_run_state(settings: AppSettings) -> PersistedData {
 }
 
 /// Moves an unparseable state file aside instead of letting it be overwritten.
-///
-/// Falling back to defaults is not a recovery: startup writes the defaults straight
-/// back over `state.json`, so the library and every setting are gone for good the
-/// moment the app opens. It also compounds — the reset restores the DEFAULT
-/// `output_directory`, so `reconcile_recording_history` then sweeps the wrong
-/// folder and recovers nothing from the real one. Keeping the bytes under a
-/// timestamped name is what makes the library recoverable by hand.
-///
-/// Best-effort by design: a rename that fails must not stop the app from starting,
-/// but it is logged at ERROR either way so the loss is never silent.
 fn preserve_unparseable_state_file(paths: &AppPathsState, reason: &str) {
     let backup_path = paths
         .state_file
@@ -125,9 +113,6 @@ pub(crate) fn load_persisted_data<R: Runtime>(
 ) -> Result<PersistedData, tauri::Error> {
     let defaults = default_settings(app, paths)?;
 
-    // Note the deliberate split: no file at all is a genuine first run and defaults
-    // are the right answer silently, but a file that is present and unreadable is a
-    // problem the user has to be told about and be able to recover from.
     let mut state = match fs::read_to_string(&paths.state_file) {
         Ok(raw) => match serde_json::from_str::<PersistedData>(&raw) {
             Ok(state) => state,
@@ -138,9 +123,6 @@ pub(crate) fn load_persisted_data<R: Runtime>(
         },
         Err(error) if error.kind() == ErrorKind::NotFound => first_run_state(defaults.clone()),
         Err(error) => {
-            // Present but unreadable (locked, permissions). The contents are fine, so
-            // there is nothing to move aside — but this session still starts with an
-            // empty library and will persist it, so say so.
             crate::logging::write(
                 &paths.log_file,
                 "ERROR",
@@ -165,27 +147,7 @@ pub(crate) fn load_persisted_data<R: Runtime>(
 }
 
 /// Writes a JSON file atomically: temp file, flush, rename over the original.
-///
-/// `state.json` is the demanding caller and the reason this exists: it is the only
-/// copy of the recording library, rewritten on every history mutation, so a plain
-/// `fs::write` — which truncates the real file first — would leave well-formed
-/// looking but truncated JSON after a crash between the truncate and the flush, and
-/// the whole library gone. `known_words.txt` reuses it for the same guarantee.
-/// Same temp+rename shape `asset_downloads::transfer` uses for downloads.
-///
-/// The `sync_all` is load-bearing, not belt and braces. The rename is atomic with
-/// respect to the directory entry only; without the flush it can commit while the
-/// temp file's bytes are still in the page cache, and a power loss then leaves the
-/// file's NEW name over the OLD file's unwritten contents — exactly the
-/// truncated-JSON case the temp file exists to prevent. Windows' MoveFileEx (what
-/// `fs::rename` uses) does not flush the source for us. The parent directory is
-/// not synced: there is no portable handle for that on Windows, and NTFS journals
-/// the rename itself.
 pub(crate) fn write_file_atomically(path: &Path, contents: &str) -> Result<(), String> {
-    // Built by appending to the whole file name rather than by replacing the
-    // extension: `state.json` still writes through `state.json.tmp` exactly as
-    // before, and a file that is not JSON gets a temp file named after itself
-    // instead of one claiming an extension it does not have.
     let temp_path = match path.file_name() {
         Some(name) => {
             let mut temp_name = name.to_os_string();
@@ -205,9 +167,6 @@ pub(crate) fn write_file_atomically(path: &Path, contents: &str) -> Result<(), S
     })();
 
     if result.is_err() {
-        // A stranded temp file would be retried into on the next write anyway, but
-        // leaving a half-written `.tmp` beside the real one is confusing to anyone
-        // recovering by hand.
         let _ = fs::remove_file(&temp_path);
     }
 
