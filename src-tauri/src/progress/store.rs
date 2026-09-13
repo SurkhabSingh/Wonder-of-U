@@ -210,7 +210,6 @@ pub(crate) fn ensure(path: &Path, today: DayKey, now_ms: u64) -> Result<(), Stri
 
 /// Adds `delta` to the days already on disk. Read-modify-write, so two writers of the
 /// same day accumulate rather than one overwriting the other.
-#[allow(dead_code)]
 pub(crate) fn merge_days(path: &Path, delta: &Ledger) -> Result<(), String> {
     let _guard = WRITE.lock();
     let (header, mut store) = match load(path) {

@@ -439,6 +439,7 @@ pub(crate) async fn start_watch_session(
             subtitle_path.as_deref().map(Path::new),
             resume_position_ms,
         )?;
+        crate::progress::watch_sampler::spawn_watch_sampler(&app);
 
         // Re-apply the overlay setting to the player that just started.
         set_scanner_overlay_enabled(&app, settings.scanner.overlay_enabled)?;

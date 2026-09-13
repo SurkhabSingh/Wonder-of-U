@@ -421,6 +421,63 @@ pub(crate) fn watch_snapshot() -> Result<WatchSnapshot, String> {
     Ok(snapshot)
 }
 
+/// What one look at the watch session found.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Playback {
+    Live {
+        playing: bool,
+        position_ms: u64,
+        speed: f64,
+    },
+    /// Someone else holds the session. It is not gone, and a caller must not end on it.
+    Busy,
+    /// No session, mpv has exited, or the lock is poisoned.
+    Gone,
+}
+
+/// Reads only what immersion needs, and tears nothing down.
+///
+/// `watch_snapshot` owns the teardown; a second owner racing to null the same guard is how
+/// one of them ends a session the other is still using. A property answering null means the
+/// file is not open yet, which is not the same as the session being gone.
+pub(crate) fn playback_probe() -> Playback {
+    let mut session_guard = match SESSION.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::WouldBlock) => return Playback::Busy,
+        Err(std::sync::TryLockError::Poisoned(_)) => return Playback::Gone,
+    };
+    let Some(session) = session_guard.as_mut() else {
+        return Playback::Gone;
+    };
+    if matches!(session.child.try_wait(), Ok(Some(_))) {
+        return Playback::Gone;
+    }
+
+    let connection = &mut session.connection;
+    let Some(position_ms) = connection.optional_seconds_ms("time-pos") else {
+        return Playback::Live {
+            playing: false,
+            position_ms: 0,
+            speed: 1.0,
+        };
+    };
+    let paused = connection
+        .property("pause")
+        .ok()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let speed = connection
+        .property("speed")
+        .ok()
+        .and_then(|value| value.as_f64())
+        .unwrap_or(1.0);
+    Playback::Live {
+        playing: !paused,
+        position_ms,
+        speed,
+    }
+}
+
 /// Jumps the player to `position_ms`.
 pub(crate) fn seek_watch_session(position_ms: u64) -> Result<(), String> {
     let mut session_guard = SESSION
@@ -504,6 +561,44 @@ pub(crate) fn stop_watch_session() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// With no session there is nothing to read, and the probe must say so without
+    /// touching the pid that finds mpv's window.
+    #[test]
+    fn a_probe_with_no_session_reports_gone_and_writes_nothing() {
+        let restore = watch_session_pid();
+        set_session_pid(Some(4242));
+        assert!(matches!(playback_probe(), Playback::Gone));
+        assert_eq!(
+            watch_session_pid(),
+            Some(4242),
+            "the probe reads; watch_snapshot owns the teardown"
+        );
+        set_session_pid(restore);
+    }
+
+    /// A tick that cannot take the session must be told to wait, not that the player is
+    /// gone: blocking here parks the thread behind watch_snapshot's nine round trips.
+    #[test]
+    fn a_held_session_reports_busy_rather_than_gone() {
+        let held = SESSION.lock().expect("the session lock");
+        assert_eq!(playback_probe(), Playback::Busy);
+        drop(held);
+    }
+
+    /// Busy and Gone are different answers: one means wait, the other means stop.
+    #[test]
+    fn the_three_outcomes_are_told_apart() {
+        assert_ne!(Playback::Busy, Playback::Gone);
+        assert_ne!(
+            Playback::Live {
+                playing: true,
+                position_ms: 0,
+                speed: 1.0,
+            },
+            Playback::Gone
+        );
+    }
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
 
