@@ -387,6 +387,33 @@ pub(crate) async fn load_progress(app: AppHandle) -> Result<ProgressReport, Stri
         .map_err(|error| error.to_string())?
 }
 
+/// One reading of the audio element. Video is not reportable from the frontend: mpv is
+/// sampled in Rust, and a second writer for that surface would double-count the same
+/// minutes. `Instant::now()` is taken before the hop to the pool, where samples can swap.
+#[tauri::command]
+pub(crate) async fn record_listening_sample(
+    app: AppHandle,
+    playing: bool,
+    position_ms: u64,
+    rate: f64,
+) {
+    let arrived = std::time::Instant::now();
+    let app_for_blocking = app.clone();
+    if let Err(error) = tauri::async_runtime::spawn_blocking(move || {
+        crate::progress::listen_sampler::record(&app_for_blocking, arrived, playing, position_ms, rate);
+    })
+    .await
+    {
+        // Silence here would read as zero immersion forever, beside a healthy status.
+        crate::app_runtime::log_event(
+            &app,
+            "WARN",
+            "progress.sample_rejected",
+            serde_json::json!({ "message": error.to_string() }),
+        );
+    }
+}
+
 /// How many cards in the open collection came from this app.
 #[tauri::command]
 pub(crate) async fn count_mined_cards() -> Result<Measured<usize>, String> {

@@ -1,14 +1,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 use crate::watch::{playback_probe, Playback};
 
 use super::credit::{credit_ms, Credit, ImmersionSource, PlaybackSample};
 use super::day::today;
 use super::ledger::Ledger;
-use super::store::merge_days;
+use super::liveness;
 
 const TICK: Duration = Duration::from_secs(1);
 
@@ -23,10 +23,24 @@ pub(crate) fn spawn_watch_sampler<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     std::thread::spawn(move || {
         let superseded = move || GENERATION.load(Ordering::SeqCst) != generation;
-        run(superseded, TICK, playback_probe, |pending| {
-            flush(&app, pending);
+        run(superseded, TICK, || published(playback_probe()), |pending| {
+            super::flush_days(&app, pending);
         });
     });
+}
+
+/// Publishes what a tick saw, so the audio side can tell the two apart from one stretch.
+/// Wrapped around the probe rather than placed inside `run`, which keeps the loop and its
+/// tests clear of a process-wide flag.
+fn published(playback: Playback) -> Playback {
+    match playback {
+        // A busy tick leaves the last mark standing: the player is alive, someone else is
+        // merely reading it.
+        Playback::Busy => {}
+        Playback::Live { playing, .. } => liveness::mark_watching(playing),
+        Playback::Gone => liveness::mark_watching(false),
+    }
+    playback
 }
 
 /// One session's worth of ticks.
@@ -93,26 +107,9 @@ fn record(pending: &mut Ledger, unflushed_ms: &mut u64, credit: Credit) {
     if credit == Credit::default() {
         return;
     }
-    // Always false for now: nothing else reports playback, so no stretch can overlap.
+    // Overlap is booked once, by the listening side, which knows exactly when it sounded.
     pending.credit(&today(), ImmersionSource::Watching, credit, false);
     *unflushed_ms = unflushed_ms.saturating_add(credit.credited_ms);
-}
-
-/// Clears the delta only on a write that landed, so a failure is retried rather than lost.
-fn flush<R: Runtime>(app: &AppHandle<R>, pending: &mut Ledger) {
-    let path = app
-        .state::<crate::app_types::AppPathsState>()
-        .progress_file
-        .clone();
-    match merge_days(&path, pending) {
-        Ok(()) => *pending = Ledger::default(),
-        Err(reason) => crate::app_runtime::log_event(
-            app,
-            "WARN",
-            "progress.day_flush_failed",
-            serde_json::json!({ "message": reason }),
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -247,6 +244,47 @@ mod tests {
             totals.watching_ms >= 20,
             "the wait ended a stretch instead of joining it: {totals:?}"
         );
+    }
+
+    /// The stretch two sources share is one stretch. Booked here as well as on the
+    /// listening side, it would be subtracted twice and a shared hour would read as none.
+    #[test]
+    fn the_video_side_never_books_overlap() {
+        let _gate = liveness::test_gate();
+        liveness::mark_watching(true);
+        let mut pending = Ledger::default();
+        record(
+            &mut pending,
+            &mut 0,
+            Credit {
+                credited_ms: 1_000,
+                unmeasured_ms: 0,
+            },
+        );
+        let totals = pending.get(&today()).expect("the day is there");
+        assert_eq!(totals.watching_ms, 1_000);
+        assert_eq!(totals.overlap_ms, 0);
+    }
+
+    #[test]
+    fn each_tick_publishes_what_it_saw() {
+        let _gate = liveness::test_gate();
+        let watching_is_live = liveness::watching_is_live;
+
+        published(live(0));
+        assert!(watching_is_live(), "a playing tick");
+        published(Playback::Busy);
+        assert!(watching_is_live(), "a busy tick keeps the last answer");
+        published(Playback::Gone);
+        assert!(!watching_is_live(), "a closed player is not live");
+
+        published(live(0));
+        published(Playback::Live {
+            playing: false,
+            position_ms: 0,
+            speed: 1.0,
+        });
+        assert!(!watching_is_live(), "a paused player is not live");
     }
 
     #[test]

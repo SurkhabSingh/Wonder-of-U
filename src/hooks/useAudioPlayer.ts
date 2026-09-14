@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { reportListening } from "../lib/immersionClock";
 import type { RecentRecording } from "../types";
 
 // The half-open time window of a per-sentence playback. `null` when nothing is
@@ -88,7 +89,18 @@ export function useAudioPlayer(): AudioPlayer {
     const positionMs = () =>
       Math.round(audio.currentTime * 1000) + (clipOffsetMsRef.current ?? 0);
 
+    // Raw element time, never `positionMs()`: the clip offset would land in the evidence
+    // as a jump the moment a sentence clip is loaded.
+    const report = (playing: boolean) =>
+      reportListening(
+        playing,
+        audio.currentTime * 1000,
+        audio.playbackRate,
+        `${recordingRef.current?.filePath ?? ""}#${segmentRequestRef.current}`,
+      );
+
     const handleTimeUpdate = () => {
+      report(!audio.paused);
       if (clipOffsetMsRef.current !== null) {
         setState((prev) => ({ ...prev, currentTimeMs: positionMs() }));
         return;
@@ -131,6 +143,7 @@ export function useAudioPlayer(): AudioPlayer {
           setState((prev) => ({ ...prev, currentTimeMs: positionMs() }));
           return;
         }
+        report(false);
         audio.currentTime = 0;
         setState((prev) => ({
           ...prev,
@@ -160,6 +173,7 @@ export function useAudioPlayer(): AudioPlayer {
         setState((prev) => ({ ...prev, currentTimeMs: repeatStart }));
         return;
       }
+      report(false);
       boundaryMsRef.current = null;
       audio.currentTime = 0;
       setState((prev) => ({
@@ -170,17 +184,22 @@ export function useAudioPlayer(): AudioPlayer {
       }));
     };
     const handlePlay = () => {
+      report(true);
       setState((prev) => ({ ...prev, isPlaying: true }));
     };
     const handlePause = () => {
+      report(false);
       setState((prev) => ({ ...prev, isPlaying: false }));
     };
+    const handleSilence = () => report(false);
 
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
     audio.addEventListener("timeupdate", handleTimeUpdate);
     audio.addEventListener("ended", handleEnded);
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
+    audio.addEventListener("error", handleSilence);
+    audio.addEventListener("stalled", handleSilence);
 
     return () => {
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
@@ -188,6 +207,10 @@ export function useAudioPlayer(): AudioPlayer {
       audio.removeEventListener("ended", handleEnded);
       audio.removeEventListener("play", handlePlay);
       audio.removeEventListener("pause", handlePause);
+      audio.removeEventListener("error", handleSilence);
+      audio.removeEventListener("stalled", handleSilence);
+      // The listeners are gone, so the pause below raises nothing.
+      report(false);
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
@@ -361,6 +384,12 @@ export function useAudioPlayer(): AudioPlayer {
   const stop = useCallback(() => {
     const audio = audioRef.current;
     if (audio) {
+      reportListening(
+        false,
+        audio.currentTime * 1000,
+        audio.playbackRate,
+        `${recordingRef.current?.filePath ?? ""}#${segmentRequestRef.current}`,
+      );
       audio.pause();
       audio.removeAttribute("src");
       audio.load();

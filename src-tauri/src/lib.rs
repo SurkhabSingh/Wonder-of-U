@@ -120,6 +120,7 @@ pub fn run() {
             download_recommended_dictionary,
             load_mined_sentences,
             load_progress,
+            record_listening_sample,
             count_mined_cards,
             start_watch_session,
             watch_snapshot,

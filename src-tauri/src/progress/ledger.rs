@@ -15,7 +15,7 @@ pub(crate) struct DayTotals {
     pub(crate) listening_ms: u64,
     #[serde(default)]
     pub(crate) watching_ms: u64,
-    /// Time both sources ran at once. Subtracted once, so a day cannot exceed the clock.
+    /// Time both sources ran at once, booked by the listening side alone.
     #[serde(default)]
     pub(crate) overlap_ms: u64,
     #[serde(default)]
@@ -25,10 +25,13 @@ pub(crate) struct DayTotals {
 }
 
 impl DayTotals {
+    /// Two sources cannot have run together for longer than the shorter of them ran at
+    /// all, so a day can never come out below the surface that measured the most.
     pub(crate) fn combined_ms(&self) -> u64 {
+        let shared = self.overlap_ms.min(self.listening_ms.min(self.watching_ms));
         self.listening_ms
             .saturating_add(self.watching_ms)
-            .saturating_sub(self.overlap_ms)
+            .saturating_sub(shared)
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -50,6 +53,12 @@ pub(crate) struct Ledger {
 }
 
 impl Ledger {
+    pub(crate) const fn new() -> Self {
+        Self {
+            days: BTreeMap::new(),
+        }
+    }
+
     /// `other_source_live` is the caller's answer to whether the other surface was playing
     /// at the same moment; only it can see both cursors.
     pub(crate) fn credit(
@@ -174,13 +183,35 @@ mod tests {
         assert_eq!(totals.combined_ms(), 60_000);
     }
 
+    /// Overlap against a surface that measured nothing is not a shared stretch, and
+    /// subtracting it would throw away time the app did measure.
     #[test]
-    fn combined_never_runs_negative() {
+    fn overlap_never_costs_more_than_the_smaller_surface_measured() {
         let mut ledger = Ledger::default();
         let today = key("2026-09-14");
         ledger.credit(&today, ImmersionSource::Listening, credited(1_000), true);
         ledger.credit(&today, ImmersionSource::Listening, credited(1_000), true);
-        assert_eq!(ledger.get(&today).unwrap().combined_ms(), 0);
+        let totals = ledger.get(&today).unwrap();
+        assert_eq!(totals.overlap_ms, 2_000);
+        assert_eq!(totals.watching_ms, 0);
+        assert_eq!(
+            totals.combined_ms(),
+            2_000,
+            "there was nothing to overlap with"
+        );
+    }
+
+    /// One stretch read by two instruments is still one stretch. Subtracted once per
+    /// reader, an hour spent on both at once came out as twelve seconds.
+    #[test]
+    fn a_stretch_booked_by_both_sides_is_still_subtracted_once() {
+        let mut ledger = Ledger::default();
+        let today = key("2026-09-14");
+        ledger.credit(&today, ImmersionSource::Watching, credited(60_000), true);
+        ledger.credit(&today, ImmersionSource::Listening, credited(60_000), true);
+        let totals = ledger.get(&today).unwrap();
+        assert_eq!(totals.overlap_ms, 120_000, "both sides booked it");
+        assert_eq!(totals.combined_ms(), 60_000);
     }
 
     #[test]
