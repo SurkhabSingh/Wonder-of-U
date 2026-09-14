@@ -42,13 +42,8 @@ pub(crate) fn credit_ms(
     let wall_ms = u64::try_from(wall_elapsed.as_millis()).unwrap_or(u64::MAX);
     let advance_ms = next.position_ms.saturating_sub(previous.position_ms);
 
-    if advance_ms == 0 {
-        return Credit {
-            credited_ms: 0,
-            unmeasured_ms: if wall_ms >= MAX_CHUNK_MS { wall_ms } else { 0 },
-        };
-    }
-
+    // Media that did not move earns nothing however long the gap ran, and everything
+    // reported unmeasured is what is left of media that did move.
     let credited = wall_ms.min(media_elapsed_ms(advance_ms, previous.rate));
     if credited > MAX_CHUNK_MS {
         return Credit {
@@ -119,23 +114,21 @@ mod tests {
         assert_eq!(credit.unmeasured_ms, 0);
     }
 
+    /// Whatever is reported unmeasured has to be backed by media that moved. A lid closed
+    /// mid-track is not a stretch the app failed to measure; it is a stretch with nothing in it.
     #[test]
-    fn a_long_gap_with_no_advance_credits_nothing_and_reports_the_whole_gap() {
-        let credit = credit_ms(
-            Some(&playing(1_000)),
-            &playing(1_000),
-            Duration::from_secs(9 * 60 * 60),
-        );
-        assert_eq!(credit.credited_ms, 0);
-        assert_eq!(credit.unmeasured_ms, 9 * 60 * 60 * 1_000);
-    }
-
-    #[test]
-    fn a_short_gap_with_no_advance_reports_nothing_either_way() {
-        assert_eq!(
-            credit_ms(Some(&playing(1_000)), &playing(1_000), Duration::from_secs(5)),
-            Credit::default()
-        );
+    fn a_gap_the_media_slept_through_reports_nothing_however_long_it_ran() {
+        for seconds in [5_u64, 119, 120, 9 * 60 * 60] {
+            assert_eq!(
+                credit_ms(
+                    Some(&playing(1_000)),
+                    &playing(1_000),
+                    Duration::from_secs(seconds)
+                ),
+                Credit::default(),
+                "{seconds}s with the position still"
+            );
+        }
     }
 
     #[test]
@@ -181,6 +174,15 @@ mod tests {
         let credit = credit_ms(Some(&playing(0)), &playing(600_000), Duration::from_secs(600));
         assert_eq!(credit.credited_ms, MAX_CHUNK_MS);
         assert_eq!(credit.unmeasured_ms, 600_000 - MAX_CHUNK_MS);
+    }
+
+    /// Ten minutes of wall clock against five of media: the five are what happened, two
+    /// are creditable, and only the remaining three were ever unmeasured.
+    #[test]
+    fn a_long_gap_reports_what_the_media_lost_not_what_the_clock_did() {
+        let credit = credit_ms(Some(&playing(0)), &playing(300_000), Duration::from_secs(600));
+        assert_eq!(credit.credited_ms, MAX_CHUNK_MS);
+        assert_eq!(credit.unmeasured_ms, 300_000 - MAX_CHUNK_MS);
     }
 
     #[test]
