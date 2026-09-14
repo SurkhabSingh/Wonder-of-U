@@ -13,19 +13,22 @@ let lastSentAtMs = 0;
  *
  * A change of state or of source always goes out; repeats of one state are throttled.
  * `source` distinguishes one clip or track from the next, so the position jump between
- * them starts a fresh stretch instead of reading as playback.
+ * them starts a fresh stretch instead of reading as playback. `force` is for a move that
+ * changes neither: a loop rewinding the same clip.
  */
 export function reportListening(
   playing: boolean,
   positionMs: number,
   rate: number,
   source: string | null,
+  force = false,
 ): void {
   // Called as the first statement of media event handlers: a throw here would abort the
   // handler, leaving the clip logic and its state reset unrun.
   try {
     const now = Date.now();
     if (
+      !force &&
       playing === lastPlaying &&
       source === lastSource &&
       now - lastSentAtMs < HEARTBEAT_MS

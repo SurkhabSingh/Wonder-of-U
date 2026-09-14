@@ -91,13 +91,27 @@ export function useAudioPlayer(): AudioPlayer {
 
     // Raw element time, never `positionMs()`: the clip offset would land in the evidence
     // as a jump the moment a sentence clip is loaded.
-    const report = (playing: boolean) =>
+    const report = (playing: boolean, force = false) =>
       reportListening(
         playing,
         audio.currentTime * 1000,
         audio.playbackRate,
         `${recordingRef.current?.filePath ?? ""}#${segmentRequestRef.current}`,
+        force,
       );
+
+    // A loop rewinds the element, and a position that went backwards credits nothing.
+    // Close the pass at the end it reached, then open the next one where it resumes.
+    const reportRewind = (resumeMs: number) => {
+      report(true, true);
+      reportListening(
+        true,
+        resumeMs,
+        audio.playbackRate,
+        `${recordingRef.current?.filePath ?? ""}#${segmentRequestRef.current}`,
+        true,
+      );
+    };
 
     const handleTimeUpdate = () => {
       report(!audio.paused);
@@ -114,6 +128,7 @@ export function useAudioPlayer(): AudioPlayer {
             ? segmentStartMsRef.current
             : null;
         if (repeatStart !== null) {
+          reportRewind(repeatStart);
           audio.currentTime = Math.max(0, repeatStart / 1000);
           setState((prev) => ({ ...prev, currentTimeMs: repeatStart }));
           return;
@@ -136,6 +151,7 @@ export function useAudioPlayer(): AudioPlayer {
       // A sentence clip always ends here, since it holds nothing but the sentence.
       if (clipOffsetMsRef.current !== null) {
         if (repeatRef.current) {
+          reportRewind(0);
           audio.currentTime = 0;
           void audio.play().catch(() => {
             setState((prev) => ({ ...prev, isPlaying: false }));
@@ -166,6 +182,7 @@ export function useAudioPlayer(): AudioPlayer {
           ? segmentStartMsRef.current
           : null;
       if (repeatStart !== null) {
+        reportRewind(repeatStart);
         audio.currentTime = Math.max(0, repeatStart / 1000);
         void audio.play().catch(() => {
           setState((prev) => ({ ...prev, isPlaying: false }));
