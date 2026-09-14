@@ -89,8 +89,7 @@ export function useAudioPlayer(): AudioPlayer {
     const positionMs = () =>
       Math.round(audio.currentTime * 1000) + (clipOffsetMsRef.current ?? 0);
 
-    // Raw element time, never `positionMs()`: the clip offset would land in the evidence
-    // as a jump the moment a sentence clip is loaded.
+    // Raw element time, never `positionMs()`: the clip offset would read as a jump.
     const report = (playing: boolean, force = false) =>
       reportListening(
         playing,
@@ -100,8 +99,7 @@ export function useAudioPlayer(): AudioPlayer {
         force,
       );
 
-    // A loop rewinds the element, and a position that went backwards credits nothing.
-    // Close the pass at the end it reached, then open the next one where it resumes.
+    // A position that went backwards credits nothing, so close the pass then reopen it.
     const reportRewind = (resumeMs: number) => {
       report(true, true);
       reportListening(
@@ -226,7 +224,6 @@ export function useAudioPlayer(): AudioPlayer {
       audio.removeEventListener("pause", handlePause);
       audio.removeEventListener("error", handleSilence);
       audio.removeEventListener("stalled", handleSilence);
-      // The listeners are gone, so the pause below raises nothing.
       report(false);
       audio.pause();
       audio.removeAttribute("src");

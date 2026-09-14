@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use super::credit::{Credit, ImmersionSource};
 use super::day::DayKey;
 
-/// What a day needs before it counts as active, unless something was mined on it.
 pub(crate) const ACTIVE_MS: u64 = 60_000;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,7 +14,8 @@ pub(crate) struct DayTotals {
     pub(crate) listening_ms: u64,
     #[serde(default)]
     pub(crate) watching_ms: u64,
-    /// Time both sources ran at once, booked by the listening side alone.
+    /// Time both sources ran at once. Booked by the listening side alone: from both,
+    /// one stretch would be subtracted twice.
     #[serde(default)]
     pub(crate) overlap_ms: u64,
     #[serde(default)]
@@ -25,8 +25,8 @@ pub(crate) struct DayTotals {
 }
 
 impl DayTotals {
-    /// Two sources cannot have run together for longer than the shorter of them ran at
-    /// all, so a day can never come out below the surface that measured the most.
+    /// Two sources cannot have run together longer than the shorter of them ran at all,
+    /// so a day can never come out below the surface that measured the most.
     pub(crate) fn combined_ms(&self) -> u64 {
         let shared = self.overlap_ms.min(self.listening_ms.min(self.watching_ms));
         self.listening_ms
@@ -59,8 +59,6 @@ impl Ledger {
         }
     }
 
-    /// `other_source_live` is the caller's answer to whether the other surface was playing
-    /// at the same moment; only it can see both cursors.
     pub(crate) fn credit(
         &mut self,
         day: &DayKey,
@@ -84,15 +82,13 @@ impl Ledger {
         self.days.entry(day.clone()).or_default().mined = true;
     }
 
-    /// Adds `other` into this one. Every flush is a read-modify-write, so two writers of
-    /// the same day accumulate instead of one overwriting the other.
+    /// Additive: every flush is a read-modify-write, so two writers of one day accumulate.
     pub(crate) fn merge(&mut self, other: &Ledger) {
         for (day, totals) in &other.days {
             self.days.entry(day.clone()).or_default().add(totals);
         }
     }
 
-    /// Drops days the store cannot speak for, and reports how many went.
     pub(crate) fn floor_at(&mut self, first_run_day: &DayKey) -> usize {
         let before = self.days.len();
         self.days.retain(|day, _| day >= first_run_day);
@@ -169,8 +165,6 @@ mod tests {
         assert_eq!(totals.combined_ms(), 150_000);
     }
 
-    /// mpv keeps playing when the app is brought forward, and two live sources would
-    /// otherwise sum to more attention than the clock allows.
     #[test]
     fn time_both_sources_were_live_is_counted_once() {
         let mut ledger = Ledger::default();
@@ -183,8 +177,6 @@ mod tests {
         assert_eq!(totals.combined_ms(), 60_000);
     }
 
-    /// Overlap against a surface that measured nothing is not a shared stretch, and
-    /// subtracting it would throw away time the app did measure.
     #[test]
     fn overlap_never_costs_more_than_the_smaller_surface_measured() {
         let mut ledger = Ledger::default();
@@ -201,8 +193,7 @@ mod tests {
         );
     }
 
-    /// One stretch read by two instruments is still one stretch. Subtracted once per
-    /// reader, an hour spent on both at once came out as twelve seconds.
+    /// Subtracted once per reader, an hour spent on both at once read as twelve seconds.
     #[test]
     fn a_stretch_booked_by_both_sides_is_still_subtracted_once() {
         let mut ledger = Ledger::default();
@@ -299,8 +290,6 @@ mod tests {
         assert_eq!(totals.unmeasured_ms, 5_000);
     }
 
-    /// The store cannot speak for days before it existed, and a row claiming one would be
-    /// a number nobody measured.
     #[test]
     fn days_before_the_store_existed_are_dropped() {
         let mut ledger = Ledger::default();
@@ -332,7 +321,6 @@ mod tests {
         );
     }
 
-    /// A row written before a field existed still reads, as every stored row must.
     #[test]
     fn a_row_missing_the_newer_fields_reads_as_zero_rather_than_failing() {
         let totals: DayTotals =

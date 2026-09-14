@@ -4,8 +4,7 @@ use std::time::Instant;
 
 use super::credit::MAX_CHUNK_MS;
 
-/// One store publishes both facts, so a reader can never pair "playing" with a different
-/// sample's stamp: the top bit is playing, the rest milliseconds since `base`.
+/// One store, so a reader cannot pair "playing" with another sample's stamp.
 const PLAYING: u64 = 1 << 63;
 
 static WATCHING: AtomicU64 = AtomicU64::new(0);
@@ -23,9 +22,6 @@ pub(crate) fn mark_watching(playing: bool) {
     WATCHING.store(now_ms() | if playing { PLAYING } else { 0 }, Ordering::SeqCst);
 }
 
-/// Whether mpv was playing recently enough to be sharing the stretch the audio side is
-/// about to credit. Only that side books the overlap: booked from both, one stretch would
-/// be subtracted twice. A player nobody has marked is not live.
 pub(crate) fn watching_is_live() -> bool {
     is_live(WATCHING.load(Ordering::SeqCst), now_ms())
 }
@@ -37,8 +33,6 @@ fn is_live(packed: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(packed & !PLAYING) <= MAX_CHUNK_MS
 }
 
-/// The two surfaces are process-wide. Any test that marks one holds this, or a parallel
-/// test reads a flag it did not set.
 #[cfg(test)]
 pub(crate) fn test_gate() -> std::sync::MutexGuard<'static, ()> {
     static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -64,7 +58,6 @@ mod tests {
         assert!(is_live(PLAYING | 5_000, 5_100));
     }
 
-    /// A player the app stopped hearing from cannot go on claiming the user's attention.
     #[test]
     fn a_mark_older_than_the_cap_is_not_live() {
         assert!(is_live(PLAYING | 1_000, 1_000 + MAX_CHUNK_MS));

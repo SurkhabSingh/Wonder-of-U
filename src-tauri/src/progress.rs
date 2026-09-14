@@ -1,7 +1,6 @@
 pub(crate) mod credit;
 pub(crate) mod day;
-// The streak rule and the mining mark have no caller until the report and the mine
-// shims read them.
+// No caller until the report and the mine shims read them.
 #[allow(dead_code)]
 pub(crate) mod ledger;
 pub(crate) mod library;
@@ -14,7 +13,6 @@ pub(crate) mod watch_sampler;
 
 use tauri::{AppHandle, Manager, Runtime};
 
-/// Clears the delta only on a write that landed, so a failure is retried rather than lost.
 pub(crate) fn flush_days<R: Runtime>(app: &AppHandle<R>, pending: &mut ledger::Ledger) {
     let path = app
         .state::<crate::app_types::AppPathsState>()

@@ -8,7 +8,6 @@ use super::day::today;
 use super::ledger::Ledger;
 use super::liveness;
 
-/// How much credit may sit unwritten. Matches the watch sampler: a crash costs at most this.
 const FLUSH_AT_MS: u64 = 30_000;
 
 struct Listening {
@@ -23,8 +22,8 @@ static LISTENING: Mutex<Listening> = Mutex::new(Listening {
     unflushed_ms: 0,
 });
 
-/// Takes one sample from the audio element. `arrived` is stamped by the command shim before
-/// it reaches the blocking pool, where two samples microseconds apart can swap places.
+/// `arrived` is stamped by the shim before the hop to the blocking pool, where two samples
+/// microseconds apart can swap places.
 pub(crate) fn record<R: Runtime>(
     app: &AppHandle<R>,
     arrived: Instant,
@@ -74,7 +73,6 @@ fn advance(
     Some(credit)
 }
 
-/// A settle writes at once: the stretch is over and there may be no next sample for hours.
 fn should_flush(unflushed_ms: u64, playing: bool, pending_empty: bool) -> bool {
     !pending_empty && (unflushed_ms >= FLUSH_AT_MS || !playing)
 }
@@ -104,8 +102,6 @@ mod tests {
         }
     }
 
-    /// The frontend contract made visible: nothing is credited until a playing sample has
-    /// been seen, so a settle from a page that never played cannot invent time.
     #[test]
     fn a_settle_with_no_playing_sample_before_it_credits_nothing() {
         let base = Instant::now();
@@ -118,7 +114,6 @@ mod tests {
         assert_eq!(credit, Credit::default());
     }
 
-    /// The drilling case: one play-edge sample and one settle for a 2.5 s clip.
     #[test]
     fn a_clip_of_two_and_a_half_seconds_credits_two_and_a_half_seconds() {
         let base = Instant::now();
@@ -129,7 +124,6 @@ mod tests {
         assert_eq!(credit.unmeasured_ms, 0);
     }
 
-    /// A throttled heartbeat is a longer interval, not a lost one.
     #[test]
     fn a_sixty_second_gap_that_advanced_sixty_seconds_credits_sixty_seconds() {
         let base = Instant::now();
@@ -139,8 +133,6 @@ mod tests {
         assert_eq!(credit.credited_ms, 60_000);
     }
 
-    /// Two samples microseconds apart can reach the blocking pool out of order. The older
-    /// one would measure a negative stretch against the newer cursor.
     #[test]
     fn a_sample_older_than_the_cursor_is_dropped() {
         let base = Instant::now();

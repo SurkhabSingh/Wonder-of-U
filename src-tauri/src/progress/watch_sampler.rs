@@ -12,10 +12,8 @@ use super::liveness;
 
 const TICK: Duration = Duration::from_secs(1);
 
-/// How much credit may sit unwritten. A crash costs at most this.
 const FLUSH_AT_MS: u64 = 30_000;
 
-/// Bumped per session, so a thread from an older one ends when a newer one starts.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn spawn_watch_sampler<R: Runtime>(app: &AppHandle<R>) {
@@ -29,13 +27,10 @@ pub(crate) fn spawn_watch_sampler<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-/// Publishes what a tick saw, so the audio side can tell the two apart from one stretch.
 /// Wrapped around the probe rather than placed inside `run`, which keeps the loop and its
 /// tests clear of a process-wide flag.
 fn published(playback: Playback) -> Playback {
     match playback {
-        // A busy tick leaves the last mark standing: the player is alive, someone else is
-        // merely reading it.
         Playback::Busy => {}
         Playback::Live { playing, .. } => liveness::mark_watching(playing),
         Playback::Gone => liveness::mark_watching(false),
@@ -43,10 +38,8 @@ fn published(playback: Playback) -> Playback {
     playback
 }
 
-/// One session's worth of ticks.
-///
-/// `superseded` is read ABOVE the probe so a session held forever still ends this thread;
-/// read after it, a tick waiting on the player could never notice it was superseded.
+/// `superseded` is read ABOVE the probe: read after it, a tick waiting on a player that
+/// never answers could not notice it had been superseded.
 fn run(
     superseded: impl Fn() -> bool,
     tick: Duration,
@@ -82,8 +75,6 @@ fn run(
                     unflushed_ms = 0;
                 }
             }
-            // Held by another caller. The cursor keeps its stamp, so the wait becomes a
-            // longer interval rather than a lost one.
             Ok(Playback::Busy) => {}
             Ok(Playback::Gone) | Err(_) => break,
         }
@@ -122,7 +113,6 @@ mod tests {
         || false
     }
 
-    /// Counts probes and hands back a scripted sequence, ending on `Gone`.
     fn scripted(script: Vec<Playback>) -> (impl Fn() -> Playback, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&calls);
@@ -154,7 +144,6 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
-    /// The player is still there; someone else is merely reading it.
     #[test]
     fn a_busy_tick_does_not_end_the_thread() {
         let (probe, calls) = scripted(vec![
@@ -167,7 +156,6 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 4, "three waits survived");
     }
 
-    /// A newer session must end an older thread even while the player never answers.
     #[test]
     fn a_superseded_generation_ends_the_thread_without_probing() {
         let (probe, calls) = scripted(vec![Playback::Busy; 64]);
@@ -179,8 +167,6 @@ mod tests {
         );
     }
 
-    /// The real spawn still supersedes: a newer session bumps the counter the older
-    /// thread is comparing against.
     #[test]
     fn spawning_again_supersedes_the_generation_before_it() {
         let first = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
@@ -201,15 +187,12 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
-    /// Whatever a session earned has to reach the store when it ends, not only when it
-    /// crosses the flush mark.
     #[test]
     fn ending_writes_what_the_session_earned() {
         let (probe, _) = scripted(vec![live(0), live(60_000), Playback::Gone]);
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&written);
-        // A real tick, so wall time actually passes: the rule credits the smaller of
-        // wall and media, and a zero tick earns nothing however far the media moved.
+        // A zero tick earns nothing: the rule credits the smaller of wall and media.
         run(running(), Duration::from_millis(30), probe, move |pending| {
             sink.lock()
                 .expect("sink")
@@ -222,8 +205,6 @@ mod tests {
         assert!(totals.watching_ms > 0, "the stretch was credited");
     }
 
-    /// A wait is a longer interval, not a lost one: the cursor has to survive it or the
-    /// stretch either side of the wait is thrown away.
     #[test]
     fn a_busy_tick_does_not_throw_away_the_stretch_around_it() {
         let (probe, _) = scripted(vec![live(0), Playback::Busy, live(60_000), Playback::Gone]);
@@ -246,8 +227,6 @@ mod tests {
         );
     }
 
-    /// The stretch two sources share is one stretch. Booked here as well as on the
-    /// listening side, it would be subtracted twice and a shared hour would read as none.
     #[test]
     fn the_video_side_never_books_overlap() {
         let _gate = liveness::test_gate();
