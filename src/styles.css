@@ -4125,15 +4125,16 @@ input::placeholder {
 
 /* The activity calendar. Four steps of the accent, because a legend with more than four
    entries is one nobody reads and fewer cannot tell a busy day from a quiet one. */
-.activity-grid {
+.progress-cal-grid {
   display: grid;
   grid-auto-flow: row;
   gap: 3px;
-  margin-top: var(--space-4);
+  margin-top: var(--space-7);
   width: 100%;
 }
 
-.activity-cell {
+.progress-cal-cell {
+  position: relative;
   width: 100%;
   aspect-ratio: 1;
   border-radius: 2px;
@@ -4141,21 +4142,72 @@ input::placeholder {
   display: block;
 }
 
-.activity-cell.l1 {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
+.progress-cal-cell.l1 {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
-.activity-cell.l2 {
-  background: color-mix(in srgb, var(--accent) 58%, transparent);
+.progress-cal-cell.l2 {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.activity-cell.l3 {
+.progress-cal-cell.l3 {
+  background: color-mix(in srgb, var(--accent) 68%, transparent);
+}
+
+.progress-cal-cell.l4 {
   background: color-mix(in srgb, var(--accent) 92%, transparent);
 }
 
-.activity-legend {
+/* One texture, one meaning wherever it appears: time was not counted here. Never a colour
+   step, because there is no number to encode. */
+.progress-cal-cell.is-uncounted {
+  background:
+    repeating-linear-gradient(45deg, var(--surface-active) 0 1px, transparent 1px 3px),
+    var(--surface);
+}
+
+.progress-cal-cell.is-outside {
+  background: transparent;
+}
+
+.progress-cal-cell.has-material {
+  box-shadow: inset 0 -1px 0 var(--border-strong);
+}
+
+/* The day counting started rarely lands on a column edge, so the seam is drawn on the cell
+   rather than in the grid gap, composed comma-first with the rule above it. */
+.progress-cal-cell.is-seam {
+  box-shadow: inset 2px 0 0 var(--border-strong);
+}
+
+.progress-cal-cell.is-seam.has-material {
+  box-shadow:
+    inset 2px 0 0 var(--border-strong),
+    inset 0 -1px 0 var(--border-strong);
+}
+
+.progress-cal-cell.is-today {
+  outline: 1px solid var(--text-subtle);
+  outline-offset: -1px;
+}
+
+/* Ringed, so one mark reads on the palest step and the strongest alike. */
+.progress-cal-card-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.progress-cal-legend {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   margin-top: var(--space-4);
   font-size: var(--text-2xs);
@@ -4164,16 +4216,25 @@ input::placeholder {
   letter-spacing: 0.05em;
 }
 
-.activity-legend .activity-cell {
+.progress-cal-legend .progress-cal-cell {
   width: 9px;
   height: 9px;
   flex: none;
 }
 
-.activity-count {
-  margin-left: auto;
+.progress-cal-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: var(--space-3);
   text-transform: none;
   letter-spacing: 0;
+}
+
+.progress-cal-since {
+  margin-top: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--text-subtle);
 }
 
 /* Small stats in a block, then the calendar, then the caveats — one card rather than three
@@ -4228,8 +4289,4 @@ input::placeholder {
   font-size: var(--text-xs);
   color: var(--text-subtle);
   line-height: 1.6;
-}
-
-.progress-summary .activity-grid {
-  margin-top: var(--space-7);
 }

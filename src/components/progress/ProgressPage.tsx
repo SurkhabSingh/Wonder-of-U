@@ -8,7 +8,7 @@ import {
   formatDuration,
   formatPercent,
 } from "../../lib/progressFormat";
-import { ActivityCalendar } from "./ActivityCalendar";
+import { StudyCalendar } from "./StudyCalendar";
 
 /// One question — am I getting better — so comprehension leads and the rest is context.
 /// Never contacts Anki: a closed Anki must not hide a measurement that was taken.
@@ -29,6 +29,7 @@ export function ProgressPage({
 }) {
   const now = new Date();
   const coverage = report ? readMeasured(report.coveragePercent) : null;
+  const immersion = report ? readMeasured(report.immersion).value : null;
   const comparison = report?.comparison ?? null;
   const knownWords = bootstrap.knownWords;
 
@@ -104,20 +105,28 @@ export function ProgressPage({
       <article className="panel progress-summary">
         <div className="progress-tiles">
           <StatTile
+            label="This week"
+            value={immersion ? formatDuration(immersion.weekMs) : null}
+          />
+          <StatTile
+            label="Today"
+            value={immersion ? formatDuration(immersion.todayMs) : null}
+          />
+          <StatTile
+            label="Current streak"
+            value={immersion ? `${formatCount(immersion.streak.current)}d` : null}
+          />
+          <StatTile
+            label="Longest streak"
+            value={immersion ? `${formatCount(immersion.streak.longest)}d` : null}
+          />
+          <StatTile
             label="Words you know"
             value={
               knownWords.status === "ready" || knownWords.wordCount > 0
                 ? formatCount(knownWords.wordCount)
                 : null
             }
-          />
-          <StatTile
-            label="Current streak"
-            value={report ? `${formatCount(report.activity.streak.current)}d` : null}
-          />
-          <StatTile
-            label="Longest streak"
-            value={report ? `${formatCount(report.activity.streak.best)}d` : null}
           />
           <StatTile
             label="Cards from this app"
@@ -145,11 +154,15 @@ export function ProgressPage({
           />
         </div>
 
+        {immersion ? (
+          <p className="progress-footnote">
+            Only what played in this app is counted
+            {immersion.streak.todayCounted ? ", and today is on the board" : ""}.
+          </p>
+        ) : null}
+
         {report ? (
-          <ActivityCalendar
-            days={report.activity.days}
-            today={report.activity.today}
-          />
+          <StudyCalendar span={report.calendar} today={report.activity.today} />
         ) : null}
 
         {report ? (
@@ -169,6 +182,11 @@ export function ProgressPage({
                 : null,
               report.activity.itemsWithoutADay > 0
                 ? `${formatCount(report.activity.itemsWithoutADay)} on no known day`
+                : null,
+              immersion && immersion.todayUnmeasuredMs > 0
+                ? `about ${formatDuration(
+                    immersion.todayUnmeasuredMs,
+                  )} today could not be measured`
                 : null,
               report.damagedRows > 0
                 ? `${formatCount(report.damagedRows)} earlier reading${
