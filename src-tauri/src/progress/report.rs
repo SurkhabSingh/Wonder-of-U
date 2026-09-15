@@ -113,6 +113,7 @@ pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProgressReport {
     pub(crate) coverage_percent: Measured<f64>,
+    pub(crate) immersion: Measured<super::streak::ImmersionReport>,
     pub(crate) activity: super::library::ActivityReport,
     pub(crate) library: super::library::LibraryReport,
     pub(crate) comparison: Option<Comparison>,
@@ -141,18 +142,23 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         .progress_file
         .clone();
 
+    let today = super::day::today();
     let (activity, library) = {
         let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
         let persisted = persisted_state
             .0
             .lock()
             .map_err(|_| "Could not read the recording history.".to_string())?;
-        super::library::summarise(&persisted.recent_recordings, super::day::today())
+        super::library::summarise(&persisted.recent_recordings, today.clone())
     };
 
     match super::store::load(&path) {
         super::store::Loaded::Present { header, store } => Ok(ProgressReport {
             coverage_percent: coverage_from(&store.samples, &current_build),
+            immersion: Measured::known(
+                super::streak::summarise(&store.days, &today, &header.first_run_day),
+                crate::app_runtime::now_ms(),
+            ),
             comparison: latest_comparison(&store.samples),
             activity,
             library,
@@ -166,6 +172,9 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             coverage_percent: Measured::unavailable(
                 "Nothing has been measured yet. Refresh your word list to take a first reading.",
             ),
+            immersion: Measured::unavailable(
+                "Time has not been counted yet. It starts adding up as you listen and watch here.",
+            ),
             comparison: None,
             activity,
             library,
@@ -178,6 +187,9 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         super::store::Loaded::Unreadable(_) => Ok(ProgressReport {
             coverage_percent: Measured::unavailable(
                 "Your progress history could not be opened, so there is nothing to show. It is not lost — nothing has been written over it.",
+            ),
+            immersion: Measured::unavailable(
+                "Your progress history could not be opened, so the time you have put in cannot be shown. It is not lost — nothing has been written over it.",
             ),
             comparison: None,
             activity,

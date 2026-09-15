@@ -15,6 +15,14 @@ impl DayKey {
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The day before this one, derived from a key that already exists rather than from a
+    /// clock, so the rollover cannot be applied a second time.
+    pub(crate) fn previous(&self) -> Option<DayKey> {
+        let date = chrono::NaiveDate::parse_from_str(&self.0, "%Y-%m-%d").ok()?;
+        let earlier = date.checked_sub_days(chrono::Days::new(1))?;
+        Some(DayKey(earlier.format("%Y-%m-%d").to_string()))
+    }
 }
 
 impl std::fmt::Display for DayKey {

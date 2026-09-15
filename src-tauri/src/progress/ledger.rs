@@ -103,6 +103,7 @@ impl Ledger {
         self.days.get(day)
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.days.len()
     }
@@ -113,10 +114,6 @@ impl Ledger {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&DayKey, &DayTotals)> {
         self.days.iter()
-    }
-
-    pub(crate) fn active_days(&self) -> usize {
-        self.days.values().filter(|totals| totals.is_active()).count()
     }
 }
 
@@ -237,7 +234,6 @@ mod tests {
         ledger.mark_mined(&mined);
         assert_eq!(ledger.get(&mined).unwrap().combined_ms(), 0);
         assert!(ledger.get(&mined).unwrap().is_active(), "a mined day counts");
-        assert_eq!(ledger.active_days(), 2);
     }
 
     #[test]

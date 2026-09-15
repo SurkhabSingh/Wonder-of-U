@@ -647,8 +647,24 @@ export type LibraryReport = {
   translated: number;
 };
 
+export type ImmersionStreak = {
+  current: number;
+  longest: number;
+  activeDays30: number;
+  todayCounted: boolean;
+};
+
+export type ImmersionReport = {
+  todayMs: number;
+  weekMs: number;
+  todayUnmeasuredMs: number;
+  countedFrom: string;
+  streak: ImmersionStreak;
+};
+
 export type ProgressReport = {
   coveragePercent: Measured<number>;
+  immersion: Measured<ImmersionReport>;
   activity: ActivityReport;
   library: LibraryReport;
   // Null is "not yet", which the page says in words rather than drawing as zero.

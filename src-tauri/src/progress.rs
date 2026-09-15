@@ -1,7 +1,5 @@
 pub(crate) mod credit;
 pub(crate) mod day;
-// The streak rule has no caller until the report reads it.
-#[allow(dead_code)]
 pub(crate) mod ledger;
 pub(crate) mod library;
 pub(crate) mod listen_sampler;
@@ -9,6 +7,7 @@ pub(crate) mod liveness;
 pub(crate) mod measured;
 pub(crate) mod report;
 pub(crate) mod store;
+pub(crate) mod streak;
 pub(crate) mod watch_sampler;
 
 use tauri::{AppHandle, Manager, Runtime};
