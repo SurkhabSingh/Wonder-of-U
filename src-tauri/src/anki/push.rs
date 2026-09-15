@@ -179,6 +179,7 @@ fn push_single_recording_to_anki<R: Runtime>(
     .map_err(|error| user_friendly_anki_error(&error, settings))?
     .as_i64()
     .ok_or_else(|| "AnkiConnect did not return a note id.".to_string())?;
+    crate::progress::record_mined_act(app);
 
     update_recent_recording(app, &recording.file_path, |recording| {
         let language = transcript_language_key(transcription_language);

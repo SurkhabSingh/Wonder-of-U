@@ -647,6 +647,7 @@ pub(super) fn mine_media_to_anki<R: Runtime>(
             return failed(user_friendly_anki_error(&error, &anki));
         }
     };
+    crate::progress::record_mined_act(app);
 
     (
         RecordingActionItem {
