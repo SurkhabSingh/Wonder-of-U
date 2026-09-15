@@ -9,6 +9,7 @@ use crate::app_state::write_file_atomically;
 use crate::app_types::KnownWordsBuild;
 
 use super::day::{DayKey, DAY_ROLLOVER_HOUR};
+use super::evidence::EvidenceFrom;
 use super::ledger::{DayTotals, Ledger};
 
 const RECORD_VERSION: u32 = 1;
@@ -24,6 +25,10 @@ pub(crate) struct Header {
     pub(crate) first_run_day: DayKey,
     pub(crate) rollover_hour: i64,
     pub(crate) history_lost_at_ms: Option<u64>,
+    /// Absent in a header written before the library layer existed, which reads as "no
+    /// evidence seen yet" and is filled in on the next read.
+    #[serde(default)]
+    pub(crate) evidence_from: EvidenceFrom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -185,6 +190,7 @@ pub(crate) fn ensure(path: &Path, today: DayKey, now_ms: u64) -> Result<(), Stri
                 first_run_day: today,
                 rollover_hour: DAY_ROLLOVER_HOUR,
                 history_lost_at_ms: None,
+                evidence_from: EvidenceFrom::default(),
             };
             write_all(path, &header, &ProgressStore::default())
         }
@@ -201,6 +207,7 @@ pub(crate) fn ensure(path: &Path, today: DayKey, now_ms: u64) -> Result<(), Stri
                 first_run_day: today,
                 rollover_hour: DAY_ROLLOVER_HOUR,
                 history_lost_at_ms: Some(now_ms),
+                evidence_from: EvidenceFrom::default(),
             };
             write_all(path, &header, &ProgressStore::default())?;
             Err(reason)
@@ -210,6 +217,22 @@ pub(crate) fn ensure(path: &Path, today: DayKey, now_ms: u64) -> Result<(), Stri
 
 /// Adds `delta` to the days already on disk. Read-modify-write, so two writers of the
 /// same day accumulate rather than one overwriting the other.
+/// Moves the evidence horizon earlier when the library reaches further back than the
+/// header knows. Answers whether it wrote, so a read that changes nothing touches no file.
+pub(crate) fn remember_evidence(path: &Path, seen: &EvidenceFrom) -> Result<bool, String> {
+    let _guard = WRITE.lock();
+    let (mut header, store) = match load(path) {
+        Loaded::Present { header, store } => (header, store),
+        Loaded::Missing => return Err("the progress file is not there".to_string()),
+        Loaded::Unreadable(reason) => return Err(reason),
+    };
+    if !header.evidence_from.merge_earlier(seen) {
+        return Ok(false);
+    }
+    write_all(path, &header, &store)?;
+    Ok(true)
+}
+
 pub(crate) fn merge_days(path: &Path, delta: &Ledger) -> Result<(), String> {
     let _guard = WRITE.lock();
     let (header, mut store) = match load(path) {
@@ -446,6 +469,74 @@ mod tests {
             "the unreadable reading was rewritten away:
 {after}"
         );
+    }
+
+    fn seen(day: &str) -> EvidenceFrom {
+        EvidenceFrom {
+            library: Some(key(day)),
+        }
+    }
+
+    /// Every header written before the library layer existed lacks the field entirely.
+    #[test]
+    fn a_header_from_before_the_evidence_horizon_still_reads() {
+        let dir = temp_dir("header-older");
+        let path = dir.join("progress.jsonl");
+        fs::write(
+            &path,
+            "{\"v\":1,\"firstRunDay\":\"2026-09-10\",\"rolloverHour\":4,\"historyLostAtMs\":null}
+",
+        )
+        .expect("an older header");
+
+        match load(&path) {
+            Loaded::Present { header, .. } => {
+                assert_eq!(header.first_run_day, key("2026-09-10"));
+                assert_eq!(header.evidence_from, EvidenceFrom::default());
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_horizon_is_written_once_and_not_again() {
+        let dir = temp_dir("horizon-once");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+
+        assert!(remember_evidence(&path, &seen("2026-04-06")).expect("first"));
+        assert!(!remember_evidence(&path, &seen("2026-04-06")).expect("same"));
+        assert!(!remember_evidence(&path, &seen("2026-08-01")).expect("later"));
+        assert!(remember_evidence(&path, &seen("2026-01-02")).expect("earlier"));
+
+        match load(&path) {
+            Loaded::Present { header, .. } => {
+                assert_eq!(header.evidence_from, seen("2026-01-02"));
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
+    }
+
+    /// The samplers rewrite the whole file every thirty seconds. A horizon the rewrite
+    /// dropped would be re-derived from whatever the library holds today.
+    #[test]
+    fn the_horizon_survives_a_day_flush() {
+        let dir = temp_dir("horizon-flush");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+        remember_evidence(&path, &seen("2026-04-06")).expect("remember");
+
+        merge_days(&path, &day_delta("2026-09-11", 60_000, 0)).expect("flush");
+        append_sample(&path, sample(1, "build-a")).expect("sample");
+
+        match load(&path) {
+            Loaded::Present { header, store } => {
+                assert_eq!(header.evidence_from, seen("2026-04-06"), "still there");
+                assert_eq!(store.days.len(), 1);
+                assert_eq!(store.samples.len(), 1);
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
     }
 
     fn day_delta(day: &str, listening_ms: u64, watching_ms: u64) -> Ledger {

@@ -114,6 +114,7 @@ pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
 pub(crate) struct ProgressReport {
     pub(crate) coverage_percent: Measured<f64>,
     pub(crate) immersion: Measured<super::streak::ImmersionReport>,
+    pub(crate) calendar: super::calendar::CalendarSpan,
     pub(crate) activity: super::library::ActivityReport,
     pub(crate) library: super::library::LibraryReport,
     pub(crate) comparison: Option<Comparison>,
@@ -143,14 +144,32 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         .clone();
 
     let today = super::day::today();
-    let (activity, library) = {
+    let (activity, library, evidence) = {
         let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
         let persisted = persisted_state
             .0
             .lock()
             .map_err(|_| "Could not read the recording history.".to_string())?;
-        super::library::summarise(&persisted.recent_recordings, today.clone())
+        let (activity, library) =
+            super::library::summarise(&persisted.recent_recordings, today.clone());
+        let evidence = super::evidence::collect(
+            &persisted.recent_recordings,
+            &persisted.watched_videos,
+            &today,
+        );
+        (activity, library, evidence)
     };
+
+    // Persisted before the store is read, so the calendar draws the floor the header keeps
+    // rather than whatever the library happens to hold today.
+    if let Err(reason) = super::store::remember_evidence(&path, &evidence.horizon()) {
+        crate::app_runtime::log_event(
+            app,
+            "WARN",
+            "progress.horizon_unavailable",
+            serde_json::json!({ "message": reason }),
+        );
+    }
 
     match super::store::load(&path) {
         super::store::Loaded::Present { header, store } => Ok(ProgressReport {
@@ -158,6 +177,13 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             immersion: Measured::known(
                 super::streak::summarise(&store.days, &today, &header.first_run_day),
                 crate::app_runtime::now_ms(),
+            ),
+            calendar: super::calendar::build(
+                &store.days,
+                &evidence,
+                &header.evidence_from,
+                &header.first_run_day,
+                &today,
             ),
             comparison: latest_comparison(&store.samples),
             activity,
@@ -175,6 +201,13 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             immersion: Measured::unavailable(
                 "Time has not been counted yet. It starts adding up as you listen and watch here.",
             ),
+            calendar: super::calendar::build(
+                &super::ledger::Ledger::default(),
+                &evidence,
+                &evidence.horizon(),
+                &today,
+                &today,
+            ),
             comparison: None,
             activity,
             library,
@@ -190,6 +223,13 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             ),
             immersion: Measured::unavailable(
                 "Your progress history could not be opened, so the time you have put in cannot be shown. It is not lost — nothing has been written over it.",
+            ),
+            calendar: super::calendar::build(
+                &super::ledger::Ledger::default(),
+                &evidence,
+                &evidence.horizon(),
+                &today,
+                &today,
             ),
             comparison: None,
             activity,

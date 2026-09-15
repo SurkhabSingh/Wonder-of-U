@@ -662,9 +662,26 @@ export type ImmersionReport = {
   streak: ImmersionStreak;
 };
 
+export type CalendarDay = {
+  day: string;
+  // Null before the store existed. There is no number, so there is no colour step to pick:
+  // never write `?? 0` here.
+  combinedMs: number | null;
+  madeCard: boolean | null;
+  addedMaterial: boolean;
+};
+
+export type CalendarSpan = {
+  firstDay: string | null;
+  countedFrom: string;
+  days: CalendarDay[];
+  droppedEvidence: number;
+};
+
 export type ProgressReport = {
   coveragePercent: Measured<number>;
   immersion: Measured<ImmersionReport>;
+  calendar: CalendarSpan;
   activity: ActivityReport;
   library: LibraryReport;
   // Null is "not yet", which the page says in words rather than drawing as zero.
