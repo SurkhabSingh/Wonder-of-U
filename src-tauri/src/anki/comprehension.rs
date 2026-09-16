@@ -64,7 +64,7 @@ pub(crate) fn sample_comprehension<R: Runtime>(
         return Ok(Sampled::Skipped(Skip::NeedsDictionary));
     };
 
-    let (known_words, built_at_ms) = {
+    let (known_words, built_at_ms, word_count) = {
         let state = app.state::<KnownWordsState>();
         let guard = state
             .0
@@ -76,7 +76,8 @@ pub(crate) fn sample_comprehension<R: Runtime>(
         if !index.build.matches(&build) {
             return Ok(Sampled::Skipped(Skip::Stale));
         }
-        (index.words.clone(), index.built_at_ms)
+        let word_count = u32::try_from(index.words.len()).unwrap_or(u32::MAX);
+        (index.words.clone(), index.built_at_ms, word_count)
     };
 
     let japanese = japanese_transcripts(&recordings);
@@ -117,6 +118,7 @@ pub(crate) fn sample_comprehension<R: Runtime>(
                 known_tokens: item.known_tokens,
             })
             .collect(),
+        word_count,
     )))
 }
 

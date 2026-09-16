@@ -311,7 +311,7 @@ mod tests {
     }
 
     fn sample(taken_at_ms: u64, note_type: &str, items: Vec<SampleItem>) -> Sample {
-        Sample::new(taken_at_ms, day(), build(note_type), 1, 0, items)
+        Sample::new(taken_at_ms, day(), build(note_type), 1, 0, items, 1_000)
     }
 
     #[test]

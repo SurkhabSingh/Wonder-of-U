@@ -52,6 +52,11 @@ pub(crate) struct Sample {
     #[serde(default)]
     pub(crate) unread_items: u32,
     pub(crate) items: Vec<SampleItem>,
+    /// The size of the word list the reading was measured against. `None` on a reading
+    /// taken before this was recorded: its vocabulary is unknown, not empty. Skipped when
+    /// absent so a rewrite leaves those rows byte for byte as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) known_words: Option<u32>,
 }
 
 impl Sample {
@@ -62,6 +67,7 @@ impl Sample {
         index_built_at_ms: u64,
         unread_items: u32,
         items: Vec<SampleItem>,
+        known_words: u32,
     ) -> Self {
         Self {
             v: RECORD_VERSION,
@@ -72,6 +78,7 @@ impl Sample {
             index_built_at_ms,
             unread_items,
             items,
+            known_words: Some(known_words),
         }
     }
 
@@ -310,7 +317,52 @@ mod tests {
                 content_tokens: 100,
                 known_tokens: 58,
             }],
+            2_528,
         )
+    }
+
+    #[test]
+    fn a_reading_keeps_the_size_of_the_word_list_it_was_measured_against() {
+        let dir = temp_dir("sample-words");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+        append_sample(&path, sample(1, "build-a")).expect("sample");
+
+        match load(&path) {
+            Loaded::Present { store, .. } => {
+                assert_eq!(store.samples[0].known_words, Some(2_528));
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
+    }
+
+    /// A reading from before the count was kept has an unknown vocabulary, not an empty one.
+    /// Read as zero, it would draw the word list collapsing on the day recording began.
+    #[test]
+    fn an_older_reading_has_no_word_count_rather_than_none_known() {
+        let dir = temp_dir("sample-words-older");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+        let older = "{\"v\":1,\"kind\":\"sample\",\"takenAtMs\":5,\"day\":\"2026-09-10\",\
+            \"build\":{\"sources\":[],\"matureAfterDays\":21},\"indexBuiltAtMs\":1,\
+            \"unreadItems\":0,\"items\":[]}";
+        let existing = fs::read_to_string(&path).expect("read back");
+        fs::write(&path, format!("{existing}{older}\n")).expect("an older reading");
+
+        match load(&path) {
+            Loaded::Present { store, .. } => {
+                assert_eq!(store.samples.len(), 1);
+                assert_eq!(store.samples[0].known_words, None);
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
+
+        merge_days(&path, &day_delta("2026-09-11", 60_000, 0)).expect("a rewrite");
+        let after = fs::read_to_string(&path).expect("read back");
+        assert!(
+            !after.contains("knownWords"),
+            "a rewrite invented a count for a reading that never had one"
+        );
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
