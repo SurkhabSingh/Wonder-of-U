@@ -615,25 +615,6 @@ export type ProgressComparison = {
   laterTakenAtMs: number;
 };
 
-export type ActivityDay = {
-  day: string;
-  items: number;
-};
-
-export type ActivityReport = {
-  days: ActivityDay[];
-  sinceDay: string | null;
-  activeDays: number;
-  today: string;
-  itemsWithoutADay: number;
-  streak: Streak;
-};
-
-export type Streak = {
-  current: number;
-  best: number;
-};
-
 export type LibraryReport = {
   items: number;
   totalMs: number;
@@ -673,7 +654,8 @@ export type CalendarDay = {
 
 export type CalendarSpan = {
   firstDay: string | null;
-  countedFrom: string;
+  // Null when the store could not be read: nothing was counted, today included.
+  countedFrom: string | null;
   days: CalendarDay[];
   droppedEvidence: number;
 };
@@ -682,7 +664,7 @@ export type ProgressReport = {
   coveragePercent: Measured<number>;
   immersion: Measured<ImmersionReport>;
   calendar: CalendarSpan;
-  activity: ActivityReport;
+  today: string;
   library: LibraryReport;
   // Null is "not yet", which the page says in words rather than drawing as zero.
   comparison: ProgressComparison | null;

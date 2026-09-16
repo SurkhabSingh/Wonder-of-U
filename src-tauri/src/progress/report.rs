@@ -115,7 +115,7 @@ pub(crate) struct ProgressReport {
     pub(crate) coverage_percent: Measured<f64>,
     pub(crate) immersion: Measured<super::streak::ImmersionReport>,
     pub(crate) calendar: super::calendar::CalendarSpan,
-    pub(crate) activity: super::library::ActivityReport,
+    pub(crate) today: super::day::DayKey,
     pub(crate) library: super::library::LibraryReport,
     pub(crate) comparison: Option<Comparison>,
     pub(crate) readings: usize,
@@ -144,20 +144,19 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         .clone();
 
     let today = super::day::today();
-    let (activity, library, evidence) = {
+    let (library, evidence) = {
         let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
         let persisted = persisted_state
             .0
             .lock()
             .map_err(|_| "Could not read the recording history.".to_string())?;
-        let (activity, library) =
-            super::library::summarise(&persisted.recent_recordings, today.clone());
+        let library = super::library::summarise(&persisted.recent_recordings);
         let evidence = super::evidence::collect(
             &persisted.recent_recordings,
             &persisted.watched_videos,
             &today,
         );
-        (activity, library, evidence)
+        (library, evidence)
     };
 
     // Persisted before the store is read, so the calendar draws the floor the header keeps
@@ -182,11 +181,11 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
                 &store.days,
                 &evidence,
                 &header.evidence_from,
-                &header.first_run_day,
+                Some(&header.first_run_day),
                 &today,
             ),
             comparison: latest_comparison(&store.samples),
-            activity,
+            today: today.clone(),
             library,
             readings: store.samples.len(),
             first_run_day: Some(header.first_run_day),
@@ -201,15 +200,9 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             immersion: Measured::unavailable(
                 "Time has not been counted yet. It starts adding up as you listen and watch here.",
             ),
-            calendar: super::calendar::build(
-                &super::ledger::Ledger::default(),
-                &evidence,
-                &evidence.horizon(),
-                &today,
-                &today,
-            ),
+            calendar: super::calendar::uncounted(&evidence, &evidence.horizon(), &today),
             comparison: None,
-            activity,
+            today: today.clone(),
             library,
             readings: 0,
             first_run_day: None,
@@ -224,15 +217,9 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             immersion: Measured::unavailable(
                 "Your progress history could not be opened, so the time you have put in cannot be shown. It is not lost — nothing has been written over it.",
             ),
-            calendar: super::calendar::build(
-                &super::ledger::Ledger::default(),
-                &evidence,
-                &evidence.horizon(),
-                &today,
-                &today,
-            ),
+            calendar: super::calendar::uncounted(&evidence, &evidence.horizon(), &today),
             comparison: None,
-            activity,
+            today: today.clone(),
             library,
             readings: 0,
             first_run_day: None,
@@ -312,6 +299,54 @@ mod tests {
 
     fn sample(taken_at_ms: u64, note_type: &str, items: Vec<SampleItem>) -> Sample {
         Sample::new(taken_at_ms, day(), build(note_type), 1, 0, items, 1_000)
+    }
+
+    /// The names ProgressPage reads straight off the report. A rename here blanks the page
+    /// beside a healthy status, so the list is spelled out rather than trusted.
+    #[test]
+    fn the_report_reaches_the_frontend_under_the_names_it_is_read_by() {
+        let ledger = crate::progress::ledger::Ledger::default();
+        let evidence = crate::progress::evidence::LibraryEvidence::default();
+        let report = ProgressReport {
+            coverage_percent: Measured::known(58.4, 1),
+            immersion: Measured::known(
+                crate::progress::streak::summarise(&ledger, &day(), &day()),
+                1,
+            ),
+            calendar: crate::progress::calendar::uncounted(&evidence, &Default::default(), &day()),
+            today: day(),
+            library: crate::progress::library::summarise(&[]),
+            comparison: None,
+            readings: 0,
+            first_run_day: Some(day()),
+            damaged_rows: 0,
+            newer_rows: 0,
+            store_readable: true,
+        };
+        let wire = serde_json::to_value(&report).expect("serialises");
+        let mut keys: Vec<&str> = wire
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "calendar",
+                "comparison",
+                "coveragePercent",
+                "damagedRows",
+                "firstRunDay",
+                "immersion",
+                "library",
+                "newerRows",
+                "readings",
+                "storeReadable",
+                "today",
+            ]
+        );
     }
 
     #[test]

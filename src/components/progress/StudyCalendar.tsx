@@ -113,7 +113,9 @@ export function StudyCalendar({ span, today }: { span: CalendarSpan; today: stri
           className="progress-cal-grid"
           style={columns}
           role="img"
-          aria-label={`A year of days, time counted since ${shortDate(span.countedFrom)}. The same days are listed below.`}
+          aria-label={`A year of days${
+            span.countedFrom === null ? "" : `, time counted since ${shortDate(span.countedFrom)}`
+          }. The same days are listed below.`}
         >
           {cells.map((cell) => {
             const reading = read(cell.day, cell.entry, today);
@@ -166,7 +168,9 @@ export function StudyCalendar({ span, today }: { span: CalendarSpan; today: stri
       </div>
 
       <p className="progress-cal-since">
-        Time tracking since {shortDate(span.countedFrom)}
+        {span.countedFrom === null
+          ? "Time could not be read, so no day shows any"
+          : `Time tracking since ${shortDate(span.countedFrom)}`}
         {span.droppedEvidence > 0
           ? ` · ${span.droppedEvidence} item${
               span.droppedEvidence === 1 ? "" : "s"

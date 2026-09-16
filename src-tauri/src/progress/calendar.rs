@@ -21,7 +21,9 @@ pub(crate) struct CalendarDay {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CalendarSpan {
     pub(crate) first_day: Option<DayKey>,
-    pub(crate) counted_from: DayKey,
+    /// `None` when the store could not be read. Then no day was counted, today included, and
+    /// no branch can supply a horizon that would draw one as a measured zero.
+    pub(crate) counted_from: Option<DayKey>,
     pub(crate) days: Vec<CalendarDay>,
     pub(crate) dropped_evidence: u32,
 }
@@ -32,11 +34,11 @@ pub(crate) fn build(
     ledger: &Ledger,
     evidence: &LibraryEvidence,
     horizon: &EvidenceFrom,
-    counted_from: &DayKey,
+    counted_from: Option<&DayKey>,
     today: &DayKey,
 ) -> CalendarSpan {
     let window_start = step_back(today, GRID_DAYS - 1);
-    let earliest = [horizon.library.as_ref(), Some(counted_from)]
+    let earliest = [horizon.library.as_ref(), counted_from]
         .into_iter()
         .flatten()
         .min()
@@ -54,7 +56,7 @@ pub(crate) fn build(
             if day < first {
                 break;
             }
-            let counted = day >= *counted_from;
+            let counted = counted_from.is_some_and(|from| day >= *from);
             let totals = ledger.get(&day);
             days.push(CalendarDay {
                 combined_ms: counted.then(|| totals.map_or(0, |totals| totals.combined_ms())),
@@ -69,10 +71,19 @@ pub(crate) fn build(
 
     CalendarSpan {
         first_day,
-        counted_from: counted_from.clone(),
+        counted_from: counted_from.cloned(),
         days,
         dropped_evidence: evidence.dropped,
     }
+}
+
+/// For a store that could not be read: only the library can speak, and nothing was counted.
+pub(crate) fn uncounted(
+    evidence: &LibraryEvidence,
+    horizon: &EvidenceFrom,
+    today: &DayKey,
+) -> CalendarSpan {
+    build(&Ledger::default(), evidence, horizon, None, today)
 }
 
 fn step_back(from: &DayKey, by: usize) -> Option<DayKey> {
@@ -137,14 +148,36 @@ mod tests {
             &watched(&[("2026-09-14", 600_000)]),
             &evidence_on(&[1_775_000_000_000], &today),
             &evidence_on(&[1_775_000_000_000], &today).horizon(),
-            &counted_from,
+            Some(&counted_from),
             &today,
         );
+        assert_eq!(span.counted_from, Some(counted_from.clone()), "the horizon is carried");
         let before = counted_from.previous().expect("a real date");
         assert_eq!(day_in(&span, before.as_str()).combined_ms, None);
         assert_eq!(day_in(&span, before.as_str()).made_card, None);
         assert_eq!(day_in(&span, counted_from.as_str()).combined_ms, Some(0));
         assert_eq!(day_in(&span, "2026-09-14").combined_ms, Some(600_000));
+    }
+
+    /// The tiles say unavailable; the grid must not say "counted, nothing played" beside them.
+    #[test]
+    fn a_store_nobody_could_read_counts_no_day_not_even_today() {
+        let today = key("2026-09-16");
+        let evidence = evidence_on(&[1_775_000_000_000], &today);
+        let span = uncounted(&evidence, &evidence.horizon(), &today);
+        assert_eq!(span.counted_from, None);
+        assert!(!span.days.is_empty(), "the library still speaks");
+        assert!(span.days.iter().all(|entry| entry.combined_ms.is_none()));
+        assert!(span.days.iter().all(|entry| entry.made_card.is_none()));
+        assert_eq!(day_in(&span, "2026-09-16").combined_ms, None);
+    }
+
+    #[test]
+    fn nothing_to_read_and_nothing_counted_draws_nothing() {
+        let today = key("2026-09-16");
+        let span = uncounted(&evidence_on(&[], &today), &EvidenceFrom::default(), &today);
+        assert_eq!(span.first_day, None);
+        assert!(span.days.is_empty());
     }
 
     #[test]
@@ -154,7 +187,7 @@ mod tests {
             &watched(&[]),
             &evidence_on(&[], &today),
             &EvidenceFrom::default(),
-            &key("2026-09-14"),
+            Some(&key("2026-09-14")),
             &today,
         );
         assert_eq!(day_in(&span, "2026-09-14").combined_ms, Some(0));
@@ -170,7 +203,7 @@ mod tests {
             &watched(&[]),
             &evidence,
             &evidence.horizon(),
-            &key("2026-09-13"),
+            Some(&key("2026-09-13")),
             &today,
         );
         assert_eq!(span.first_day, Some(earliest.clone()));
@@ -187,7 +220,7 @@ mod tests {
         let horizon = evidence_on(&[1_775_000_000_000], &today).horizon();
         let emptied = evidence_on(&[], &today);
 
-        let span = build(&watched(&[]), &emptied, &horizon, &key("2026-09-13"), &today);
+        let span = build(&watched(&[]), &emptied, &horizon, Some(&key("2026-09-13")), &today);
         assert_eq!(span.first_day, horizon.library);
         let earliest = horizon.library.clone().expect("a date");
         assert!(!day_in(&span, earliest.as_str()).added_material, "the mark is gone");
@@ -205,7 +238,7 @@ mod tests {
             &watched(&[]),
             &evidence_on(&[], &today),
             &EvidenceFrom::default(),
-            &key("2026-09-13"),
+            Some(&key("2026-09-13")),
             &today,
         );
         assert_eq!(span.days.first().map(|entry| &entry.day), span.first_day.as_ref());
@@ -220,7 +253,7 @@ mod tests {
             &watched(&[]),
             &evidence_on(&[1_000_000_000_000], &today),
             &evidence_on(&[1_000_000_000_000], &today).horizon(),
-            &key("2026-09-13"),
+            Some(&key("2026-09-13")),
             &today,
         );
         assert_eq!(span.days.len(), GRID_DAYS);
@@ -233,7 +266,7 @@ mod tests {
             &watched(&[("2026-09-15", 60_000)]),
             &evidence_on(&[], &today),
             &EvidenceFrom::default(),
-            &today,
+            Some(&today),
             &today,
         );
         let wire = serde_json::to_value(&span).expect("serialises");
@@ -262,7 +295,7 @@ mod tests {
             &watched(&[]),
             &evidence_on(&[0, 0], &today),
             &EvidenceFrom::default(),
-            &key("2026-09-15"),
+            Some(&key("2026-09-15")),
             &today,
         );
         assert_eq!(span.dropped_evidence, 2);

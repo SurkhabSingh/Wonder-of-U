@@ -164,8 +164,8 @@ export function ProgressPage({
 
         {report ? (
           <>
-            <DayChart days={report.calendar.days} today={report.activity.today} />
-            <StudyCalendar span={report.calendar} today={report.activity.today} />
+            <DayChart days={report.calendar.days} today={report.today} />
+            <StudyCalendar span={report.calendar} today={report.today} />
           </>
         ) : null}
 
@@ -183,9 +183,6 @@ export function ProgressPage({
                 : null,
               report.library.itemsWithoutLength > 0
                 ? `${formatCount(report.library.itemsWithoutLength)} of no known length`
-                : null,
-              report.activity.itemsWithoutADay > 0
-                ? `${formatCount(report.activity.itemsWithoutADay)} on no known day`
                 : null,
               immersion && immersion.todayUnmeasuredMs > 0
                 ? `about ${formatDuration(
