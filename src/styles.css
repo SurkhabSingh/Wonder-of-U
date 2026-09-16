@@ -4125,110 +4125,131 @@ input::placeholder {
 
 /* The activity calendar. Four steps of the accent, because a legend with more than four
    entries is one nobody reads and fewer cannot tell a busy day from a quiet one. */
-.progress-cal-grid {
-  display: grid;
-  grid-auto-flow: row;
-  gap: 3px;
+.progress-cal {
   margin-top: var(--space-7);
+}
+
+.progress-cal-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-2);
+  row-gap: var(--space-1);
+}
+
+.progress-cal-months {
+  grid-column: 2;
+  display: grid;
+  column-gap: 3px;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--text-subtle);
+}
+
+.progress-cal-months span {
+  grid-row: 1;
+  white-space: nowrap;
+}
+
+.progress-cal-weekdays {
+  grid-column: 1;
+  display: grid;
+  grid-template-rows: repeat(7, minmax(0, 1fr));
+  row-gap: 3px;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--text-subtle);
+}
+
+.progress-cal-weekdays span {
+  display: flex;
+  align-items: center;
+}
+
+.progress-cal-grid {
+  grid-column: 2;
+  display: grid;
+  gap: 3px;
   width: 100%;
 }
 
 .progress-cal-cell {
   position: relative;
+  display: block;
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 2px;
+  border-radius: 3px;
   background: var(--surface-active);
-  display: block;
 }
 
 .progress-cal-cell.l1 {
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface-active));
 }
 
 .progress-cal-cell.l2 {
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 52%, var(--surface-active));
 }
 
 .progress-cal-cell.l3 {
-  background: color-mix(in srgb, var(--accent) 68%, transparent);
+  background: color-mix(in srgb, var(--accent) 76%, var(--surface-active));
 }
 
 .progress-cal-cell.l4 {
-  background: color-mix(in srgb, var(--accent) 92%, transparent);
+  background: var(--accent);
 }
 
-/* One texture, one meaning wherever it appears: time was not counted here. Never a colour
-   step, because there is no number to encode. */
+.progress-cal-cell.is-future {
+  visibility: hidden;
+}
+
+/* Present so the year reads whole, and quieter than a measured empty day so the two are
+   never taken for the same thing. */
+.progress-cal-cell.is-void {
+  background: color-mix(in srgb, var(--surface-active) 40%, transparent);
+}
+
+/* Hollow rather than filled: time was not being counted, so it cannot be a step on the ramp. */
 .progress-cal-cell.is-uncounted {
-  background:
-    repeating-linear-gradient(45deg, var(--surface-active) 0 1px, transparent 1px 3px),
-    var(--surface);
-}
-
-.progress-cal-cell.is-outside {
   background: transparent;
+  box-shadow: inset 0 0 0 1px var(--surface-active);
 }
 
-.progress-cal-cell.has-material {
-  box-shadow: inset 0 -1px 0 var(--border-strong);
+.progress-cal-cell.is-material {
+  background: color-mix(in srgb, var(--text-subtle) 32%, transparent);
 }
 
-/* The day counting started rarely lands on a column edge, so the seam is drawn on the cell
-   rather than in the grid gap, composed comma-first with the rule above it. */
-.progress-cal-cell.is-seam {
-  box-shadow: inset 2px 0 0 var(--border-strong);
-}
-
-.progress-cal-cell.is-seam.has-material {
-  box-shadow:
-    inset 2px 0 0 var(--border-strong),
-    inset 0 -1px 0 var(--border-strong);
-}
-
-.progress-cal-cell.is-today {
-  outline: 1px solid var(--text-subtle);
-  outline-offset: -1px;
-}
-
-/* Ringed, so one mark reads on the palest step and the strongest alike. */
-.progress-cal-card-dot {
+.progress-cal-card {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 3px;
-  height: 3px;
-  margin: -1.5px 0 0 -1.5px;
+  top: 20%;
+  right: 20%;
+  width: 26%;
+  height: 26%;
+  min-width: 3px;
+  min-height: 3px;
   border-radius: 50%;
-  background: var(--surface);
-  box-shadow: 0 0 0 1px var(--accent);
+  background: var(--text-strong);
 }
 
 .progress-cal-legend {
   display: flex;
-  align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-2) var(--space-5);
   margin-top: var(--space-4);
   font-size: var(--text-2xs);
   color: var(--text-subtle);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
-.progress-cal-legend .progress-cal-cell {
-  width: 9px;
-  height: 9px;
-  flex: none;
-}
-
+.progress-cal-ramp,
 .progress-cal-key {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  margin-left: var(--space-3);
-  text-transform: none;
-  letter-spacing: 0;
+}
+
+.progress-cal-legend .progress-cal-cell {
+  width: 10px;
+  height: 10px;
+  flex: none;
 }
 
 .progress-cal-since {

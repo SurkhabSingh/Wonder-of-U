@@ -16,7 +16,7 @@ pub(crate) struct EvidenceFrom {
 }
 
 impl EvidenceFrom {
-        pub(crate) fn merge_earlier(&mut self, seen: &EvidenceFrom) -> bool {
+    pub(crate) fn merge_earlier(&mut self, seen: &EvidenceFrom) -> bool {
         let Some(theirs) = seen.library.as_ref() else {
             return false;
         };
