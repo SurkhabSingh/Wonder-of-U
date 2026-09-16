@@ -105,6 +105,20 @@
   --segment-mark: color-mix(in srgb, var(--accent) 22%, transparent);
   --timestamp-color: var(--text-subtle);
   --gutter-width: 3.25rem;
+  /* Progress charts. Validated against their own card: the time ramp as an ordinal scale,
+     material and zero against every time step for normal and colour-blind vision. */
+  --viz-void: #e8e8ec;
+  --viz-zero: #e2e2e7;
+  --viz-time-1: #86b6ef;
+  --viz-time-2: #5598e7;
+  --viz-time-3: #2a78d6;
+  --viz-time-4: #184f95;
+  --viz-material: #ee7f52;
+  --viz-series: #2a78d6;
+  --viz-grid: #ececf0;
+  --viz-mark: #0c0c0e;
+  --viz-mark-t3: #ffffff;
+  --viz-mark-t4: #ffffff;
 }
 
 :root[data-theme="dark"] {
@@ -132,6 +146,18 @@
   --error-soft: rgba(255, 133, 133, 0.12);
   --recording: #ff8a5f;
   --focus: rgba(102, 181, 255, 0.28);
+  --viz-void: #2a2b2f;
+  --viz-zero: #2e2f34;
+  --viz-time-1: #184f95;
+  --viz-time-2: #256abf;
+  --viz-time-3: #3987e5;
+  --viz-time-4: #86b6ef;
+  --viz-material: #bb4e23;
+  --viz-series: #3987e5;
+  --viz-grid: #1d1e21;
+  --viz-mark: #f4f4f6;
+  --viz-mark-t3: #f4f4f6;
+  --viz-mark-t4: #101112;
 }
 
 :root[data-theme="light"] {

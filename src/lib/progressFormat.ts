@@ -58,3 +58,30 @@ export function formatCompared(
   }
   return parts.join(" · ");
 }
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Day keys are already local days from the backend, so arithmetic runs in UTC to keep the
+// machine's own zone out of it.
+export function shiftDay(day: string, byDays: number): string {
+  const at = new Date(`${day}T00:00:00Z`);
+  at.setUTCDate(at.getUTCDate() + byDays);
+  return at.toISOString().slice(0, 10);
+}
+
+/** 0 is Monday. */
+export function weekdayOf(day: string): number {
+  return (new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7;
+}
+
+export function monthOf(day: string): number {
+  return Number(day.slice(5, 7)) - 1;
+}
+
+export function monthName(month: number): string {
+  return MONTH_NAMES[month];
+}
+
+export function shortDate(day: string): string {
+  return `${MONTH_NAMES[monthOf(day)]} ${Number(day.slice(8, 10))}`;
+}

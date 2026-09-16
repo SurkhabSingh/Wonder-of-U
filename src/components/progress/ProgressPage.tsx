@@ -8,6 +8,7 @@ import {
   formatDuration,
   formatPercent,
 } from "../../lib/progressFormat";
+import { DayChart } from "./DayChart";
 import { StudyCalendar } from "./StudyCalendar";
 
 /// One question — am I getting better — so comprehension leads and the rest is context.
@@ -162,7 +163,10 @@ export function ProgressPage({
         ) : null}
 
         {report ? (
-          <StudyCalendar span={report.calendar} today={report.activity.today} />
+          <>
+            <DayChart days={report.calendar.days} today={report.activity.today} />
+            <StudyCalendar span={report.calendar} today={report.activity.today} />
+          </>
         ) : null}
 
         {report ? (

@@ -4125,11 +4125,165 @@ input::placeholder {
 
 /* The activity calendar. Four steps of the accent, because a legend with more than four
    entries is one nobody reads and fewer cannot tell a busy day from a quiet one. */
+.day-chart {
+  margin-top: var(--space-7);
+}
+
+.day-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.day-chart-title {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.day-chart-total {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.day-chart-frame {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: 132px auto;
+  column-gap: var(--space-2);
+}
+
+.day-chart-y {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 30px;
+}
+
+.day-chart-y span {
+  position: absolute;
+  right: 0;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-subtle);
+  transform: translateY(50%);
+}
+
+.day-chart-plot {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.day-chart-grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--viz-grid);
+}
+
+/* A plain wash, not a texture: the days on it were never timed, so they carry no bar. */
+.day-chart-uncounted {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--viz-void) 26%, transparent);
+}
+
+.day-chart-uncounted span {
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: var(--text-subtle);
+}
+
+.day-chart-columns {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.day-chart-slot {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  justify-content: center;
+  height: 100%;
+  border-radius: 4px;
+  outline: none;
+}
+
+.day-chart-slot.is-counted:hover,
+.day-chart-slot.is-counted:focus-visible {
+  background: color-mix(in srgb, var(--text-subtle) 12%, transparent);
+}
+
+.day-chart-bar {
+  position: relative;
+  display: block;
+  width: min(24px, 64%);
+  min-height: 2px;
+  border-radius: 4px 4px 0 0;
+  background: var(--viz-series);
+}
+
+/* A measured zero is a stub on the baseline, so it is never read as a day with no reading. */
+.day-chart-zero {
+  display: block;
+  width: min(24px, 64%);
+  height: 3px;
+  border-radius: 1px;
+  background: var(--viz-zero);
+}
+
+.day-chart-peak {
+  position: absolute;
+  font-style: normal;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text);
+  transform: translateX(-50%);
+}
+
+.day-chart-x {
+  position: relative;
+  grid-column: 2;
+  grid-row: 2;
+  height: 18px;
+  margin-top: var(--space-2);
+}
+
+.day-chart-x span {
+  position: absolute;
+  top: 0;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: var(--text-subtle);
+}
+
 .progress-cal {
   margin-top: var(--space-7);
 }
 
 .progress-cal-body {
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   column-gap: var(--space-2);
@@ -4178,68 +4332,89 @@ input::placeholder {
   width: 100%;
   aspect-ratio: 1;
   border-radius: 3px;
-  background: var(--surface-active);
-}
-
-.progress-cal-cell.l1 {
-  background: color-mix(in srgb, var(--accent) 30%, var(--surface-active));
-}
-
-.progress-cal-cell.l2 {
-  background: color-mix(in srgb, var(--accent) 52%, var(--surface-active));
-}
-
-.progress-cal-cell.l3 {
-  background: color-mix(in srgb, var(--accent) 76%, var(--surface-active));
-}
-
-.progress-cal-cell.l4 {
-  background: var(--accent);
 }
 
 .progress-cal-cell.is-future {
   visibility: hidden;
 }
 
-/* Present so the year reads whole, and quieter than a measured empty day so the two are
-   never taken for the same thing. */
+/* Hollow: nothing is known, so nothing is filled in. */
 .progress-cal-cell.is-void {
-  background: color-mix(in srgb, var(--surface-active) 40%, transparent);
+  box-shadow: inset 0 0 0 1px var(--viz-void);
 }
 
-/* Hollow rather than filled: time was not being counted, so it cannot be a step on the ramp. */
-.progress-cal-cell.is-uncounted {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--surface-active);
+.progress-cal-cell.is-zero {
+  background: var(--viz-zero);
 }
 
 .progress-cal-cell.is-material {
-  background: color-mix(in srgb, var(--text-subtle) 32%, transparent);
+  background: var(--viz-material);
 }
 
+.progress-cal-cell.t1 {
+  background: var(--viz-time-1);
+}
+
+.progress-cal-cell.t2 {
+  background: var(--viz-time-2);
+}
+
+.progress-cal-cell.t3 {
+  background: var(--viz-time-3);
+}
+
+.progress-cal-cell.t4 {
+  background: var(--viz-time-4);
+}
+
+.progress-cal-grid .progress-cal-cell:not(.is-future):hover {
+  outline: 1px solid var(--text-muted);
+  outline-offset: 1px;
+}
+
+/* A corner badge whose ink is picked per fill, so it clears 3:1 on every step without a
+   ring - a ring round a centred dot reads as a radio button. */
 .progress-cal-card {
   position: absolute;
-  top: 20%;
-  right: 20%;
-  width: 26%;
-  height: 26%;
+  top: 18%;
+  right: 18%;
+  width: 30%;
+  height: 30%;
   min-width: 3px;
   min-height: 3px;
   border-radius: 50%;
-  background: var(--text-strong);
+  background: var(--viz-mark);
+}
+
+.t3 > .progress-cal-card {
+  background: var(--viz-mark-t3);
+}
+
+.t4 > .progress-cal-card {
+  background: var(--viz-mark-t4);
 }
 
 .progress-cal-legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2) var(--space-5);
+  gap: var(--space-2) var(--space-6);
   margin-top: var(--space-4);
   font-size: var(--text-2xs);
-  color: var(--text-subtle);
+  color: var(--text-muted);
 }
 
-.progress-cal-ramp,
+.progress-cal-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.progress-cal-scale-name {
+  color: var(--text);
+}
+
+.progress-cal-step,
 .progress-cal-key {
   display: inline-flex;
   align-items: center;
@@ -4247,8 +4422,8 @@ input::placeholder {
 }
 
 .progress-cal-legend .progress-cal-cell {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   flex: none;
 }
 
@@ -4256,6 +4431,69 @@ input::placeholder {
   margin-top: var(--space-2);
   font-size: var(--text-2xs);
   color: var(--text-subtle);
+}
+
+.viz-tip {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+
+.viz-tip strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.viz-tip span {
+  color: var(--text-muted);
+}
+
+.viz-table {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.viz-table summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.viz-table summary:hover {
+  color: var(--text);
+}
+
+.viz-table table {
+  margin-top: var(--space-2);
+  border-collapse: collapse;
+}
+
+.viz-table th,
+.viz-table td {
+  padding: 4px var(--space-5) 4px 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-table th {
+  font-weight: 500;
+  color: var(--text-subtle);
+}
+
+.viz-table td {
+  color: var(--text);
 }
 
 /* Small stats in a block, then the calendar, then the caveats — one card rather than three
