@@ -105,22 +105,25 @@
   --segment-mark: color-mix(in srgb, var(--accent) 22%, transparent);
   --timestamp-color: var(--text-subtle);
   --gutter-width: 3.25rem;
-  /* Progress charts. Each ramp is validated against its own card as an ordinal scale, and
-     its first step against zero for normal and colour-blind vision. */
+  /* Progress charts. Every ramp runs light to dark in both themes, so a busier day always
+     reads darker; each is validated on its own card, step against step and against zero. */
   --viz-void: #e8e8ec;
   --viz-zero: #e2e2e7;
-  --viz-time-1: #86b6ef;
-  --viz-time-2: #5598e7;
-  --viz-time-3: #2a78d6;
-  --viz-time-4: #184f95;
-  --viz-cards-1: #15cb8d;
-  --viz-cards-2: #0aae78;
-  --viz-cards-3: #008f62;
-  --viz-cards-4: #026040;
-  --viz-material-1: #fe9068;
-  --viz-material-2: #e56e40;
-  --viz-material-3: #c34f1f;
-  --viz-material-4: #8a2e00;
+  --viz-time-1: #7ab4ff;
+  --viz-time-2: #3486e9;
+  --viz-time-3: #005bb6;
+  --viz-time-4: #003672;
+  --viz-time-bar: #2a78d6;
+  --viz-cards-1: #09cb8c;
+  --viz-cards-2: #009f6d;
+  --viz-cards-3: #046f4b;
+  --viz-cards-4: #01432c;
+  --viz-cards-bar: #008f62;
+  --viz-material-1: #ff8e64;
+  --viz-material-2: #d75a26;
+  --viz-material-3: #9f3701;
+  --viz-material-4: #631e00;
+  --viz-material-bar: #c34f1f;
   --viz-grid: #ececf0;
 }
 
@@ -151,18 +154,21 @@
   --focus: rgba(102, 181, 255, 0.28);
   --viz-void: #2a2b2f;
   --viz-zero: #2e2f34;
-  --viz-time-1: #184f95;
-  --viz-time-2: #256abf;
-  --viz-time-3: #3987e5;
-  --viz-time-4: #86b6ef;
-  --viz-cards-1: #026040;
-  --viz-cards-2: #057f56;
-  --viz-cards-3: #019f6d;
-  --viz-cards-4: #25d193;
-  --viz-material-1: #8a2e00;
-  --viz-material-2: #b34007;
-  --viz-material-3: #d45e30;
-  --viz-material-4: #fe9068;
+  --viz-time-1: #b9d7ff;
+  --viz-time-2: #69aafe;
+  --viz-time-3: #297cdf;
+  --viz-time-4: #0053a7;
+  --viz-time-bar: #3987e5;
+  --viz-cards-1: #49f6b2;
+  --viz-cards-2: #00c688;
+  --viz-cards-3: #069465;
+  --viz-cards-4: #026644;
+  --viz-cards-bar: #019f6d;
+  --viz-material-1: #ffc5b0;
+  --viz-material-2: #fe7d4c;
+  --viz-material-3: #cd5019;
+  --viz-material-4: #923100;
+  --viz-material-bar: #d45e30;
   --viz-grid: #1d1e21;
 }
 

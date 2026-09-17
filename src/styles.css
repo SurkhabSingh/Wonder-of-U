@@ -4156,6 +4156,7 @@ input::placeholder {
   --lens-2: var(--viz-time-2);
   --lens-3: var(--viz-time-3);
   --lens-4: var(--viz-time-4);
+  --lens-bar: var(--viz-time-bar);
   margin-top: var(--space-7);
 }
 
@@ -4164,6 +4165,7 @@ input::placeholder {
   --lens-2: var(--viz-cards-2);
   --lens-3: var(--viz-cards-3);
   --lens-4: var(--viz-cards-4);
+  --lens-bar: var(--viz-cards-bar);
 }
 
 .progress-charts.lens-material {
@@ -4171,6 +4173,7 @@ input::placeholder {
   --lens-2: var(--viz-material-2);
   --lens-3: var(--viz-material-3);
   --lens-4: var(--viz-material-4);
+  --lens-bar: var(--viz-material-bar);
 }
 
 .day-chart {
@@ -4285,7 +4288,7 @@ input::placeholder {
   width: min(24px, 64%);
   min-height: 2px;
   border-radius: 4px 4px 0 0;
-  background: var(--lens-3);
+  background: var(--lens-bar);
 }
 
 /* A measured zero is a stub on the baseline, so it is never read as a day with no reading. */
