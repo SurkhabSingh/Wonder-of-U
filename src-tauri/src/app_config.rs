@@ -36,8 +36,8 @@ pub(crate) const MPV_SKIPPED_ENTRY: &str = "mpv.pdb";
 #[cfg(test)]
 mod tests {
     use super::{
-        RECOMMENDED_FFMPEG_RUNTIME_FILE, RECOMMENDED_FFMPEG_RUNTIME_URL,
-        RECOMMENDED_WHISPER_RUNTIME_VERSION,
+        CARD_MADE_EVENT, PROGRESS_EVENT, RECOMMENDED_FFMPEG_RUNTIME_FILE,
+        RECOMMENDED_FFMPEG_RUNTIME_URL, RECOMMENDED_WHISPER_RUNTIME_VERSION,
     };
 
     #[test]
@@ -78,8 +78,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_frontend_agrees_on_the_recommended_runtime_version() {
+    fn frontend_constant(name: &str) -> String {
         let constants_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/constants.ts");
         let source = std::fs::read_to_string(&constants_path)
@@ -87,16 +86,27 @@ mod tests {
 
         let declaration = source
             .lines()
-            .find(|line| line.contains("RECOMMENDED_RUNTIME_VERSION ="))
-            .expect("constants.ts declares RECOMMENDED_RUNTIME_VERSION");
-        let frontend_version = declaration
+            .find(|line| line.contains(&format!("{name} =")))
+            .unwrap_or_else(|| panic!("constants.ts declares {name}"));
+        declaration
             .split('"')
             .nth(1)
-            .expect("the declaration is a double-quoted string");
+            .expect("the declaration is a double-quoted string")
+            .to_string()
+    }
 
+    #[test]
+    fn the_frontend_agrees_on_the_recommended_runtime_version() {
         assert_eq!(
-            frontend_version, RECOMMENDED_WHISPER_RUNTIME_VERSION,
+            frontend_constant("RECOMMENDED_RUNTIME_VERSION"),
+            RECOMMENDED_WHISPER_RUNTIME_VERSION,
             "src/constants.ts and app_config.rs disagree about the recommended whisper runtime"
         );
+    }
+
+    #[test]
+    fn the_frontend_listens_for_progress_under_the_names_it_is_sent() {
+        assert_eq!(frontend_constant("PROGRESS_EVENT"), PROGRESS_EVENT);
+        assert_eq!(frontend_constant("CARD_MADE_EVENT"), CARD_MADE_EVENT);
     }
 }

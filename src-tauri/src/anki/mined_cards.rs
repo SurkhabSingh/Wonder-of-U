@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -17,7 +18,19 @@ enum Unanswered {
     Failed(String),
 }
 
-// Held from the first search to the saved file, so two counts cannot save out of order.
+enum Counted {
+    Kept {
+        total: usize,
+        at_ms: u64,
+    },
+    Unkept {
+        total: usize,
+        at_ms: u64,
+        reason: String,
+    },
+    Unanswered(Unanswered),
+}
+
 static COUNTING: Mutex<()> = Mutex::new(());
 
 /// How many notes in the open collection came from this app, counted by tag — the only
@@ -27,36 +40,69 @@ pub(crate) fn count_mined_cards_inner<R: Runtime>(app: &AppHandle<R>) -> Measure
         .state::<crate::app_types::AppPathsState>()
         .mined_cards_file
         .clone();
-    let _counting = COUNTING.lock();
-    let now_ms = crate::app_runtime::now_ms();
-    let unanswered = match read_mined_notes() {
-        Ok(notes) => {
-            match cards::keep(&path, &notes, now_ms, crate::progress::day::today()) {
-                Ok(_) => {
-                    let _ = app.emit(PROGRESS_EVENT, ());
-                }
-                Err(reason) => crate::app_runtime::log_event(
+    match count_and_keep(&path) {
+        Counted::Kept { total, at_ms } => {
+            let _ = app.emit(PROGRESS_EVENT, ());
+            from_new_answer(total, at_ms, None)
+        }
+        Counted::Unkept {
+            total,
+            at_ms,
+            reason,
+        } => {
+            crate::app_runtime::log_event(
+                app,
+                "WARN",
+                "progress.cards_unsaved",
+                serde_json::json!({ "message": reason }),
+            );
+            from_new_answer(total, at_ms, Some(reason))
+        }
+        Counted::Unanswered(unanswered) => {
+            let kept = cards::load(&path).unwrap_or_else(|reason| {
+                crate::app_runtime::log_event(
                     app,
                     "WARN",
-                    "progress.cards_unsaved",
+                    "progress.cards_unreadable",
                     serde_json::json!({ "message": reason }),
-                ),
-            }
-            return Measured::known(notes.len(), now_ms);
+                );
+                None
+            });
+            from_last_answer(kept, unanswered)
         }
-        Err(unanswered) => unanswered,
-    };
+    }
+}
 
-    let kept = cards::load(&path).unwrap_or_else(|reason| {
-        crate::app_runtime::log_event(
-            app,
-            "WARN",
-            "progress.cards_unreadable",
-            serde_json::json!({ "message": reason }),
-        );
-        None
-    });
-    from_last_answer(kept, unanswered)
+/// Holds the lock from the first search to the saved file, so two counts cannot save out of
+/// order; everything announced about the count happens after it is released.
+fn count_and_keep(path: &Path) -> Counted {
+    let _counting = COUNTING.lock();
+    let at_ms = crate::app_runtime::now_ms();
+    let notes = match read_mined_notes() {
+        Ok(notes) => notes,
+        Err(unanswered) => return Counted::Unanswered(unanswered),
+    };
+    let total = notes.len();
+    match cards::keep(path, &notes, at_ms, crate::progress::day::today()) {
+        Ok(_) => Counted::Kept { total, at_ms },
+        Err(reason) => Counted::Unkept {
+            total,
+            at_ms,
+            reason,
+        },
+    }
+}
+
+/// A count the charts could not be given is partial, which also offers to count again.
+fn from_new_answer(total: usize, at_ms: u64, unsaved: Option<String>) -> Measured<usize> {
+    match unsaved {
+        None => Measured::known(total, at_ms),
+        Some(reason) => Measured::partial(
+            total,
+            at_ms,
+            format!("The charts could not be updated with this count. {reason}"),
+        ),
+    }
 }
 
 fn from_last_answer(kept: Option<cards::CardHistory>, unanswered: Unanswered) -> Measured<usize> {
@@ -177,6 +223,21 @@ mod tests {
             assert_eq!(wire["status"], serde_json::json!("unavailable"));
             assert_eq!(wire["value"], serde_json::Value::Null);
         }
+    }
+
+    #[test]
+    fn a_count_the_charts_did_not_get_is_partial_and_keeps_its_number() {
+        let saved = serde_json::to_value(from_new_answer(4, 9, None)).expect("serialises");
+        assert_eq!(saved["status"], serde_json::json!("known"));
+
+        let unsaved = serde_json::to_value(from_new_answer(4, 9, Some("disk full".to_string())))
+            .expect("serialises");
+        assert_eq!(unsaved["status"], serde_json::json!("partial"));
+        assert_eq!(unsaved["value"], serde_json::json!(4));
+        assert_eq!(unsaved["asOfMs"], serde_json::json!(9));
+        assert!(unsaved["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("disk full")));
     }
 
     #[test]

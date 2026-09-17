@@ -110,6 +110,5 @@ export function useProgress(activePage: string) {
     minedCards,
     countingCards,
     countCards: loadCards,
-    refreshProgress: refresh,
   };
 }

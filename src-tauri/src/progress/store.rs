@@ -224,7 +224,7 @@ pub(crate) fn ensure(path: &Path, today: DayKey, now_ms: u64) -> Result<(), Stri
 
 /// Moves the evidence horizon earlier when the library reaches further back than the
 /// header knows. Answers whether it wrote, so a read that changes nothing touches no file.
-pub(crate) fn remember_evidence(path: &Path, seen: &EvidenceFrom) -> Result<bool, String> {
+pub(super) fn remember_evidence(path: &Path, seen: &EvidenceFrom) -> Result<bool, String> {
     let _guard = WRITE.lock();
     let (mut header, store) = match load(path) {
         Loaded::Present { header, store } => (header, store),
@@ -240,7 +240,7 @@ pub(crate) fn remember_evidence(path: &Path, seen: &EvidenceFrom) -> Result<bool
 
 /// Adds `delta` to the days already on disk. Read-modify-write, so two writers of the
 /// same day accumulate rather than one overwriting the other.
-pub(crate) fn merge_days(path: &Path, delta: &Ledger) -> Result<(), String> {
+pub(super) fn merge_days(path: &Path, delta: &Ledger) -> Result<(), String> {
     let _guard = WRITE.lock();
     let (header, mut store) = match load(path) {
         Loaded::Present { header, store } => (header, store),
@@ -251,7 +251,7 @@ pub(crate) fn merge_days(path: &Path, delta: &Ledger) -> Result<(), String> {
     write_all(path, &header, &store)
 }
 
-pub(crate) fn append_sample(path: &Path, sample: Sample) -> Result<(), String> {
+pub(super) fn append_sample(path: &Path, sample: Sample) -> Result<(), String> {
     let _guard = WRITE.lock();
     let (header, mut store) = match load(path) {
         Loaded::Present { header, store } => (header, store),

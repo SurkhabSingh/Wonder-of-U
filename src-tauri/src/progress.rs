@@ -16,12 +16,25 @@ pub(crate) mod watch_sampler;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-pub(crate) fn flush_days<R: Runtime>(app: &AppHandle<R>, pending: &mut ledger::Ledger) -> bool {
-    let path = app
-        .state::<crate::app_types::AppPathsState>()
+fn progress_file<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
+    app.state::<crate::app_types::AppPathsState>()
         .progress_file
-        .clone();
-    let outcome = store::merge_days(&path, pending);
+        .clone()
+}
+
+/// The store's writers are private to this module, so a write from elsewhere has to come
+/// through here and cannot skip the save-failure notice.
+pub(crate) fn append_sample<R: Runtime>(
+    app: &AppHandle<R>,
+    sample: store::Sample,
+) -> Result<(), String> {
+    let written = store::append_sample(&progress_file(app), sample);
+    health::record(app, &written);
+    written
+}
+
+pub(crate) fn flush_days<R: Runtime>(app: &AppHandle<R>, pending: &mut ledger::Ledger) -> bool {
+    let outcome = store::merge_days(&progress_file(app), pending);
     health::record(app, &outcome);
     match outcome {
         Ok(()) => {
