@@ -6,6 +6,7 @@ import {
   formatDay,
   formatDelta,
   formatDuration,
+  formatMoment,
   formatPercent,
 } from "../../lib/progressFormat";
 import { DayChart } from "./DayChart";
@@ -63,6 +64,17 @@ export function ProgressPage({
           Your progress history could not be opened, so there is nothing to show. Nothing
           has been written over it.
         </p>
+      ) : null}
+
+      {report?.writeFailure ? (
+        <div className="progress-notice" role="status">
+          <strong>Progress hasn't saved since {formatMoment(report.writeFailure.sinceMs, now)}</strong>
+          <span>
+            Time you play is held until it can be written, as long as the app stays open.
+            Cards made and readings taken in the meantime may not be kept.
+          </span>
+          <span className="progress-notice-detail">{report.writeFailure.reason}</span>
+        </div>
       ) : null}
 
       <article className="panel progress-headline">

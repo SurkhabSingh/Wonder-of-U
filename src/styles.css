@@ -4125,6 +4125,29 @@ input::placeholder {
 
 /* The activity calendar. Four steps of the accent, because a legend with more than four
    entries is one nobody reads and fewer cannot tell a busy day from a quiet one. */
+.progress-notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.progress-notice strong {
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.progress-notice-detail {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
 .day-chart {
   margin-top: var(--space-7);
 }

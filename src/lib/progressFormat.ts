@@ -85,3 +85,10 @@ export function monthName(month: number): string {
 export function shortDate(day: string): string {
   return `${MONTH_NAMES[monthOf(day)]} ${Number(day.slice(8, 10))}`;
 }
+
+/** A clock time, with the date in front once it is no longer today. */
+export function formatMoment(ms: number, now: Date): string {
+  const when = new Date(ms);
+  const time = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return when.toDateString() === now.toDateString() ? time : `${formatDay(ms, now)}, ${time}`;
+}

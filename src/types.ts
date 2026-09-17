@@ -660,6 +660,11 @@ export type CalendarSpan = {
   droppedEvidence: number;
 };
 
+export type WriteFailure = {
+  sinceMs: number;
+  reason: string;
+};
+
 export type ProgressReport = {
   coveragePercent: Measured<number>;
   immersion: Measured<ImmersionReport>;
@@ -674,6 +679,8 @@ export type ProgressReport = {
   newerRows: number;
   // False means every number above is a guess about a file nobody opened.
   storeReadable: boolean;
+  // Set while saving is failing; what was done since then is not in the numbers above.
+  writeFailure: WriteFailure | null;
 };
 
 // The stacked sections inside the single Settings page. Setup-checklist rows and

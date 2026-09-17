@@ -2,6 +2,7 @@ pub(crate) mod credit;
 pub(crate) mod calendar;
 pub(crate) mod day;
 pub(crate) mod evidence;
+pub(crate) mod health;
 pub(crate) mod ledger;
 pub(crate) mod library;
 pub(crate) mod listen_sampler;
@@ -19,7 +20,9 @@ pub(crate) fn flush_days<R: Runtime>(app: &AppHandle<R>, pending: &mut ledger::L
         .state::<crate::app_types::AppPathsState>()
         .progress_file
         .clone();
-    match store::merge_days(&path, pending) {
+    let outcome = store::merge_days(&path, pending);
+    health::record(app, &outcome);
+    match outcome {
         Ok(()) => {
             *pending = ledger::Ledger::default();
             true

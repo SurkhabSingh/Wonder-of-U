@@ -123,6 +123,8 @@ pub(crate) struct ProgressReport {
     pub(crate) damaged_rows: usize,
     pub(crate) newer_rows: usize,
     pub(crate) store_readable: bool,
+    /// Set while writes to the store are failing, so the page can say what is not being kept.
+    pub(crate) write_failure: Option<super::health::WriteFailure>,
 }
 
 pub(crate) fn load_progress_inner<R: tauri::Runtime>(
@@ -159,30 +161,55 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         (library, evidence)
     };
 
-    // Persisted before the store is read, so the calendar draws the floor the header keeps
-    // rather than whatever the library happens to hold today.
-    if let Err(reason) = super::store::remember_evidence(&path, &evidence.horizon()) {
-        crate::app_runtime::log_event(
-            app,
-            "WARN",
-            "progress.horizon_unavailable",
-            serde_json::json!({ "message": reason }),
-        );
+    match super::store::remember_evidence(&path, &evidence.horizon()) {
+        Ok(true) => super::health::record(app, &Ok(())),
+        Ok(false) => {}
+        Err(reason) => {
+            crate::app_runtime::log_event(
+                app,
+                "WARN",
+                "progress.horizon_unavailable",
+                serde_json::json!({ "message": reason }),
+            );
+            super::health::record(app, &Err(reason));
+        }
     }
+    Ok(assemble(
+        super::store::load(&path),
+        &evidence,
+        library,
+        &current_build,
+        &today,
+        super::health::current(),
+        crate::app_runtime::now_ms(),
+    ))
+}
 
-    match super::store::load(&path) {
-        super::store::Loaded::Present { header, store } => Ok(ProgressReport {
-            coverage_percent: coverage_from(&store.samples, &current_build),
-            immersion: Measured::known(
-                super::streak::summarise(&store.days, &today, &header.first_run_day),
-                crate::app_runtime::now_ms(),
+/// Every choice about what the page is told, with nothing to read or lock, so each state of
+/// the store can be checked without the app running.
+fn assemble(
+    loaded: super::store::Loaded,
+    evidence: &super::evidence::LibraryEvidence,
+    library: super::library::LibraryReport,
+    current_build: &crate::app_types::KnownWordsBuild,
+    today: &super::day::DayKey,
+    write_failure: Option<super::health::WriteFailure>,
+    now_ms: u64,
+) -> ProgressReport {
+    match loaded {
+        super::store::Loaded::Present { header, store } => ProgressReport {
+            coverage_percent: coverage_from(&store.samples, current_build),
+            immersion: immersion_from(
+                super::streak::summarise(&store.days, today, &header.first_run_day),
+                write_failure.is_some(),
+                now_ms,
             ),
             calendar: super::calendar::build(
                 &store.days,
-                &evidence,
-                &header.evidence_from,
+                evidence,
+                &floor_from(&header.evidence_from, evidence),
                 Some(&header.first_run_day),
-                &today,
+                today,
             ),
             comparison: latest_comparison(&store.samples),
             today: today.clone(),
@@ -192,15 +219,16 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             damaged_rows: store.damaged,
             newer_rows: store.newer,
             store_readable: true,
-        }),
-        super::store::Loaded::Missing => Ok(ProgressReport {
+            write_failure,
+        },
+        super::store::Loaded::Missing => ProgressReport {
             coverage_percent: Measured::unavailable(
                 "Nothing has been measured yet. Refresh your word list to take a first reading.",
             ),
             immersion: Measured::unavailable(
                 "Time has not been counted yet. It starts adding up as you listen and watch here.",
             ),
-            calendar: super::calendar::uncounted(&evidence, &evidence.horizon(), &today),
+            calendar: super::calendar::uncounted(evidence, &evidence.horizon(), today),
             comparison: None,
             today: today.clone(),
             library,
@@ -209,15 +237,16 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             damaged_rows: 0,
             newer_rows: 0,
             store_readable: true,
-        }),
-        super::store::Loaded::Unreadable(_) => Ok(ProgressReport {
+            write_failure,
+        },
+        super::store::Loaded::Unreadable(_) => ProgressReport {
             coverage_percent: Measured::unavailable(
                 "Your progress history could not be opened, so there is nothing to show. It is not lost — nothing has been written over it.",
             ),
             immersion: Measured::unavailable(
                 "Your progress history could not be opened, so the time you have put in cannot be shown. It is not lost — nothing has been written over it.",
             ),
-            calendar: super::calendar::uncounted(&evidence, &evidence.horizon(), &today),
+            calendar: super::calendar::uncounted(evidence, &evidence.horizon(), today),
             comparison: None,
             today: today.clone(),
             library,
@@ -226,8 +255,37 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             damaged_rows: 0,
             newer_rows: 0,
             store_readable: false,
-        }),
+            write_failure,
+        },
     }
+}
+
+/// What the store holds is real, but time since saving stopped is not in it.
+fn immersion_from(
+    report: super::streak::ImmersionReport,
+    unsaved: bool,
+    now_ms: u64,
+) -> Measured<super::streak::ImmersionReport> {
+    if unsaved {
+        Measured::partial(
+            report,
+            now_ms,
+            "Time played since saving stopped is not counted here yet.",
+        )
+    } else {
+        Measured::known(report, now_ms)
+    }
+}
+
+/// The earlier of what the header kept and what the library shows now. The header alone
+/// would drop the months before the store if the write that records them had failed.
+fn floor_from(
+    kept: &super::evidence::EvidenceFrom,
+    evidence: &super::evidence::LibraryEvidence,
+) -> super::evidence::EvidenceFrom {
+    let mut floor = kept.clone();
+    floor.merge_earlier(&evidence.horizon());
+    floor
 }
 
 pub(crate) fn coverage_from(
@@ -301,6 +359,133 @@ mod tests {
         Sample::new(taken_at_ms, day(), build(note_type), 1, 0, items, 1_000)
     }
 
+    fn store_with_days(first_run: &str, days: &[(&str, u64)]) -> crate::progress::store::Loaded {
+        let mut ledger = crate::progress::ledger::Ledger::default();
+        for (on, ms) in days {
+            ledger.credit(
+                &serde_json::from_str(&format!("\"{on}\"")).expect("a day"),
+                crate::progress::credit::ImmersionSource::Watching,
+                crate::progress::credit::Credit {
+                    credited_ms: *ms,
+                    unmeasured_ms: 0,
+                },
+                false,
+            );
+        }
+        crate::progress::store::Loaded::Present {
+            header: crate::progress::store::Header {
+                v: 1,
+                first_run_day: serde_json::from_str(&format!("\"{first_run}\"")).expect("a day"),
+                rollover_hour: 4,
+                history_lost_at_ms: None,
+                evidence_from: Default::default(),
+            },
+            store: crate::progress::store::ProgressStore {
+                days: ledger,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn library_on(stamps: &[u64]) -> crate::progress::evidence::LibraryEvidence {
+        let videos: Vec<crate::app_types::WatchedVideo> = stamps
+            .iter()
+            .map(|added_at_ms| crate::app_types::WatchedVideo {
+                added_at_ms: *added_at_ms,
+                ..Default::default()
+            })
+            .collect();
+        crate::progress::evidence::collect(&[], &videos, &day())
+    }
+
+    fn assembled(
+        loaded: crate::progress::store::Loaded,
+        evidence: &crate::progress::evidence::LibraryEvidence,
+        write_failure: Option<crate::progress::health::WriteFailure>,
+    ) -> ProgressReport {
+        assemble(
+            loaded,
+            evidence,
+            crate::progress::library::summarise(&[]),
+            &build("Kaishi"),
+            &day(),
+            write_failure,
+            1,
+        )
+    }
+
+    fn failing() -> Option<crate::progress::health::WriteFailure> {
+        Some(crate::progress::health::WriteFailure {
+            since_ms: 5,
+            reason: "Access is denied.".to_string(),
+        })
+    }
+
+    #[test]
+    fn a_report_while_saving_fails_says_so_and_qualifies_the_time() {
+        let report = assembled(store_with_days("2026-09-08", &[]), &library_on(&[]), failing());
+        assert_eq!(report.write_failure, failing());
+        let immersion = serde_json::to_value(&report.immersion).expect("serialise");
+        assert_eq!(immersion["status"], serde_json::json!("partial"));
+        assert!(immersion["value"].is_object(), "what was saved is still shown");
+    }
+
+    #[test]
+    fn a_report_while_saving_works_carries_no_notice() {
+        let report = assembled(store_with_days("2026-09-08", &[]), &library_on(&[]), None);
+        assert_eq!(report.write_failure, None);
+        let immersion = serde_json::to_value(&report.immersion).expect("serialise");
+        assert_eq!(immersion["status"], serde_json::json!("known"));
+    }
+
+    /// Said beside a store that cannot be opened too: saving is failing there as well.
+    #[test]
+    fn an_unreadable_store_counts_no_day_and_still_passes_the_failure_on() {
+        let report = assembled(
+            crate::progress::store::Loaded::Unreadable("broken".to_string()),
+            &library_on(&[1_775_000_000_000]),
+            failing(),
+        );
+        assert!(!report.store_readable);
+        assert_eq!(report.calendar.counted_from, None);
+        assert!(report.calendar.days.iter().all(|entry| entry.combined_ms.is_none()));
+        assert_eq!(report.write_failure, failing());
+    }
+
+    #[test]
+    fn a_missing_store_is_readable_but_has_nothing_counted() {
+        let report = assembled(crate::progress::store::Loaded::Missing, &library_on(&[]), None);
+        assert!(report.store_readable);
+        assert_eq!(report.calendar.counted_from, None);
+        assert_eq!(report.first_run_day, None);
+    }
+
+    /// The header never got the library's floor, because that write failed. The months
+    /// before the store must still be drawn from what the library shows.
+    #[test]
+    fn the_calendar_reaches_the_library_even_when_the_header_never_saved_it() {
+        let library = library_on(&[1_775_000_000_000]);
+        let earliest = library.earliest().cloned().expect("a date");
+        let report = assembled(store_with_days("2026-09-08", &[]), &library, failing());
+        assert_eq!(report.calendar.first_day, Some(earliest));
+    }
+
+    #[test]
+    fn a_counted_day_in_the_store_reaches_the_calendar() {
+        let report = assembled(
+            store_with_days("2026-09-08", &[("2026-09-09", 60_000)]),
+            &library_on(&[]),
+            None,
+        );
+        let counted = report
+            .calendar
+            .days
+            .iter()
+            .find(|entry| entry.day.as_str() == "2026-09-09")
+            .expect("the day is drawn");
+        assert_eq!(counted.combined_ms, Some(60_000));
+    }
+
     /// The names ProgressPage reads straight off the report. A rename here blanks the page
     /// beside a healthy status, so the list is spelled out rather than trusted.
     #[test]
@@ -322,6 +507,7 @@ mod tests {
             damaged_rows: 0,
             newer_rows: 0,
             store_readable: true,
+            write_failure: None,
         };
         let wire = serde_json::to_value(&report).expect("serialises");
         let mut keys: Vec<&str> = wire
@@ -345,6 +531,7 @@ mod tests {
                 "readings",
                 "storeReadable",
                 "today",
+                "writeFailure",
             ]
         );
     }

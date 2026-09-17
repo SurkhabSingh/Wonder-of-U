@@ -134,7 +134,9 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
                     .state::<crate::app_types::AppPathsState>()
                     .progress_file
                     .clone();
-                crate::progress::store::append_sample(&path, sample)?;
+                let written = crate::progress::store::append_sample(&path, sample);
+                crate::progress::health::record(app, &written);
+                written?;
                 Ok(format!("taken: {items} items, {known}/{content} words"))
             }
         }
