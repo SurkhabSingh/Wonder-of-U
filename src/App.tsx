@@ -192,6 +192,8 @@ function App() {
     readCount: progressReadCount,
     failed: progressFailed,
     minedCards: progressMinedCards,
+    countingCards: progressCountingCards,
+    countCards: countProgressCards,
   } = useProgress(activePage);
   const watch = useWatchSession();
   const watchSubtitles = useWatchSubtitles();
@@ -1096,6 +1098,8 @@ function App() {
               readCount={progressReadCount}
               failed={progressFailed}
               minedCards={progressMinedCards}
+              countingCards={progressCountingCards}
+              onCountCards={() => void countProgressCards()}
               onGoToStudyPicks={() => openSettingsSection("studyPicks")}
             />
           ) : null}

@@ -411,12 +411,11 @@ pub(crate) async fn record_listening_sample(
     }
 }
 
-/// How many cards in the open collection came from this app.
+/// How many cards in the open collection came from this app. Also keeps them by day, for
+/// the Progress page to draw without asking Anki again.
 #[tauri::command]
-pub(crate) async fn count_mined_cards() -> Result<Measured<usize>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::anki::count_mined_cards_inner(crate::app_runtime::now_ms())
-    })
+pub(crate) async fn count_mined_cards(app: AppHandle) -> Result<Measured<usize>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::anki::count_mined_cards_inner(&app))
     .await
     .map_err(|error| error.to_string())
 }

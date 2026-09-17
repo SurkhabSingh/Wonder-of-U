@@ -140,10 +140,10 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             .map_err(|_| "Could not read the app settings.".to_string())?;
         crate::app_types::KnownWordsBuild::from_anki_settings(&persisted.settings.anki)
     };
-    let path = app
-        .state::<crate::app_types::AppPathsState>()
-        .progress_file
-        .clone();
+    let (path, cards_file) = {
+        let paths = app.state::<crate::app_types::AppPathsState>();
+        (paths.progress_file.clone(), paths.mined_cards_file.clone())
+    };
 
     let today = super::day::today();
     let (library, evidence) = {
@@ -174,9 +174,22 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             super::health::record(app, &Err(reason));
         }
     }
+    let cards = super::cards::load(&cards_file).unwrap_or_else(|reason| {
+        crate::app_runtime::log_event(
+            app,
+            "WARN",
+            "progress.cards_unreadable",
+            serde_json::json!({ "message": reason }),
+        );
+        None
+    });
+    let sources = super::calendar::Sources {
+        library: &evidence,
+        cards: cards.as_ref(),
+    };
     Ok(assemble(
         super::store::load(&path),
-        &evidence,
+        &sources,
         library,
         &current_build,
         &today,
@@ -189,7 +202,7 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
 /// the store can be checked without the app running.
 fn assemble(
     loaded: super::store::Loaded,
-    evidence: &super::evidence::LibraryEvidence,
+    sources: &super::calendar::Sources,
     library: super::library::LibraryReport,
     current_build: &crate::app_types::KnownWordsBuild,
     today: &super::day::DayKey,
@@ -206,8 +219,8 @@ fn assemble(
             ),
             calendar: super::calendar::build(
                 &store.days,
-                evidence,
-                &floor_from(&header.evidence_from, evidence),
+                sources,
+                &floor_from(&header.evidence_from, sources.library),
                 Some(&header.first_run_day),
                 today,
             ),
@@ -228,7 +241,7 @@ fn assemble(
             immersion: Measured::unavailable(
                 "Time has not been counted yet. It starts adding up as you listen and watch here.",
             ),
-            calendar: super::calendar::uncounted(evidence, &evidence.horizon(), today),
+            calendar: super::calendar::uncounted(sources, &sources.library.horizon(), today),
             comparison: None,
             today: today.clone(),
             library,
@@ -246,7 +259,7 @@ fn assemble(
             immersion: Measured::unavailable(
                 "Your progress history could not be opened, so the time you have put in cannot be shown. It is not lost — nothing has been written over it.",
             ),
-            calendar: super::calendar::uncounted(evidence, &evidence.horizon(), today),
+            calendar: super::calendar::uncounted(sources, &sources.library.horizon(), today),
             comparison: None,
             today: today.clone(),
             library,
@@ -403,9 +416,21 @@ mod tests {
         evidence: &crate::progress::evidence::LibraryEvidence,
         write_failure: Option<crate::progress::health::WriteFailure>,
     ) -> ProgressReport {
+        assembled_with_cards(loaded, evidence, None, write_failure)
+    }
+
+    fn assembled_with_cards(
+        loaded: crate::progress::store::Loaded,
+        evidence: &crate::progress::evidence::LibraryEvidence,
+        cards: Option<&crate::progress::cards::CardHistory>,
+        write_failure: Option<crate::progress::health::WriteFailure>,
+    ) -> ProgressReport {
         assemble(
             loaded,
-            evidence,
+            &crate::progress::calendar::Sources {
+                library: evidence,
+                cards,
+            },
             crate::progress::library::summarise(&[]),
             &build("Kaishi"),
             &day(),
@@ -486,6 +511,33 @@ mod tests {
         assert_eq!(counted.combined_ms, Some(60_000));
     }
 
+    fn one_card_on(day: &str) -> crate::progress::cards::CardHistory {
+        let made = 1_789_041_600_000;
+        let history = crate::progress::cards::tally(
+            &[(made, crate::progress::cards::CardKind::Word)],
+            1,
+            serde_json::from_str(&format!("\"{day}\"")).expect("a day"),
+            None,
+        );
+        assert!(history.from.is_some(), "the note falls before the answer");
+        history
+    }
+
+    #[test]
+    fn every_state_of_the_store_passes_the_card_history_on() {
+        let cards = one_card_on("2026-09-10");
+        for loaded in [
+            store_with_days("2026-09-08", &[]),
+            crate::progress::store::Loaded::Missing,
+            crate::progress::store::Loaded::Unreadable("broken".to_string()),
+        ] {
+            let report = assembled_with_cards(loaded, &library_on(&[]), Some(&cards), None);
+            let counted = report.calendar.cards.expect("Anki's answer is carried");
+            assert_eq!(counted.from, cards.from);
+            assert!(report.calendar.days.iter().any(|entry| entry.cards.is_some()));
+        }
+    }
+
     /// The names ProgressPage reads straight off the report. A rename here blanks the page
     /// beside a healthy status, so the list is spelled out rather than trusted.
     #[test]
@@ -498,7 +550,14 @@ mod tests {
                 crate::progress::streak::summarise(&ledger, &day(), &day()),
                 1,
             ),
-            calendar: crate::progress::calendar::uncounted(&evidence, &Default::default(), &day()),
+            calendar: crate::progress::calendar::uncounted(
+                &crate::progress::calendar::Sources {
+                    library: &evidence,
+                    cards: None,
+                },
+                &Default::default(),
+                &day(),
+            ),
             today: day(),
             library: crate::progress::library::summarise(&[]),
             comparison: None,

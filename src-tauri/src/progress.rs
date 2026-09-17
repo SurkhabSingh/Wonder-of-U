@@ -1,5 +1,6 @@
 pub(crate) mod credit;
 pub(crate) mod calendar;
+pub(crate) mod cards;
 pub(crate) mod day;
 pub(crate) mod evidence;
 pub(crate) mod health;
@@ -13,7 +14,7 @@ pub(crate) mod store;
 pub(crate) mod streak;
 pub(crate) mod watch_sampler;
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 pub(crate) fn flush_days<R: Runtime>(app: &AppHandle<R>, pending: &mut ledger::Ledger) -> bool {
     let path = app
@@ -42,6 +43,7 @@ pub(crate) fn flush_days<R: Runtime>(app: &AppHandle<R>, pending: &mut ledger::L
 /// Marks the day a card reached Anki, from the two places a note id comes back rather than
 /// from each shim, so a mining path added later cannot forget to.
 pub(crate) fn record_mined_act<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.emit(crate::app_config::CARD_MADE_EVENT, ());
     let today = day::today();
     // Remembered only after a write that landed: fifty cards rewrite the store once, and a
     // failed write is retried by the next card rather than being counted as done.

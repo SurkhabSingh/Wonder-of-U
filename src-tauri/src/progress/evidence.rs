@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,15 +28,22 @@ impl EvidenceFrom {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaterialCounts {
+    pub(crate) recordings: u32,
+    pub(crate) videos: u32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct LibraryEvidence {
-    pub(crate) days: BTreeSet<DayKey>,
+    pub(crate) days: BTreeMap<DayKey, MaterialCounts>,
     pub(crate) dropped: u32,
 }
 
 impl LibraryEvidence {
     pub(crate) fn earliest(&self) -> Option<&DayKey> {
-        self.days.iter().next()
+        self.days.keys().next()
     }
 
     pub(crate) fn horizon(&self) -> EvidenceFrom {
@@ -56,22 +63,27 @@ pub(crate) fn collect(
     let mut evidence = LibraryEvidence::default();
     let stamps = recordings
         .iter()
-        .map(|recording| recording.created_at_ms)
-        .chain(videos.iter().map(|video| video.added_at_ms));
-    for stamp in stamps {
-        match usable_day(stamp, today) {
-            Some(day) => {
-                evidence.days.insert(day);
-            }
-            None => evidence.dropped += 1,
-        }
+        .map(|recording| (recording.created_at_ms, false))
+        .chain(videos.iter().map(|video| (video.added_at_ms, true)));
+    for (stamp, is_video) in stamps {
+        let Some(day) = usable_day(stamp, today) else {
+            evidence.dropped += 1;
+            continue;
+        };
+        let counts = evidence.days.entry(day).or_default();
+        let slot = if is_video {
+            &mut counts.videos
+        } else {
+            &mut counts.recordings
+        };
+        *slot = slot.saturating_add(1);
     }
     evidence
 }
 
 /// Dropped rather than clamped: an unreadable file's date falls back to now, and clamping
 /// would draw a mark on a day nothing happened.
-fn usable_day(stamp: u64, today: &DayKey) -> Option<DayKey> {
+pub(crate) fn usable_day(stamp: u64, today: &DayKey) -> Option<DayKey> {
     if stamp == 0 {
         return None;
     }
@@ -152,7 +164,65 @@ mod tests {
         let evidence = collect(&[], &[video(1_789_000_000_000), video(0)], &today);
         assert_eq!(evidence.days.len(), 1);
         assert_eq!(evidence.dropped, 1);
-        assert_eq!(evidence.earliest(), evidence.days.iter().next());
+        assert_eq!(evidence.earliest(), evidence.days.keys().next());
+    }
+
+    #[test]
+    fn each_item_is_counted_once_on_its_day_as_what_it_is() {
+        let today = key("2026-09-15");
+        let recording = |created_at_ms| RecentRecording {
+            file_name: "a.wav".to_string(),
+            file_path: format!("C:/{created_at_ms}.wav"),
+            transcript_path: None,
+            transcript_language: None,
+            transcripts: Vec::new(),
+            translation_path: None,
+            anki_note_id: None,
+            anki_deck_name: None,
+            anki_note_type: None,
+            anki_pushes: Vec::new(),
+            furigana_applied: false,
+            audio_deleted: false,
+            duration_ms: 0,
+            bytes_written: 0,
+            created_at_ms,
+            source: None,
+            source_url: None,
+            title: None,
+        };
+        let video = |added_at_ms| WatchedVideo {
+            added_at_ms,
+            ..WatchedVideo::default()
+        };
+        let noon = 1_789_041_600_000;
+        let evidence = collect(
+            &[recording(noon), recording(noon + 1), recording(0)],
+            &[video(noon + 2), video(noon - 86_400_000)],
+            &today,
+        );
+        let day = day_key_for_ms(noon).expect("a real date");
+        assert_eq!(
+            evidence.days.get(&day),
+            Some(&MaterialCounts {
+                recordings: 2,
+                videos: 1,
+            })
+        );
+        assert_eq!(evidence.days.len(), 2);
+        assert_eq!(evidence.dropped, 1);
+    }
+
+    #[test]
+    fn the_counts_reach_the_page_under_the_names_it_reads() {
+        let wire = serde_json::to_value(MaterialCounts::default()).expect("serialises");
+        let mut keys: Vec<&str> = wire
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["recordings", "videos"]);
     }
 
     #[test]

@@ -1990,7 +1990,8 @@ input::placeholder {
 }
 
 .transcript-language-tab,
-.transcript-view-toggle-button {
+.transcript-view-toggle-button,
+.progress-lens-button {
   width: auto;
   min-height: 30px;
   padding: 5px 12px;
@@ -2003,7 +2004,8 @@ input::placeholder {
 }
 
 .transcript-language-tab:hover:not(:disabled),
-.transcript-view-toggle-button:hover:not(:disabled) {
+.transcript-view-toggle-button:hover:not(:disabled),
+.progress-lens-button:hover:not(:disabled) {
   border-color: transparent;
   background: transparent;
   color: var(--text-strong);
@@ -2011,14 +2013,16 @@ input::placeholder {
 }
 
 .transcript-language-tab[data-state="active"],
-.transcript-view-toggle-button.is-active {
+.transcript-view-toggle-button.is-active,
+.progress-lens-button.is-active {
   border-color: var(--border-strong);
   background: var(--surface-active);
   color: var(--text-strong);
 }
 
 /* View-mode segmented control [Side by side | Transcript | Translation]. */
-.transcript-view-toggle {
+.transcript-view-toggle,
+.progress-lens {
   display: inline-flex;
   gap: var(--space-1);
   padding: var(--space-1);
@@ -4123,8 +4127,6 @@ input::placeholder {
   color: var(--warning);
 }
 
-/* The activity calendar. Four steps of the accent, because a legend with more than four
-   entries is one nobody reads and fewer cannot tell a busy day from a quiet one. */
 .progress-notice {
   display: flex;
   flex-direction: column;
@@ -4148,8 +4150,31 @@ input::placeholder {
   color: var(--text-muted);
 }
 
-.day-chart {
+/* The view re-points the four fills, so the bars and the calendar change scale together. */
+.progress-charts {
+  --lens-1: var(--viz-time-1);
+  --lens-2: var(--viz-time-2);
+  --lens-3: var(--viz-time-3);
+  --lens-4: var(--viz-time-4);
   margin-top: var(--space-7);
+}
+
+.progress-charts.lens-cards {
+  --lens-1: var(--viz-cards-1);
+  --lens-2: var(--viz-cards-2);
+  --lens-3: var(--viz-cards-3);
+  --lens-4: var(--viz-cards-4);
+}
+
+.progress-charts.lens-material {
+  --lens-1: var(--viz-material-1);
+  --lens-2: var(--viz-material-2);
+  --lens-3: var(--viz-material-3);
+  --lens-4: var(--viz-material-4);
+}
+
+.day-chart {
+  margin-top: var(--space-6);
 }
 
 .day-chart-head {
@@ -4214,12 +4239,11 @@ input::placeholder {
   background: var(--viz-grid);
 }
 
-/* A plain wash, not a texture: the days on it were never timed, so they carry no bar. */
-.day-chart-uncounted {
+/* A plain wash, not a texture: the days on it have no number, so they carry no bar. */
+.day-chart-gap {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4227,7 +4251,7 @@ input::placeholder {
   background: color-mix(in srgb, var(--viz-void) 26%, transparent);
 }
 
-.day-chart-uncounted span {
+.day-chart-gap span {
   font-size: var(--text-2xs);
   white-space: nowrap;
   color: var(--text-subtle);
@@ -4261,7 +4285,7 @@ input::placeholder {
   width: min(24px, 64%);
   min-height: 2px;
   border-radius: 4px 4px 0 0;
-  background: var(--viz-series);
+  background: var(--lens-3);
 }
 
 /* A measured zero is a stub on the baseline, so it is never read as a day with no reading. */
@@ -4350,7 +4374,6 @@ input::placeholder {
 }
 
 .progress-cal-cell {
-  position: relative;
   display: block;
   width: 100%;
   aspect-ratio: 1;
@@ -4370,51 +4393,25 @@ input::placeholder {
   background: var(--viz-zero);
 }
 
-.progress-cal-cell.is-material {
-  background: var(--viz-material);
-}
-
 .progress-cal-cell.t1 {
-  background: var(--viz-time-1);
+  background: var(--lens-1);
 }
 
 .progress-cal-cell.t2 {
-  background: var(--viz-time-2);
+  background: var(--lens-2);
 }
 
 .progress-cal-cell.t3 {
-  background: var(--viz-time-3);
+  background: var(--lens-3);
 }
 
 .progress-cal-cell.t4 {
-  background: var(--viz-time-4);
+  background: var(--lens-4);
 }
 
 .progress-cal-grid .progress-cal-cell:not(.is-future):hover {
   outline: 1px solid var(--text-muted);
   outline-offset: 1px;
-}
-
-/* A corner badge whose ink is picked per fill, so it clears 3:1 on every step without a
-   ring - a ring round a centred dot reads as a radio button. */
-.progress-cal-card {
-  position: absolute;
-  top: 18%;
-  right: 18%;
-  width: 30%;
-  height: 30%;
-  min-width: 3px;
-  min-height: 3px;
-  border-radius: 50%;
-  background: var(--viz-mark);
-}
-
-.t3 > .progress-cal-card {
-  background: var(--viz-mark-t3);
-}
-
-.t4 > .progress-cal-card {
-  background: var(--viz-mark-t4);
 }
 
 .progress-cal-legend {
@@ -4451,9 +4448,21 @@ input::placeholder {
 }
 
 .progress-cal-since {
-  margin-top: var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-height: 24px;
+  margin: var(--space-2) 0 0;
   font-size: var(--text-2xs);
   color: var(--text-subtle);
+}
+
+.progress-cal-count {
+  width: auto;
+  min-height: 24px;
+  padding: 2px 10px;
+  font-size: var(--text-2xs);
 }
 
 .viz-tip {

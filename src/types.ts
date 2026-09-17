@@ -643,19 +643,42 @@ export type ImmersionReport = {
   streak: ImmersionStreak;
 };
 
+export type CardCounts = {
+  word: number;
+  line: number;
+  transcript: number;
+  unsorted: number;
+};
+
+export type MaterialCounts = {
+  recordings: number;
+  videos: number;
+};
+
+// Every count here is null on a day its source did not speak for. There is no number, so
+// there is no colour step to pick: never write `?? 0` here.
 export type CalendarDay = {
   day: string;
-  // Null before the store existed. There is no number, so there is no colour step to pick:
-  // never write `?? 0` here.
   combinedMs: number | null;
-  madeCard: boolean | null;
-  addedMaterial: boolean;
+  cards: CardCounts | null;
+  material: MaterialCounts | null;
+};
+
+// When Anki last answered. Days after `on` have not been counted.
+export type CardsCounted = {
+  from: string | null;
+  on: string;
+  atMs: number;
+  undated: number;
 };
 
 export type CalendarSpan = {
   firstDay: string | null;
   // Null when the store could not be read: nothing was counted, today included.
   countedFrom: string | null;
+  materialFrom: string | null;
+  // Null until Anki has answered once.
+  cards: CardsCounted | null;
   days: CalendarDay[];
   droppedEvidence: number;
 };

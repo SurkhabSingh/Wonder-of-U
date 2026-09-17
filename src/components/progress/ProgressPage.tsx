@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { AppBootstrap, Measured, ProgressReport } from "../../types";
 import { Metric, StatTile, readMeasured } from "./MeasuredValue";
 import {
@@ -10,6 +11,8 @@ import {
   formatPercent,
 } from "../../lib/progressFormat";
 import { DayChart } from "./DayChart";
+import { LensCaption } from "./LensCaption";
+import { LENSES, LENS_ORDER, type Lens } from "./lenses";
 import { StudyCalendar } from "./StudyCalendar";
 
 /// One question — am I getting better — so comprehension leads and the rest is context.
@@ -20,6 +23,8 @@ export function ProgressPage({
   readCount,
   failed,
   minedCards,
+  countingCards,
+  onCountCards,
   onGoToStudyPicks,
 }: {
   bootstrap: AppBootstrap;
@@ -27,8 +32,11 @@ export function ProgressPage({
   readCount: number;
   failed: boolean;
   minedCards: Measured<number> | null;
+  countingCards: boolean;
+  onCountCards: () => void;
   onGoToStudyPicks: () => void;
 }) {
+  const [lens, setLens] = useState<Lens>("time");
   const now = new Date();
   const coverage = report ? readMeasured(report.coveragePercent) : null;
   const immersion = report ? readMeasured(report.immersion).value : null;
@@ -175,10 +183,37 @@ export function ProgressPage({
         ) : null}
 
         {report ? (
-          <>
-            <DayChart days={report.calendar.days} today={report.today} />
-            <StudyCalendar span={report.calendar} today={report.today} />
-          </>
+          <div className={`progress-charts lens-${lens}`}>
+            <div className="progress-lens" role="group" aria-label="What the charts show">
+              {LENS_ORDER.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`progress-lens-button ${lens === id ? "is-active" : ""}`}
+                  aria-pressed={lens === id}
+                  onClick={() => setLens(id)}
+                >
+                  {LENSES[id].label}
+                </button>
+              ))}
+            </div>
+            <DayChart span={report.calendar} today={report.today} lens={LENSES[lens]} />
+            <StudyCalendar
+              span={report.calendar}
+              today={report.today}
+              lens={LENSES[lens]}
+              caption={
+                <LensCaption
+                  lens={lens}
+                  span={report.calendar}
+                  today={report.today}
+                  minedCards={minedCards}
+                  counting={countingCards}
+                  onCount={onCountCards}
+                />
+              }
+            />
+          </div>
         ) : null}
 
         {report ? (

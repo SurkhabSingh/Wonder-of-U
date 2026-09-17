@@ -236,6 +236,7 @@ export const IMPORT_MEDIA_EXTENSIONS: readonly string[] = [
 
 export const APP_SNAPSHOT_EVENT = "app://snapshot-changed";
 export const PROGRESS_EVENT = "progress://changed";
+export const CARD_MADE_EVENT = "progress://card-made";
 export const MP3_CONVERSION_WARNING =
   "MP3 reduces file size but uses lossy compression, so audio quality may be lower. Existing Anki cards are not affected.";
 

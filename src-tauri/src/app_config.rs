@@ -1,5 +1,6 @@
 pub(crate) const APP_SNAPSHOT_EVENT: &str = "app://snapshot-changed";
 pub(crate) const PROGRESS_EVENT: &str = "progress://changed";
+pub(crate) const CARD_MADE_EVENT: &str = "progress://card-made";
 pub(crate) const AUTOSTART_ARGUMENT: &str = "--autostart";
 
 pub(crate) const RECOMMENDED_WHISPER_RUNTIME_VERSION: &str = "v1.8.4";

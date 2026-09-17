@@ -86,9 +86,13 @@ export function shortDate(day: string): string {
   return `${MONTH_NAMES[monthOf(day)]} ${Number(day.slice(8, 10))}`;
 }
 
+export function formatClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 /** A clock time, with the date in front once it is no longer today. */
 export function formatMoment(ms: number, now: Date): string {
   const when = new Date(ms);
-  const time = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const time = formatClock(ms);
   return when.toDateString() === now.toDateString() ? time : `${formatDay(ms, now)}, ${time}`;
 }
