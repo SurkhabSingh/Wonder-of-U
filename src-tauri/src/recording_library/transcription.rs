@@ -270,10 +270,25 @@ fn apply_transcription_result_to_recording<R: Runtime>(
         !recording.transcripts.is_empty() || recording.transcript_path.is_some();
 
     let is_mic_capture = recording.source.as_deref() == Some("recording");
-    let preserve_audio_name = already_transcribed || !is_mic_capture;
 
     // First, because a new recording is named from this text.
     let cleaned = clean_transcript(&json_path, &transcript_path, recording.duration_ms, envelope);
+    if let Some(error) = &cleaned.rewrite_failed {
+        log_event(
+            app,
+            "WARN",
+            "recording.transcript_rewrite_failed",
+            serde_json::json!({
+                "audioPath": recording.file_path,
+                "message": format!("The transcript still holds what the cleaning dropped: {error}")
+            }),
+        );
+    }
+    let said_nothing = matches!(
+        cleaned.segments,
+        Err(SegmentsSkip::JsonHeldNoSegments | SegmentsSkip::CleaningRemovedEverything)
+    );
+    let preserve_audio_name = already_transcribed || !is_mic_capture || said_nothing;
 
     let final_transcript_path = if preserve_audio_name {
         store_additional_language_transcript(&audio_path, &transcript_path, &language).map_err(
@@ -340,6 +355,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
         derive_transcript_language_from_path(&final_transcript_path, requested_language);
 
     let stored = cleaned
+        .segments
         .map(|segments| store_segments_sidecar(&recording.file_path, &language, &segments));
     let segments_path =
         match stored {
@@ -432,6 +448,12 @@ pub(crate) struct TranscriptSidecars {
     pub(crate) subtitle_path: Option<PathBuf>,
 }
 
+/// What cleaning left, and the error if the transcript could not be rewritten to match it.
+struct Cleaned {
+    segments: Result<Vec<RecordingSegment>, SegmentsSkip>,
+    rewrite_failed: Option<String>,
+}
+
 /// Cleans whisper's segments and rewrites its transcript to match, even when nothing is left,
 /// so no reader of the text sees what the cleaning dropped.
 fn clean_transcript(
@@ -439,23 +461,39 @@ fn clean_transcript(
     transcript_path: &Path,
     duration_ms: u64,
     envelope: Option<&SpeechEnvelope>,
-) -> Result<Vec<RecordingSegment>, SegmentsSkip> {
-    let raw = parse_whisper_segments(json_path)?;
+) -> Cleaned {
+    let raw = match parse_whisper_segments(json_path) {
+        Ok(raw) => raw,
+        Err(reason) => {
+            return Cleaned {
+                segments: Err(reason),
+                rewrite_failed: None,
+            };
+        }
+    };
     let raw_len = raw.len();
     let segments = clean_segments(raw, duration_ms, CueTiming::TrimToSpeech(envelope));
-    if segments.len() != raw_len {
+    let rewrite_failed = if segments.len() == raw_len {
+        None
+    } else {
         let cleaned_text = segments
             .iter()
             .map(|segment| segment.text.as_str())
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        let _ = fs::write(transcript_path, format!("{cleaned_text}\n"));
+        fs::write(transcript_path, format!("{cleaned_text}\n"))
+            .err()
+            .map(|error| error.to_string())
+    };
+    Cleaned {
+        segments: if segments.is_empty() {
+            Err(SegmentsSkip::CleaningRemovedEverything)
+        } else {
+            Ok(segments)
+        },
+        rewrite_failed,
     }
-    if segments.is_empty() {
-        return Err(SegmentsSkip::CleaningRemovedEverything);
-    }
-    Ok(segments)
 }
 
 pub(crate) fn store_segments_sidecar(
@@ -1541,6 +1579,7 @@ mod tests {
 
         let transcript_path = dir.path().join("hola_100.fr.transcript.txt");
         let segments = clean_transcript(&json_path, &transcript_path, 0, None)
+            .segments
             .expect("both segments survive cleaning");
         let stored =
             store_segments_sidecar(&audio_path.display().to_string(), "fr", &segments).unwrap();
@@ -1584,7 +1623,9 @@ Bonjour le monde
         // A json path that was never written.
         let missing = dir.path().join("nope.json");
         assert_eq!(
-            clean_transcript(&missing, &transcript_path, 0, None).expect_err("no segments"),
+            clean_transcript(&missing, &transcript_path, 0, None)
+                .segments
+                .expect_err("no segments"),
             SegmentsSkip::JsonUnreadable,
             "a missing json must say why, not just yield nothing",
         );
@@ -1593,7 +1634,9 @@ Bonjour le monde
         let garbage = dir.path().join("garbage.json");
         fs::write(&garbage, "not json at all").unwrap();
         assert_eq!(
-            clean_transcript(&garbage, &transcript_path, 0, None).expect_err("no segments"),
+            clean_transcript(&garbage, &transcript_path, 0, None)
+                .segments
+                .expect_err("no segments"),
             SegmentsSkip::JsonNotWhisperShaped,
             "unparseable json must say why, not just yield nothing",
         );
@@ -1819,6 +1862,7 @@ Bonjour le monde
         fs::write(&json_path, format!(r#"{{ "transcription": [ {entries} ] }}"#)).unwrap();
 
         let segments = clean_transcript(&json_path, &transcript_path, 60_000, None)
+            .segments
             .expect("the loop leaves one segment");
         assert_eq!(segments.len(), 1, "the six-segment loop collapses to one");
         // The transcript .txt was rewritten from the cleaned segment, dropping the loop.
@@ -1839,11 +1883,32 @@ Bonjour le monde
         )
         .unwrap();
 
+        let cleaned = clean_transcript(&json_path, &transcript_path, 0, None);
         assert_eq!(
-            clean_transcript(&json_path, &transcript_path, 0, None).expect_err("nothing is left"),
+            cleaned.segments.expect_err("nothing is left"),
             SegmentsSkip::CleaningRemovedEverything
         );
+        assert_eq!(cleaned.rewrite_failed, None);
         assert_eq!(fs::read_to_string(&transcript_path).unwrap().trim(), "");
+    }
+
+    #[test]
+    fn a_transcript_that_cannot_be_rewritten_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("whisper-temp.json");
+        fs::write(
+            &json_path,
+            r#"{ "transcription": [
+                { "offsets": { "from": 0, "to": 2000 }, "text": " ご視聴ありがとうございました" },
+                { "offsets": { "from": 2000, "to": 4000 }, "text": " 今日は晴れです" }
+            ] }"#,
+        )
+        .unwrap();
+        let unwritable = dir.path().join("gone").join("whisper-temp.txt");
+
+        let cleaned = clean_transcript(&json_path, &unwritable, 0, None);
+        assert!(cleaned.rewrite_failed.is_some(), "the failed rewrite is reported");
+        assert_eq!(cleaned.segments.expect("the speech is kept").len(), 1);
     }
 
     #[test]

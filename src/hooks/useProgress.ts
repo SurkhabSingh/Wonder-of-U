@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { CARD_MADE_EVENT, PROGRESS_EVENT } from "../constants";
+import { logToFile } from "../lib/log";
 import type { Measured, ProgressReport } from "../types";
 
 // Two writes that land together, one from each sampler, are one reload.
@@ -9,8 +10,8 @@ const SETTLE_MS = 400;
 // Long enough that a run of cards pushed together is counted once, after the last.
 const RECOUNT_MS = 1500;
 
-/// Reads the stored report. Local files only, and never takes a reading: coverage moves
-/// when the word list is rebuilt, so a reading is taken there and read here.
+/// Reads the stored report from local files, and asks for a reading when the page opens
+/// if the transcripts or the word list moved since the newest one.
 export function useProgress(activePage: string) {
   const [report, setReport] = useState<ProgressReport | null>(null);
   /// Successful reads. A null `report` means both "nothing stored" and "never looked",
@@ -72,7 +73,9 @@ export function useProgress(activePage: string) {
   const refresh = useCallback(async () => {
     await loadReport();
     // A reading that is due lands as a write, and that reloads the report by itself.
-    void invoke("keep_reading_current").catch(() => undefined);
+    void invoke("keep_reading_current").catch((error) =>
+      logToFile("WARN", "reading_check_failed", String(error)),
+    );
     // After the report, so a slow Anki never holds up the local numbers.
     await loadCards();
   }, [loadReport, loadCards]);

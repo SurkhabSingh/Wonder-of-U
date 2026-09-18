@@ -50,7 +50,8 @@ pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
             items_added += 1;
             continue;
         };
-        if *fingerprint != item.fingerprint {
+        // The same text counted differently means the counting changed, not what is known.
+        if *fingerprint != item.fingerprint || *content != item.content_tokens {
             items_changed += 1;
             continue;
         }
@@ -98,14 +99,17 @@ pub(super) fn round_tenth(value: f64) -> f64 {
 }
 
 /// The newest word list against the latest earlier one it can be compared with, one list's
-/// last reading to the next list's first, as the reading line pairs them.
+/// last reading to the next list's first, as the reading line pairs them. Dated from that
+/// list's first reading, where the line draws it.
 pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
     let versions = super::level::versions(samples);
     let (latest, earlier) = versions.split_last()?;
-    earlier
-        .iter()
-        .rev()
-        .find_map(|version| compare(version.last, latest.first))
+    earlier.iter().rev().find_map(|version| {
+        compare(version.last, latest.first).map(|comparison| Comparison {
+            earlier_taken_at_ms: version.first.taken_at_ms,
+            ..comparison
+        })
+    })
 }
 
 /// What a reading is measured against: the settings as they stand, and the list itself.
@@ -717,6 +721,26 @@ mod tests {
     }
 
     #[test]
+    fn the_same_text_counted_differently_is_not_compared() {
+        let earlier = sample(
+            1,
+            "Kaishi",
+            vec![item("a", "f1", 1_000, 500), item("b", "f2", 1_000, 500)],
+        );
+        let later = sample(
+            2,
+            "Kaishi",
+            vec![item("a", "f1", 1_100, 800), item("b", "f2", 1_000, 520)],
+        );
+        let comparison = compare(&earlier, &later).expect("comparable");
+        assert_eq!(
+            (comparison.items_compared, comparison.items_changed),
+            (1, 1)
+        );
+        assert_eq!(comparison.delta_points, 2.0, "only the transcript counted alike");
+    }
+
+    #[test]
     fn a_transcript_with_no_words_is_not_counted_in_a_comparison() {
         let earlier = sample(
             1,
@@ -786,8 +810,14 @@ mod tests {
             listed(3, 20, vec![item("a", "f1", 1_000, 550), item("b", "f2", 1_000, 400)]),
         ];
         let comparison = latest_comparison(&samples).expect("comparable");
-        assert_eq!(comparison.earlier_taken_at_ms, 2);
-        assert_eq!(comparison.items_compared, 2);
+        assert_eq!(
+            comparison.items_compared, 2,
+            "measured from the list's last reading"
+        );
+        assert_eq!(
+            comparison.earlier_taken_at_ms, 1,
+            "dated where the line draws that list"
+        );
     }
 
     #[test]

@@ -155,7 +155,7 @@ export function ReadingChart({ readings, now }: { readings: ReadingPoint[]; now:
       value: reading.gained,
       joined: reading.notCompared === null,
       tip: points(reading.gained),
-      detail: `${step} · ${formatPercent(reading.coverage)}% of your library`,
+      detail: `${step} · ${formatPercent(reading.coverage)}% of your library at the time`,
     };
   });
   const values = marks.map((mark) => mark.value);
@@ -170,9 +170,9 @@ export function ReadingChart({ readings, now }: { readings: ReadingPoint[]; now:
       marks={marks}
       domain={domain}
       formatTick={(value) => (value === 0 ? "0" : formatDelta(value))}
-      note="One reading so far. The line starts with your next word-list refresh."
+      note="The line starts once you learn more words and refresh your word list."
       caption="Counted on the transcripts both readings had, unchanged, so new material never moves it."
-      listLabel="Show every reading as a list"
+      listLabel="Show the line as a list"
       valueHeading="Growth"
     />
   );

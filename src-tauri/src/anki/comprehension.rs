@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError, TryLockError};
 
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, Runtime};
@@ -14,9 +14,12 @@ use crate::tokenizer::tokenize_japanese;
 use super::known_words::normalize_expression;
 use super::sentence_ranking::is_content_word;
 
-/// The transcripts and word list a reading was last attempted for, so a skipped reading is not
-/// retried until one of them moves. Held across the attempt, so two cannot run at once.
+/// The transcripts and word list the last automatic reading settled for, so a skipped one waits
+/// for a change and a failed one is retried. Held across the attempt, so checks do not overlap.
 static ATTEMPTED: Mutex<Option<(String, Option<u64>)>> = Mutex::new(None);
+
+/// One reading at a time, so the store holds them in the order they were taken.
+static READING: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Skip {
@@ -127,7 +130,9 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     Ok(Sampled::Taken(sample.with_source_digest(digest)))
 }
 
-pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
+/// Answers whether the reading settled, taken or skipped, rather than failed.
+pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let _one_at_a_time = READING.lock().unwrap_or_else(PoisonError::into_inner);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String, String> {
         let now_ms = crate::app_runtime::now_ms();
         match sample_comprehension(app, now_ms)? {
@@ -141,6 +146,7 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
         }
     }));
 
+    let settled = matches!(outcome, Ok(Ok(_)));
     match outcome {
         Ok(Ok(detail)) => crate::app_runtime::log_event(
             app,
@@ -161,12 +167,15 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
             serde_json::json!({}),
         ),
     }
+    settled
 }
 
 /// Takes a reading when the transcripts or the word list moved since the newest one.
 pub(crate) fn keep_reading_current<R: Runtime>(app: &AppHandle<R>) {
-    let Ok(mut attempted) = ATTEMPTED.try_lock() else {
-        return;
+    let mut attempted = match ATTEMPTED.try_lock() {
+        Ok(attempted) => attempted,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => return,
     };
     let recordings = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -195,8 +204,9 @@ pub(crate) fn keep_reading_current<R: Runtime>(app: &AppHandle<R>) {
         "progress.reading_due",
         serde_json::json!({ "because": due_because(newest.as_ref(), &now) }),
     );
-    *attempted = Some(now);
-    record_sample(app);
+    if record_sample(app) {
+        *attempted = Some(now);
+    }
 }
 
 fn reading_is_current(newest: Option<&(Option<String>, u64)>, now: &(String, Option<u64>)) -> bool {
