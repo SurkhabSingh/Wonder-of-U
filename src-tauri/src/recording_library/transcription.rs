@@ -272,6 +272,9 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     let is_mic_capture = recording.source.as_deref() == Some("recording");
     let preserve_audio_name = already_transcribed || !is_mic_capture;
 
+    // First, because a new recording is named from this text.
+    let cleaned = clean_transcript(&json_path, &transcript_path, recording.duration_ms, envelope);
+
     let final_transcript_path = if preserve_audio_name {
         store_additional_language_transcript(&audio_path, &transcript_path, &language).map_err(
             |error| {
@@ -336,16 +339,11 @@ fn apply_transcription_result_to_recording<R: Runtime>(
     recording.transcript_language =
         derive_transcript_language_from_path(&final_transcript_path, requested_language);
 
+    let stored = cleaned
+        .map(|segments| store_segments_sidecar(&recording.file_path, &language, &segments));
     let segments_path =
-        match store_segments_sidecar(
-            &recording.file_path,
-            &json_path,
-            &language,
-            &final_transcript_path,
-            recording.duration_ms,
-            envelope,
-        ) {
-            Ok(SegmentsOutcome::Written(sidecars)) => {
+        match stored {
+            Ok(Ok(sidecars)) => {
                 if sidecars.subtitle_path.is_none() {
                     log_event(
                         app,
@@ -359,7 +357,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                 }
                 Some(sidecars.segments_path.display().to_string())
             }
-            Ok(SegmentsOutcome::Skipped(reason)) => {
+            Err(reason) => {
                 log_event(
                     app,
                     "WARN",
@@ -373,7 +371,7 @@ fn apply_transcription_result_to_recording<R: Runtime>(
                 );
                 None
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 log_event(
                     app,
                     "ERROR",
@@ -434,27 +432,37 @@ pub(crate) struct TranscriptSidecars {
     pub(crate) subtitle_path: Option<PathBuf>,
 }
 
-pub(crate) fn store_segments_sidecar(
-    audio_file_path: &str,
+/// Cleans whisper's segments and rewrites its transcript to match, even when nothing is left,
+/// so no reader of the text sees what the cleaning dropped.
+fn clean_transcript(
     json_path: &Path,
-    language: &str,
     transcript_path: &Path,
     duration_ms: u64,
     envelope: Option<&SpeechEnvelope>,
-) -> Result<SegmentsOutcome, String> {
-    let raw = match parse_whisper_segments(json_path) {
-        Ok(segments) => segments,
-        Err(reason) => return Ok(SegmentsOutcome::Skipped(reason)),
-    };
-
+) -> Result<Vec<RecordingSegment>, SegmentsSkip> {
+    let raw = parse_whisper_segments(json_path)?;
     let raw_len = raw.len();
     let segments = clean_segments(raw, duration_ms, CueTiming::TrimToSpeech(envelope));
-    if segments.is_empty() {
-        return Ok(SegmentsOutcome::Skipped(
-            SegmentsSkip::CleaningRemovedEverything,
-        ));
+    if segments.len() != raw_len {
+        let cleaned_text = segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = fs::write(transcript_path, format!("{cleaned_text}\n"));
     }
+    if segments.is_empty() {
+        return Err(SegmentsSkip::CleaningRemovedEverything);
+    }
+    Ok(segments)
+}
 
+pub(crate) fn store_segments_sidecar(
+    audio_file_path: &str,
+    language: &str,
+    segments: &[RecordingSegment],
+) -> Result<TranscriptSidecars, String> {
     let _rename_guard = OUTPUT_RENAME_LOCK
         .lock()
         .map_err(|_| "Could not reserve a segments output name.".to_string())?;
@@ -472,27 +480,17 @@ pub(crate) fn store_segments_sidecar(
         serde_json::to_string(&segments).map_err(|error| error.to_string())?;
     fs::write(&target, serialized).map_err(|error| error.to_string())?;
 
-    if segments.len() != raw_len {
-        let cleaned_text = segments
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let _ = fs::write(transcript_path, format!("{cleaned_text}\n"));
-    }
-
     // A subtitle file beside the audio, from the same cleaned segments.
     let subtitle_target = parent.join(format!("{stem}.{language_tag}.srt"));
-    let subtitle_path = match fs::write(&subtitle_target, segments_to_srt(&segments)) {
+    let subtitle_path = match fs::write(&subtitle_target, segments_to_srt(segments)) {
         Ok(()) => Some(subtitle_target),
         Err(_) => None,
     };
 
-    Ok(SegmentsOutcome::Written(TranscriptSidecars {
+    Ok(TranscriptSidecars {
         segments_path: target,
         subtitle_path,
-    }))
+    })
 }
 
 fn is_whisper_hallucination(text: &str) -> bool {
@@ -667,12 +665,6 @@ impl SegmentsSkip {
             }
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum SegmentsOutcome {
-    Written(TranscriptSidecars),
-    Skipped(SegmentsSkip),
 }
 
 #[derive(serde::Deserialize)]
@@ -1548,19 +1540,10 @@ mod tests {
         .unwrap();
 
         let transcript_path = dir.path().join("hola_100.fr.transcript.txt");
-        let stored = store_segments_sidecar(
-            &audio_path.display().to_string(),
-            &json_path,
-            "fr",
-            &transcript_path,
-            0,
-            None,
-        )
-        .unwrap();
-        let stored = match stored {
-            SegmentsOutcome::Written(sidecars) => sidecars,
-            SegmentsOutcome::Skipped(reason) => panic!("expected a sidecar, skipped: {reason:?}"),
-        };
+        let segments = clean_transcript(&json_path, &transcript_path, 0, None)
+            .expect("both segments survive cleaning");
+        let stored =
+            store_segments_sidecar(&audio_path.display().to_string(), "fr", &segments).unwrap();
 
         assert_eq!(
             stored.segments_path,
@@ -1596,48 +1579,24 @@ Bonjour le monde
     #[test]
     fn missing_or_unparseable_json_yields_no_sidecar_without_error() {
         let dir = tempfile::tempdir().unwrap();
-        let audio_path = dir.path().join("hola_100.wav");
-        fs::write(&audio_path, b"audio").unwrap();
-
         let transcript_path = dir.path().join("hola_100.fr.transcript.txt");
 
         // A json path that was never written.
         let missing = dir.path().join("nope.json");
-        let result = store_segments_sidecar(
-            &audio_path.display().to_string(),
-            &missing,
-            "fr",
-            &transcript_path,
-            0,
-            None,
-        )
-        .unwrap();
         assert_eq!(
-            result,
-            SegmentsOutcome::Skipped(SegmentsSkip::JsonUnreadable),
+            clean_transcript(&missing, &transcript_path, 0, None).expect_err("no segments"),
+            SegmentsSkip::JsonUnreadable,
             "a missing json must say why, not just yield nothing",
         );
 
         // A json that is not whisper-shaped parses to no segments.
         let garbage = dir.path().join("garbage.json");
         fs::write(&garbage, "not json at all").unwrap();
-        let result = store_segments_sidecar(
-            &audio_path.display().to_string(),
-            &garbage,
-            "fr",
-            &transcript_path,
-            0,
-            None,
-        )
-        .unwrap();
         assert_eq!(
-            result,
-            SegmentsOutcome::Skipped(SegmentsSkip::JsonNotWhisperShaped),
+            clean_transcript(&garbage, &transcript_path, 0, None).expect_err("no segments"),
+            SegmentsSkip::JsonNotWhisperShaped,
             "unparseable json must say why, not just yield nothing",
         );
-
-        // No sidecar file was left behind for the language.
-        assert!(!dir.path().join("hola_100.fr.segments.json").exists());
     }
 
     fn envelope(sketch: &str) -> SpeechEnvelope {
@@ -1842,10 +1801,8 @@ Bonjour le monde
     }
 
     #[test]
-    fn store_segments_sidecar_rewrites_transcript_when_it_collapses_a_loop() {
+    fn cleaning_rewrites_the_transcript_when_it_collapses_a_loop() {
         let dir = tempfile::tempdir().unwrap();
-        let audio_path = dir.path().join("song_1.wav");
-        fs::write(&audio_path, b"audio").unwrap();
         let transcript_path = dir.path().join("song_1.ja.transcript.txt");
         // The raw whisper .txt still holds the looped junk.
         fs::write(&transcript_path, "ループ\nループ\nループ\nループ\nループ\nループ\n").unwrap();
@@ -1861,25 +1818,32 @@ Bonjour le monde
         let json_path = dir.path().join("whisper-temp.json");
         fs::write(&json_path, format!(r#"{{ "transcription": [ {entries} ] }}"#)).unwrap();
 
-        let stored = store_segments_sidecar(
-            &audio_path.display().to_string(),
-            &json_path,
-            "ja",
-            &transcript_path,
-            60_000,
-            None,
-        )
-        .unwrap();
-        let stored = match stored {
-            SegmentsOutcome::Written(sidecars) => sidecars,
-            SegmentsOutcome::Skipped(reason) => panic!("expected a sidecar, skipped: {reason:?}"),
-        };
-
-        let segments: Vec<RecordingSegment> =
-            serde_json::from_str(&fs::read_to_string(&stored.segments_path).unwrap()).unwrap();
+        let segments = clean_transcript(&json_path, &transcript_path, 60_000, None)
+            .expect("the loop leaves one segment");
         assert_eq!(segments.len(), 1, "the six-segment loop collapses to one");
         // The transcript .txt was rewritten from the cleaned segment, dropping the loop.
         assert_eq!(fs::read_to_string(&transcript_path).unwrap().trim(), "ループ");
+    }
+
+    #[test]
+    fn a_transcript_of_nothing_but_a_stock_phrase_is_saved_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript_path = dir.path().join("whisper-temp.txt");
+        fs::write(&transcript_path, " ご視聴ありがとうございました\n").unwrap();
+        let json_path = dir.path().join("whisper-temp.json");
+        fs::write(
+            &json_path,
+            r#"{ "transcription": [
+                { "offsets": { "from": 0, "to": 2000 }, "text": " ご視聴ありがとうございました" }
+            ] }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            clean_transcript(&json_path, &transcript_path, 0, None).expect_err("nothing is left"),
+            SegmentsSkip::CleaningRemovedEverything
+        );
+        assert_eq!(fs::read_to_string(&transcript_path).unwrap().trim(), "");
     }
 
     #[test]
