@@ -16,7 +16,8 @@ pub(crate) struct WordList {
 #[serde(rename_all = "camelCase")]
 pub(crate) enum NotCompared {
     SettingsChanged,
-    NothingInCommon,
+    /// Fewer than `MIN_CONTENT_TOKENS` words were in both readings, unchanged.
+    TooLittleInCommon,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -53,7 +54,7 @@ pub(crate) struct Version<'a> {
 /// A reading that measured exactly what the one before it did, whatever rebuilt the word list
 /// in between, so it adds a repeat and nothing else.
 fn repeats(earlier: &Sample, later: &Sample) -> bool {
-    earlier.build.matches(&later.build) && earlier.items == later.items
+    earlier.build.matches(&later.build) && earlier.items_with_words().eq(later.items_with_words())
 }
 
 /// Readings grouped by the word list they were taken with, oldest first; a repeat joins the
@@ -89,7 +90,7 @@ pub(crate) fn levels(samples: &[Sample], list: Option<&WordList>) -> Levels {
             (Some(before), None) if !before.last.build.matches(&version.first.build) => {
                 Some(NotCompared::SettingsChanged)
             }
-            (Some(_), None) => Some(NotCompared::NothingInCommon),
+            (Some(_), None) => Some(NotCompared::TooLittleInCommon),
             _ => None,
         };
         if let Some(step) = &step {
@@ -192,13 +193,18 @@ mod tests {
         }
     }
 
-    fn item(key: &str, fingerprint: &str, known: u32) -> SampleItem {
+    fn words(key: &str, fingerprint: &str, content: u32, known: u32) -> SampleItem {
         SampleItem {
             key: key.to_string(),
             fingerprint: fingerprint.to_string(),
-            content_tokens: 100,
+            content_tokens: content,
             known_tokens: known,
         }
+    }
+
+    /// A transcript of a thousand words, `percent` of them known.
+    fn item(key: &str, fingerprint: &str, percent: u32) -> SampleItem {
+        words(key, fingerprint, 1_000, percent * 10)
     }
 
     /// A reading at `taken_at_ms` with the word list built at `list`.
@@ -297,7 +303,56 @@ mod tests {
         assert_eq!(gains(&levels), [0.0, 0.0]);
         assert_eq!(
             levels.reading[1].not_compared,
-            Some(NotCompared::NothingInCommon)
+            Some(NotCompared::TooLittleInCommon)
+        );
+    }
+
+    #[test]
+    fn a_step_on_too_little_shared_text_is_carried_across_flat() {
+        let samples = vec![
+            reading(
+                1,
+                100,
+                "Kaishi",
+                vec![words("a", "f1", 150, 50), item("b", "f2", 50)],
+            ),
+            reading(
+                2,
+                200,
+                "Kaishi",
+                vec![words("a", "f1", 150, 150), item("b", "rewritten", 90)],
+            ),
+        ];
+        let levels = levels(&samples, None);
+        assert_eq!(gains(&levels), [0.0, 0.0], "150 words is too few to measure");
+        assert_eq!(
+            levels.reading[1].not_compared,
+            Some(NotCompared::TooLittleInCommon)
+        );
+    }
+
+    #[test]
+    fn a_reading_that_only_picked_up_wordless_transcripts_repeats_the_one_before() {
+        let samples = vec![
+            reading(1, 100, "Kaishi", vec![item("a", "f1", 50)]),
+            reading(
+                2,
+                100,
+                "Kaishi",
+                vec![item("a", "f1", 50), words("quiet", "q", 0, 0)],
+            ),
+            reading(
+                3,
+                200,
+                "Kaishi",
+                vec![item("a", "f1", 50), words("quiet", "q", 0, 0), words("hush", "h", 0, 0)],
+            ),
+        ];
+        assert_eq!(distinct_readings(&samples), 1);
+        assert_eq!(
+            levels(&samples, None).reading.len(),
+            1,
+            "a rebuilt list that read nothing new is no new point"
         );
     }
 
@@ -435,6 +490,10 @@ mod tests {
         assert_eq!(
             wire["reading"][1]["notCompared"],
             serde_json::json!("settingsChanged")
+        );
+        assert_eq!(
+            serde_json::to_value(NotCompared::TooLittleInCommon).expect("serialises"),
+            serde_json::json!("tooLittleInCommon")
         );
     }
 }

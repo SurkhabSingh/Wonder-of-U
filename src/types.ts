@@ -690,7 +690,7 @@ export type ReadingPoint = {
   step: number | null;
   compared: number;
   coverage: number;
-  notCompared: "settingsChanged" | "nothingInCommon" | null;
+  notCompared: "settingsChanged" | "tooLittleInCommon" | null;
 };
 
 export type WordsPoint = {

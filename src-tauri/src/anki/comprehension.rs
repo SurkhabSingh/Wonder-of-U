@@ -7,14 +7,12 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::app_types::{KnownWordsBuild, KnownWordsState, RecentRecording, SharedPersistedState};
 use crate::progress::day;
-use crate::progress::store::{Sample, SampleItem};
+use crate::progress::store::{Sample, SampleItem, MIN_CONTENT_TOKENS};
 use crate::runtime_assets::find_managed_dictionary_root;
 use crate::tokenizer::tokenize_japanese;
 
 use super::known_words::normalize_expression;
 use super::sentence_ranking::is_content_word;
-
-const MIN_CONTENT_TOKENS: u32 = 200;
 
 /// The transcripts and word list a reading was last attempted for, so a skipped reading is not
 /// retried until one of them moves. Held across the attempt, so two cannot run at once.
@@ -135,7 +133,7 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
         match sample_comprehension(app, now_ms)? {
             Sampled::Skipped(skip) => Ok(format!("{skip:?}")),
             Sampled::Taken(sample) => {
-                let items = sample.items.len();
+                let items = sample.items_with_words().count();
                 let (content, known) = sample.totals();
                 crate::progress::add_sample(app, sample)?;
                 Ok(format!("taken: {items} items, {known}/{content} words"))
@@ -309,7 +307,7 @@ fn count_document(
 mod tests {
     use super::{
         due_because, fingerprint, item_key, japanese_transcripts, library_digest,
-        reading_is_current, MIN_CONTENT_TOKENS,
+        reading_is_current,
     };
     use crate::app_types::{RecentRecording, RecordingTranscript};
 
@@ -449,10 +447,5 @@ mod tests {
             due_because(Some(&newest(Some("cd"), 20)), &now),
             "transcripts"
         );
-    }
-
-    #[test]
-    fn the_floor_is_the_documented_two_hundred() {
-        assert_eq!(MIN_CONTENT_TOKENS, 200);
     }
 }

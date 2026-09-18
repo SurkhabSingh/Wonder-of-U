@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use super::measured::Measured;
-use super::store::Sample;
+use super::store::{Sample, MIN_CONTENT_TOKENS};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -24,8 +24,7 @@ pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
     }
 
     let before: HashMap<&str, (&str, u32, u32)> = earlier
-        .items
-        .iter()
+        .items_with_words()
         .map(|item| {
             (
                 item.key.as_str(),
@@ -46,7 +45,7 @@ pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
     let mut items_added = 0_usize;
     let mut items_changed = 0_usize;
 
-    for item in &later.items {
+    for item in later.items_with_words() {
         let Some((fingerprint, content, known)) = before.get(item.key.as_str()) else {
             items_added += 1;
             continue;
@@ -62,7 +61,7 @@ pub(crate) fn compare(earlier: &Sample, later: &Sample) -> Option<Comparison> {
         later_known += item.known_tokens;
     }
 
-    if items_compared == 0 || earlier_content == 0 || later_content == 0 {
+    if earlier_content < MIN_CONTENT_TOKENS || later_content < MIN_CONTENT_TOKENS {
         return None;
     }
 
@@ -628,8 +627,8 @@ mod tests {
 
     #[test]
     fn a_fixed_corpus_shows_the_word_list_growing() {
-        let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
-        let later = sample(2, "Kaishi", vec![item("a", "f1", 100, 60)]);
+        let earlier = sample(1, "Kaishi", vec![item("a", "f1", 1_000, 500)]);
+        let later = sample(2, "Kaishi", vec![item("a", "f1", 1_000, 600)]);
         let comparison = compare(&earlier, &later).expect("comparable");
         assert_eq!(comparison.earlier_percent, 50.0);
         assert_eq!(comparison.later_percent, 60.0);
@@ -639,11 +638,11 @@ mod tests {
 
     #[test]
     fn material_added_since_the_earlier_sample_is_held_out_of_the_change() {
-        let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
+        let earlier = sample(1, "Kaishi", vec![item("a", "f1", 1_000, 500)]);
         let later = sample(
             2,
             "Kaishi",
-            vec![item("a", "f1", 100, 50), item("b", "f9", 100, 100)],
+            vec![item("a", "f1", 1_000, 500), item("b", "f9", 1_000, 1_000)],
         );
         let comparison = compare(&earlier, &later).expect("comparable");
         assert_eq!(comparison.delta_points, 0.0, "the new easy item must not count");
@@ -653,19 +652,19 @@ mod tests {
 
     #[test]
     fn a_document_whose_text_changed_is_not_compared_against_its_own_past() {
-        let earlier = sample(1, "Kaishi", vec![item("a", "old", 100, 50)]);
-        let later = sample(2, "Kaishi", vec![item("a", "new", 100, 90)]);
+        let earlier = sample(1, "Kaishi", vec![item("a", "old", 1_000, 500)]);
+        let later = sample(2, "Kaishi", vec![item("a", "new", 1_000, 900)]);
         assert_eq!(compare(&earlier, &later), None, "nothing left to compare");
 
         let mixed_earlier = sample(
             1,
             "Kaishi",
-            vec![item("a", "old", 100, 50), item("b", "same", 100, 50)],
+            vec![item("a", "old", 1_000, 500), item("b", "same", 1_000, 500)],
         );
         let mixed_later = sample(
             2,
             "Kaishi",
-            vec![item("a", "new", 100, 99), item("b", "same", 100, 60)],
+            vec![item("a", "new", 1_000, 990), item("b", "same", 1_000, 600)],
         );
         let comparison = compare(&mixed_earlier, &mixed_later).expect("comparable");
         assert_eq!(comparison.items_changed, 1);
@@ -675,8 +674,8 @@ mod tests {
 
     #[test]
     fn samples_from_different_vocabulary_settings_are_not_comparable() {
-        let earlier = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
-        let later = sample(2, "Lapis", vec![item("a", "f1", 100, 60)]);
+        let earlier = sample(1, "Kaishi", vec![item("a", "f1", 1_000, 500)]);
+        let later = sample(2, "Lapis", vec![item("a", "f1", 1_000, 600)]);
         assert_eq!(compare(&earlier, &later), None);
     }
 
@@ -698,11 +697,63 @@ mod tests {
     }
 
     #[test]
+    fn a_comparison_needs_two_hundred_words_both_readings_had() {
+        let earlier = sample(
+            1,
+            "Kaishi",
+            vec![item("a", "f1", 199, 100), item("gone", "g", 5_000, 10)],
+        );
+        let later = sample(
+            2,
+            "Kaishi",
+            vec![item("a", "f1", 199, 150), item("new", "n", 5_000, 4_000)],
+        );
+        assert_eq!(compare(&earlier, &later), None, "199 words in common is too few");
+
+        let earlier = sample(1, "Kaishi", vec![item("a", "f1", 200, 100)]);
+        let later = sample(2, "Kaishi", vec![item("a", "f1", 200, 150)]);
+        let comparison = compare(&earlier, &later).expect("two hundred is enough");
+        assert_eq!(comparison.delta_points, 25.0);
+    }
+
+    #[test]
+    fn a_transcript_with_no_words_is_not_counted_in_a_comparison() {
+        let earlier = sample(
+            1,
+            "Kaishi",
+            vec![
+                item("a", "f1", 1_000, 500),
+                item("quiet", "q", 0, 0),
+                item("retried", "r1", 0, 0),
+            ],
+        );
+        let later = sample(
+            2,
+            "Kaishi",
+            vec![
+                item("a", "f1", 1_000, 600),
+                item("quiet", "q", 0, 0),
+                item("retried", "r2", 0, 0),
+                item("silence", "s", 0, 0),
+            ],
+        );
+        let comparison = compare(&earlier, &later).expect("comparable");
+        assert_eq!(
+            (
+                comparison.items_compared,
+                comparison.items_added,
+                comparison.items_changed
+            ),
+            (1, 0, 0)
+        );
+    }
+
+    #[test]
     fn the_comparison_reaches_past_an_incomparable_neighbour() {
         let samples = vec![
-            sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]),
-            sample(2, "Lapis", vec![item("a", "f1", 100, 10)]),
-            sample(3, "Kaishi", vec![item("a", "f1", 100, 70)]),
+            sample(1, "Kaishi", vec![item("a", "f1", 1_000, 500)]),
+            sample(2, "Lapis", vec![item("a", "f1", 1_000, 100)]),
+            sample(3, "Kaishi", vec![item("a", "f1", 1_000, 700)]),
         ];
         let comparison = latest_comparison(&samples).expect("comparable with the first");
         assert_eq!(comparison.earlier_taken_at_ms, 1);
@@ -713,7 +764,7 @@ mod tests {
     fn a_repeated_reading_is_counted_once_on_the_page() {
         let loaded = match store_with_days("2026-09-08", &[]) {
             crate::progress::store::Loaded::Present { header, mut store } => {
-                let repeat = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
+                let repeat = sample(1, "Kaishi", vec![item("a", "f1", 1_000, 500)]);
                 store.samples = vec![repeat.clone(), repeat];
                 crate::progress::store::Loaded::Present { header, store }
             }
@@ -724,18 +775,15 @@ mod tests {
     }
 
     fn listed(taken_at_ms: u64, list: u64, items: Vec<SampleItem>) -> Sample {
-        Sample {
-            index_built_at_ms: list,
-            ..sample(taken_at_ms, "Kaishi", items)
-        }
+        Sample::new(taken_at_ms, day(), build("Kaishi"), list, 0, items, 1_000)
     }
 
     #[test]
     fn the_comparison_starts_from_the_last_reading_of_the_word_list_before() {
         let samples = vec![
-            listed(1, 10, vec![item("a", "f1", 100, 50)]),
-            listed(2, 10, vec![item("a", "f1", 100, 50), item("b", "f2", 100, 40)]),
-            listed(3, 20, vec![item("a", "f1", 100, 55), item("b", "f2", 100, 40)]),
+            listed(1, 10, vec![item("a", "f1", 1_000, 500)]),
+            listed(2, 10, vec![item("a", "f1", 1_000, 500), item("b", "f2", 1_000, 400)]),
+            listed(3, 20, vec![item("a", "f1", 1_000, 550), item("b", "f2", 1_000, 400)]),
         ];
         let comparison = latest_comparison(&samples).expect("comparable");
         assert_eq!(comparison.earlier_taken_at_ms, 2);
@@ -745,9 +793,9 @@ mod tests {
     #[test]
     fn the_comparison_ends_at_the_first_reading_of_the_newest_word_list() {
         let samples = vec![
-            listed(1, 10, vec![item("a", "f1", 100, 50)]),
-            listed(2, 20, vec![item("a", "f1", 100, 55)]),
-            listed(3, 20, vec![item("a", "f1", 100, 55), item("c", "f3", 100, 90)]),
+            listed(1, 10, vec![item("a", "f1", 1_000, 500)]),
+            listed(2, 20, vec![item("a", "f1", 1_000, 550)]),
+            listed(3, 20, vec![item("a", "f1", 1_000, 550), item("c", "f3", 1_000, 900)]),
         ];
         let comparison = latest_comparison(&samples).expect("comparable");
         assert_eq!(comparison.later_taken_at_ms, 2);
@@ -773,7 +821,7 @@ mod tests {
 
     #[test]
     fn coverage_measured_under_other_settings_is_shown_and_dated_as_stale() {
-        let samples = vec![sample(500, "Kaishi", vec![item("a", "f1", 100, 42)])];
+        let samples = vec![sample(500, "Kaishi", vec![item("a", "f1", 1_000, 420)])];
         let value = serde_json::to_value(coverage_from(&samples, &build("Lapis")))
             .expect("serialize");
         assert_eq!(value["value"], serde_json::json!(42.0));
@@ -783,7 +831,7 @@ mod tests {
 
     #[test]
     fn coverage_that_missed_a_document_says_so_and_keeps_its_value() {
-        let mut samples = vec![sample(500, "Kaishi", vec![item("a", "f1", 100, 42)])];
+        let mut samples = vec![sample(500, "Kaishi", vec![item("a", "f1", 1_000, 420)])];
         samples[0].unread_items = 2;
         let value = serde_json::to_value(coverage_from(&samples, &build("Kaishi")))
             .expect("serialize");

@@ -148,7 +148,7 @@ export function ReadingChart({ readings, now }: { readings: ReadingPoint[]; now:
           ? `${formatDelta(reading.step)} on the same ${transcripts(reading.compared)}`
           : reading.notCompared === "settingsChanged"
             ? "word-list settings changed, not compared"
-            : "no unchanged transcripts to compare";
+            : "not enough of the same text to compare";
     return {
       atMs: reading.atMs,
       day: formatDay(reading.atMs, now),

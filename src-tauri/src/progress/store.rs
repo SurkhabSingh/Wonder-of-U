@@ -14,6 +14,10 @@ use super::ledger::{DayTotals, Ledger};
 
 const RECORD_VERSION: u32 = 1;
 
+/// The fewest content words a reading is taken on, and the fewest two readings must share to
+/// be compared: below it, one word moves a share by more than half a point.
+pub(crate) const MIN_CONTENT_TOKENS: u32 = 200;
+
 /// Serialises read-modify-write against itself: writers share one temp path, so a second
 /// `File::create` would truncate the first's half-written file.
 static WRITE: Mutex<()> = Mutex::new(());
@@ -51,7 +55,8 @@ pub(crate) struct Sample {
     pub(crate) index_built_at_ms: u64,
     #[serde(default)]
     pub(crate) unread_items: u32,
-    pub(crate) items: Vec<SampleItem>,
+    /// Kept whole, wordless transcripts included, so a rewrite leaves the row as it was.
+    items: Vec<SampleItem>,
     /// The size of the word list the reading was measured against. `None` on a reading
     /// taken before this was recorded: its vocabulary is unknown, not empty. Skipped when
     /// absent so a rewrite leaves those rows byte for byte as they were.
@@ -96,9 +101,15 @@ impl Sample {
         self.index_built_at_ms == other.index_built_at_ms && self.build.matches(&other.build)
     }
 
+    /// The transcripts this reading measured. One with no words can move no share, so it is
+    /// left out of every count and comparison.
+    pub(crate) fn items_with_words(&self) -> impl Iterator<Item = &SampleItem> {
+        self.items.iter().filter(|item| item.content_tokens > 0)
+    }
+
     /// Pooled, not averaged per item, so a two-word clip cannot outvote an episode.
     pub(crate) fn totals(&self) -> (u32, u32) {
-        self.items.iter().fold((0, 0), |(content, known), item| {
+        self.items_with_words().fold((0, 0), |(content, known), item| {
             (content + item.content_tokens, known + item.known_tokens)
         })
     }
@@ -938,5 +949,32 @@ mod tests {
         ];
         // Averaging the two items would give 75%. Pooling gives 502/1000.
         assert_eq!(pooled.totals(), (1000, 502));
+    }
+
+    #[test]
+    fn a_transcript_with_no_words_is_kept_on_disk_but_never_read_back() {
+        let mut reading = sample(1, "build-a");
+        reading.items.push(SampleItem {
+            key: "C:/silence.wav|ja".to_string(),
+            fingerprint: "e3b0c4".to_string(),
+            content_tokens: 0,
+            known_tokens: 0,
+        });
+        let row = serde_json::to_value(&reading).expect("serialize");
+        assert_eq!(
+            row["items"].as_array().map(Vec::len),
+            Some(2),
+            "the row is written whole"
+        );
+        let read: Vec<&str> = reading
+            .items_with_words()
+            .map(|item| item.key.as_str())
+            .collect();
+        assert_eq!(read, ["C:/audio.wav|ja"]);
+    }
+
+    #[test]
+    fn the_floor_is_the_documented_two_hundred() {
+        assert_eq!(MIN_CONTENT_TOKENS, 200);
     }
 }
