@@ -94,17 +94,25 @@ pub(crate) fn percent(known: u32, content: u32) -> f64 {
     }
 }
 
-fn round_tenth(value: f64) -> f64 {
+pub(super) fn round_tenth(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
 
+/// The newest word list against the latest earlier one it can be compared with, one list's
+/// last reading to the next list's first, as the reading line pairs them.
 pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
-    let latest = samples.last()?;
-    samples
+    let versions = super::level::versions(samples);
+    let (latest, earlier) = versions.split_last()?;
+    earlier
         .iter()
         .rev()
-        .skip(1)
-        .find_map(|earlier| compare(earlier, latest))
+        .find_map(|version| compare(version.last, latest.first))
+}
+
+/// What a reading is measured against: the settings as they stand, and the list itself.
+pub(crate) struct Vocabulary {
+    pub(crate) settings: crate::app_types::KnownWordsBuild,
+    pub(crate) list: Option<super::level::WordList>,
 }
 
 /// Everything the Progress page is told, from local files only: a closed Anki cannot turn
@@ -118,6 +126,7 @@ pub(crate) struct ProgressReport {
     pub(crate) today: super::day::DayKey,
     pub(crate) library: super::library::LibraryReport,
     pub(crate) comparison: Option<Comparison>,
+    pub(crate) levels: super::level::Levels,
     pub(crate) readings: usize,
     pub(crate) first_run_day: Option<super::day::DayKey>,
     pub(crate) damaged_rows: usize,
@@ -132,7 +141,7 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
 ) -> Result<ProgressReport, String> {
     use tauri::Manager;
 
-    let current_build = {
+    let settings = {
         let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
         let persisted = persisted_state
             .0
@@ -140,6 +149,19 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
             .map_err(|_| "Could not read the app settings.".to_string())?;
         crate::app_types::KnownWordsBuild::from_anki_settings(&persisted.settings.anki)
     };
+    let list = app
+        .state::<crate::app_types::KnownWordsState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard.as_ref().map(|index| super::level::WordList {
+                built_at_ms: index.built_at_ms,
+                build: index.build.clone(),
+                words: u32::try_from(index.words.len()).unwrap_or(u32::MAX),
+            })
+        });
+    let vocabulary = Vocabulary { settings, list };
     let (path, cards_file) = {
         let paths = app.state::<crate::app_types::AppPathsState>();
         (paths.progress_file.clone(), paths.mined_cards_file.clone())
@@ -191,7 +213,7 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         super::store::load(&path),
         &sources,
         library,
-        &current_build,
+        &vocabulary,
         &today,
         super::health::current(),
         crate::app_runtime::now_ms(),
@@ -204,14 +226,15 @@ fn assemble(
     loaded: super::store::Loaded,
     sources: &super::calendar::Sources,
     library: super::library::LibraryReport,
-    current_build: &crate::app_types::KnownWordsBuild,
+    vocabulary: &Vocabulary,
     today: &super::day::DayKey,
     write_failure: Option<super::health::WriteFailure>,
     now_ms: u64,
 ) -> ProgressReport {
+    let list = vocabulary.list.as_ref();
     match loaded {
         super::store::Loaded::Present { header, store } => ProgressReport {
-            coverage_percent: coverage_from(&store.samples, current_build),
+            coverage_percent: coverage_from(&store.samples, &vocabulary.settings),
             immersion: immersion_from(
                 super::streak::summarise(&store.days, today, &header.first_run_day),
                 write_failure.is_some(),
@@ -225,9 +248,10 @@ fn assemble(
                 today,
             ),
             comparison: latest_comparison(&store.samples),
+            levels: super::level::levels(&store.samples, list),
             today: today.clone(),
             library,
-            readings: store.samples.len(),
+            readings: super::level::distinct_readings(&store.samples),
             first_run_day: Some(header.first_run_day),
             damaged_rows: store.damaged,
             newer_rows: store.newer,
@@ -243,6 +267,7 @@ fn assemble(
             ),
             calendar: super::calendar::uncounted(sources, &sources.library.horizon(), today),
             comparison: None,
+            levels: super::level::levels(&[], list),
             today: today.clone(),
             library,
             readings: 0,
@@ -261,6 +286,7 @@ fn assemble(
             ),
             calendar: super::calendar::uncounted(sources, &sources.library.horizon(), today),
             comparison: None,
+            levels: super::level::levels(&[], list),
             today: today.clone(),
             library,
             readings: 0,
@@ -432,7 +458,10 @@ mod tests {
                 cards,
             },
             crate::progress::library::summarise(&[]),
-            &build("Kaishi"),
+            &Vocabulary {
+                settings: build("Kaishi"),
+                list: None,
+            },
             &day(),
             write_failure,
             1,
@@ -561,6 +590,7 @@ mod tests {
             today: day(),
             library: crate::progress::library::summarise(&[]),
             comparison: None,
+            levels: Default::default(),
             readings: 0,
             first_run_day: Some(day()),
             damaged_rows: 0,
@@ -585,6 +615,7 @@ mod tests {
                 "damagedRows",
                 "firstRunDay",
                 "immersion",
+                "levels",
                 "library",
                 "newerRows",
                 "readings",
@@ -676,6 +707,51 @@ mod tests {
         let comparison = latest_comparison(&samples).expect("comparable with the first");
         assert_eq!(comparison.earlier_taken_at_ms, 1);
         assert_eq!(comparison.delta_points, 20.0);
+    }
+
+    #[test]
+    fn a_repeated_reading_is_counted_once_on_the_page() {
+        let loaded = match store_with_days("2026-09-08", &[]) {
+            crate::progress::store::Loaded::Present { header, mut store } => {
+                let repeat = sample(1, "Kaishi", vec![item("a", "f1", 100, 50)]);
+                store.samples = vec![repeat.clone(), repeat];
+                crate::progress::store::Loaded::Present { header, store }
+            }
+            other => other,
+        };
+        let report = assembled(loaded, &library_on(&[]), None);
+        assert_eq!(report.readings, 1);
+    }
+
+    fn listed(taken_at_ms: u64, list: u64, items: Vec<SampleItem>) -> Sample {
+        Sample {
+            index_built_at_ms: list,
+            ..sample(taken_at_ms, "Kaishi", items)
+        }
+    }
+
+    #[test]
+    fn the_comparison_starts_from_the_last_reading_of_the_word_list_before() {
+        let samples = vec![
+            listed(1, 10, vec![item("a", "f1", 100, 50)]),
+            listed(2, 10, vec![item("a", "f1", 100, 50), item("b", "f2", 100, 40)]),
+            listed(3, 20, vec![item("a", "f1", 100, 55), item("b", "f2", 100, 40)]),
+        ];
+        let comparison = latest_comparison(&samples).expect("comparable");
+        assert_eq!(comparison.earlier_taken_at_ms, 2);
+        assert_eq!(comparison.items_compared, 2);
+    }
+
+    #[test]
+    fn the_comparison_ends_at_the_first_reading_of_the_newest_word_list() {
+        let samples = vec![
+            listed(1, 10, vec![item("a", "f1", 100, 50)]),
+            listed(2, 20, vec![item("a", "f1", 100, 55)]),
+            listed(3, 20, vec![item("a", "f1", 100, 55), item("c", "f3", 100, 90)]),
+        ];
+        let comparison = latest_comparison(&samples).expect("comparable");
+        assert_eq!(comparison.later_taken_at_ms, 2);
+        assert_eq!(comparison.items_added, 0, "the line's step, not the newest library");
     }
 
     #[test]

@@ -683,6 +683,27 @@ export type CalendarSpan = {
   droppedEvidence: number;
 };
 
+export type ReadingPoint = {
+  atMs: number;
+  // Points gained since the first reading, on transcripts compared unchanged.
+  gained: number;
+  step: number | null;
+  compared: number;
+  coverage: number;
+  notCompared: "settingsChanged" | "nothingInCommon" | null;
+};
+
+export type WordsPoint = {
+  atMs: number;
+  words: number;
+  settingsChanged: boolean;
+};
+
+export type Levels = {
+  reading: ReadingPoint[];
+  words: WordsPoint[];
+};
+
 export type WriteFailure = {
   sinceMs: number;
   reason: string;
@@ -696,6 +717,7 @@ export type ProgressReport = {
   library: LibraryReport;
   // Null is "not yet", which the page says in words rather than drawing as zero.
   comparison: ProgressComparison | null;
+  levels: Levels;
   readings: number;
   firstRunDay: string | null;
   damagedRows: number;

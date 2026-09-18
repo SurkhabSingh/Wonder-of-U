@@ -4127,6 +4127,144 @@ input::placeholder {
   color: var(--warning);
 }
 
+.progress-refresh {
+  margin-top: var(--space-4);
+}
+
+.progress-levels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-7);
+  margin-top: var(--space-6);
+}
+
+@media (max-width: 760px) {
+  .progress-levels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.level-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.level-chart-title {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.level-chart-value {
+  font-size: var(--text-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+}
+
+.level-chart-frame {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: 88px auto;
+  column-gap: var(--space-2);
+}
+
+.level-chart-y {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 36px;
+}
+
+.level-chart-y span {
+  position: absolute;
+  right: 0;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-subtle);
+}
+
+.level-chart-y span:first-child {
+  top: 0;
+  transform: translateY(-50%);
+}
+
+.level-chart-y span:last-child {
+  bottom: 0;
+  transform: translateY(50%);
+}
+
+/* The plot's top and bottom rules are the two labelled values, so they double as its axis. */
+.level-chart-plot {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  border-top: 1px solid var(--viz-grid);
+  border-bottom: 1px solid var(--viz-grid);
+}
+
+.level-chart-plot svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.level-chart-link {
+  stroke: var(--viz-level);
+  stroke-width: 2;
+}
+
+.level-chart-link.is-unmeasured {
+  stroke: var(--text-subtle);
+  stroke-dasharray: 4 4;
+}
+
+.level-chart-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--viz-level);
+  transform: translate(-50%, -50%);
+  outline: none;
+}
+
+.level-chart-dot:hover,
+.level-chart-dot:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--viz-level) 35%, transparent);
+}
+
+.level-chart-x {
+  display: flex;
+  grid-column: 2;
+  grid-row: 2;
+  justify-content: space-between;
+  margin-top: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--text-subtle);
+}
+
+.level-chart-x span:only-child {
+  margin: 0 auto;
+}
+
+.level-chart-caption {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-2xs);
+  color: var(--text-subtle);
+}
+
 .progress-notice {
   display: flex;
   flex-direction: column;

@@ -5,6 +5,7 @@ pub(crate) mod day;
 pub(crate) mod evidence;
 pub(crate) mod health;
 pub(crate) mod ledger;
+pub(crate) mod level;
 pub(crate) mod library;
 pub(crate) mod listen_sampler;
 pub(crate) mod liveness;
@@ -24,13 +25,24 @@ fn progress_file<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
 
 /// The store's writers are private to this module, so a write from elsewhere has to come
 /// through here and cannot skip the save-failure notice.
-pub(crate) fn append_sample<R: Runtime>(
+pub(crate) fn add_sample<R: Runtime>(
     app: &AppHandle<R>,
     sample: store::Sample,
 ) -> Result<(), String> {
-    let written = store::append_sample(&progress_file(app), sample);
+    let written = store::add_sample(&progress_file(app), sample);
     health::record(app, &written);
     written
+}
+
+/// The transcripts digest and word list of the newest reading, or `None` without one.
+pub(crate) fn newest_reading<R: Runtime>(app: &AppHandle<R>) -> Option<(Option<String>, u64)> {
+    match store::load(&progress_file(app)) {
+        store::Loaded::Present { store, .. } => store
+            .samples
+            .last()
+            .map(|sample| (sample.source_digest.clone(), sample.index_built_at_ms)),
+        _ => None,
+    }
 }
 
 pub(crate) fn flush_days<R: Runtime>(app: &AppHandle<R>, pending: &mut ledger::Ledger) -> bool {

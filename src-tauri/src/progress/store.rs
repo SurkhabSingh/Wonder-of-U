@@ -57,6 +57,10 @@ pub(crate) struct Sample {
     /// absent so a rewrite leaves those rows byte for byte as they were.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) known_words: Option<u32>,
+    /// The transcripts' names, sizes and times when this was taken, so a later look can tell
+    /// whether another reading is due without reading any text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_digest: Option<String>,
 }
 
 impl Sample {
@@ -79,7 +83,17 @@ impl Sample {
             unread_items,
             items,
             known_words: Some(known_words),
+            source_digest: None,
         }
+    }
+
+    pub(crate) fn with_source_digest(mut self, digest: String) -> Self {
+        self.source_digest = Some(digest);
+        self
+    }
+
+    pub(super) fn same_word_list(&self, other: &Sample) -> bool {
+        self.index_built_at_ms == other.index_built_at_ms && self.build.matches(&other.build)
     }
 
     /// Pooled, not averaged per item, so a two-word clip cannot outvote an episode.
@@ -251,14 +265,26 @@ pub(super) fn merge_days(path: &Path, delta: &Ledger) -> Result<(), String> {
     write_all(path, &header, &store)
 }
 
-pub(super) fn append_sample(path: &Path, sample: Sample) -> Result<(), String> {
+/// Keeps a word list's first reading and its latest, and replaces anything between: the
+/// first is where its learning step is measured and the latest is the headline.
+pub(super) fn add_sample(path: &Path, sample: Sample) -> Result<(), String> {
     let _guard = WRITE.lock();
     let (header, mut store) = match load(path) {
         Loaded::Present { header, store } => (header, store),
         Loaded::Missing => return Err("the progress file is not there".to_string()),
         Loaded::Unreadable(reason) => return Err(reason),
     };
-    store.samples.push(sample);
+    let newest_two = store
+        .samples
+        .len()
+        .checked_sub(2)
+        .map(|at| &store.samples[at..]);
+    let between =
+        newest_two.is_some_and(|pair| pair.iter().all(|kept| kept.same_word_list(&sample)));
+    match store.samples.last_mut() {
+        Some(newest) if between => *newest = sample,
+        _ => store.samples.push(sample),
+    }
     write_all(path, &header, &store)
 }
 
@@ -321,12 +347,89 @@ mod tests {
         )
     }
 
+    fn reading(taken_at_ms: u64, index_built_at_ms: u64) -> Sample {
+        Sample {
+            index_built_at_ms,
+            ..sample(taken_at_ms, "build-a")
+        }
+    }
+
+    fn taken(path: &Path) -> Vec<u64> {
+        match load(path) {
+            Loaded::Present { store, .. } => store
+                .samples
+                .iter()
+                .map(|sample| sample.taken_at_ms)
+                .collect(),
+            other => panic!("expected a present store, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_word_list_keeps_its_first_reading_and_its_latest() {
+        let dir = temp_dir("first-and-latest");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+        for at in [1, 2, 3, 4] {
+            add_sample(&path, reading(at, 100)).expect("add");
+        }
+        assert_eq!(taken(&path), [1, 4]);
+    }
+
+    #[test]
+    fn a_new_word_list_never_replaces_the_last_one() {
+        let dir = temp_dir("new-list");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+        add_sample(&path, reading(1, 100)).expect("add");
+        add_sample(&path, reading(2, 100)).expect("add");
+        add_sample(&path, reading(3, 200)).expect("add");
+        add_sample(&path, reading(4, 200)).expect("add");
+        assert_eq!(taken(&path), [1, 2, 3, 4], "each list's first and latest");
+        add_sample(&path, reading(5, 200)).expect("add");
+        assert_eq!(taken(&path), [1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn a_settings_change_on_one_list_counts_as_another_list() {
+        let dir = temp_dir("settings-change");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+        add_sample(&path, reading(1, 100)).expect("add");
+        add_sample(&path, reading(2, 100)).expect("add");
+        let changed = Sample {
+            index_built_at_ms: 100,
+            ..sample(3, "build-b")
+        };
+        add_sample(&path, changed).expect("add");
+        assert_eq!(taken(&path), [1, 2, 3]);
+    }
+
+    #[test]
+    fn the_transcripts_digest_is_kept_and_an_older_reading_has_none() {
+        let dir = temp_dir("digest");
+        let path = dir.join("progress.jsonl");
+        ensure(&path, key("2026-09-10"), 1000).expect("create");
+        add_sample(
+            &path,
+            sample(1, "build-a").with_source_digest("ab12".to_string()),
+        )
+        .expect("add");
+        match load(&path) {
+            Loaded::Present { store, .. } => {
+                assert_eq!(store.samples[0].source_digest.as_deref(), Some("ab12"));
+            }
+            other => panic!("expected a present store, got {other:?}"),
+        }
+        assert_eq!(sample(2, "build-a").source_digest, None);
+    }
+
     #[test]
     fn a_reading_keeps_the_size_of_the_word_list_it_was_measured_against() {
         let dir = temp_dir("sample-words");
         let path = dir.join("progress.jsonl");
         ensure(&path, key("2026-09-10"), 1000).expect("create");
-        append_sample(&path, sample(1, "build-a")).expect("sample");
+        add_sample(&path, sample(1, "build-a")).expect("sample");
 
         match load(&path) {
             Loaded::Present { store, .. } => {
@@ -398,7 +501,7 @@ mod tests {
 
         assert!(matches!(load(&path), Loaded::Unreadable(_)));
         assert!(
-            append_sample(&path, sample(1, "build-a")).is_err(),
+            add_sample(&path, sample(1, "build-a")).is_err(),
             "a write over an unreadable file must refuse"
         );
         assert_eq!(
@@ -419,7 +522,7 @@ mod tests {
             other => panic!("a failed read must not read as empty, got {other:?}"),
         }
         assert!(
-            append_sample(&path, sample(1, "build-a")).is_err(),
+            add_sample(&path, sample(1, "build-a")).is_err(),
             "a write over a file that cannot be read must refuse"
         );
     }
@@ -442,7 +545,7 @@ mod tests {
             other => panic!("expected a present store, got {other:?}"),
         }
 
-        append_sample(&path, sample(2, "build-a")).expect("append");
+        add_sample(&path, sample(2, "build-a")).expect("append");
 
         let after = fs::read_to_string(&path).expect("read back");
         assert!(
@@ -463,7 +566,7 @@ mod tests {
         let dir = temp_dir("damaged");
         let path = dir.join("progress.jsonl");
         ensure(&path, key("2026-09-01"), 1000).expect("create");
-        append_sample(&path, sample(1, "build-a")).expect("append");
+        add_sample(&path, sample(1, "build-a")).expect("append");
 
         let existing = fs::read_to_string(&path).expect("read back");
         fs::write(&path, format!("{existing}{{\"v\":1,\"kind\":\"sam\n")).expect("tear a row");
@@ -476,7 +579,7 @@ mod tests {
             other => panic!("expected a present store, got {other:?}"),
         }
 
-        append_sample(&path, sample(2, "build-a")).expect("append after the tear");
+        add_sample(&path, sample(2, "build-a")).expect("append after the tear");
         let after = fs::read_to_string(&path).expect("read back");
         assert!(
             after.contains("\"kind\":\"sam"),
@@ -498,7 +601,7 @@ mod tests {
         let dir = temp_dir("unmodellable");
         let path = dir.join("progress.jsonl");
         ensure(&path, key("2026-09-01"), 1000).expect("create");
-        append_sample(&path, sample(1, "build-a")).expect("append");
+        add_sample(&path, sample(1, "build-a")).expect("append");
 
         // Valid JSON, this version, this kind — and missing everything a Sample needs.
         let existing = fs::read_to_string(&path).expect("read back");
@@ -514,7 +617,7 @@ mod tests {
             other => panic!("expected a present store, got {other:?}"),
         }
 
-        append_sample(&path, sample(2, "build-a")).expect("append after the orphan");
+        add_sample(&path, sample(2, "build-a")).expect("append after the orphan");
         let after = fs::read_to_string(&path).expect("read back");
         assert!(
             after.contains(&orphan),
@@ -579,7 +682,7 @@ mod tests {
         remember_evidence(&path, &seen("2026-04-06")).expect("remember");
 
         merge_days(&path, &day_delta("2026-09-11", 60_000, 0)).expect("flush");
-        append_sample(&path, sample(1, "build-a")).expect("sample");
+        add_sample(&path, sample(1, "build-a")).expect("sample");
 
         match load(&path) {
             Loaded::Present { header, store } => {
@@ -740,7 +843,7 @@ mod tests {
         let dir = temp_dir("day-beside");
         let path = dir.join("progress.jsonl");
         ensure(&path, key("2026-09-01"), 1000).expect("create");
-        append_sample(&path, sample(1, "build-a")).expect("sample");
+        add_sample(&path, sample(1, "build-a")).expect("sample");
 
         let existing = fs::read_to_string(&path).expect("read back");
         fs::write(&path, format!("{existing}{{\"v\":2,\"kind\":\"future\"}}\n"))
@@ -787,8 +890,8 @@ mod tests {
         let dir = temp_dir("round-trip");
         let path = dir.join("progress.jsonl");
         ensure(&path, key("2026-09-01"), 1000).expect("create");
-        append_sample(&path, sample(10, "build-a")).expect("first");
-        append_sample(&path, sample(20, "build-b")).expect("second");
+        add_sample(&path, sample(10, "build-a")).expect("first");
+        add_sample(&path, sample(20, "build-b")).expect("second");
 
         match load(&path) {
             Loaded::Present { store, .. } => {

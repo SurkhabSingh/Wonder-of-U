@@ -122,6 +122,7 @@ pub fn run() {
             load_progress,
             record_listening_sample,
             count_mined_cards,
+            keep_reading_current,
             start_watch_session,
             watch_snapshot,
             stop_watch_session,

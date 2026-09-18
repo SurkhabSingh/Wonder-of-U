@@ -92,6 +92,21 @@ function App() {
     logToFile("ERROR", "action_failed", message);
   }
 
+  // Settings shows the outcome beside its button; the Progress page has only this to say it.
+  async function refreshWordListFromProgress() {
+    const snapshot = await refreshKnownWords();
+    if (snapshot === null) {
+      return;
+    }
+    if (snapshot.status === "ready") {
+      showSuccess(`Your word list now has ${snapshot.wordCount.toLocaleString()} words.`);
+    } else if (snapshot.status === "offline") {
+      showWarning("Anki isn't open, so your word list wasn't refreshed.");
+    } else {
+      showWarning(snapshot.message);
+    }
+  }
+
   const TRANSCRIPTION_CANCELLED = "transcription cancelled.";
 
   function reportCancellable(caught: unknown, fallback: string, cancelledMessage: string) {
@@ -1100,6 +1115,8 @@ function App() {
               minedCards={progressMinedCards}
               countingCards={progressCountingCards}
               onCountCards={() => void countProgressCards()}
+              refreshingWordList={busyAction === "refreshKnownWords"}
+              onRefreshWordList={() => void refreshWordListFromProgress()}
               onGoToStudyPicks={() => openSettingsSection("studyPicks")}
             />
           ) : null}
@@ -1260,7 +1277,9 @@ function App() {
             onDownloadRecommendedMpv={downloadRecommendedMpv}
             onReinstallMpv={reinstallMpv}
             onDownloadRecommendedDictionary={downloadRecommendedDictionary}
-            onRefreshKnownWords={refreshKnownWords}
+            onRefreshKnownWords={async () => {
+              await refreshKnownWords();
+            }}
             onScanVocabularySources={scanVocabularySources}
             onCheckYtdlpUpdate={checkYtdlpUpdate}
             onToggleDownloadPause={toggleDownloadPause}

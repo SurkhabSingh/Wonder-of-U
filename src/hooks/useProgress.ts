@@ -71,6 +71,8 @@ export function useProgress(activePage: string) {
 
   const refresh = useCallback(async () => {
     await loadReport();
+    // A reading that is due lands as a write, and that reloads the report by itself.
+    void invoke("keep_reading_current").catch(() => undefined);
     // After the report, so a slow Anki never holds up the local numbers.
     await loadCards();
   }, [loadReport, loadCards]);

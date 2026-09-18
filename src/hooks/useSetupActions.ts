@@ -206,15 +206,16 @@ export function useSetupActions({
   }, [applyBootstrap, openSettingsSection, setBusyAction, showError]);
 
   //Reads the collection and rebuilds the known-word list.
-  const refreshKnownWords = useCallback(async () => {
+  const refreshKnownWords = useCallback(async (): Promise<KnownWordsSnapshot | null> => {
     try {
       setBusyAction("refreshKnownWords");
       await persistSettingsIfNeeded();
-      await invoke<KnownWordsSnapshot>("refresh_known_words");
+      return await invoke<KnownWordsSnapshot>("refresh_known_words");
     } catch (error) {
       showError(
         errorMessage(error, "Your known-word list could not be rebuilt."),
       );
+      return null;
     } finally {
       setBusyAction(null);
     }

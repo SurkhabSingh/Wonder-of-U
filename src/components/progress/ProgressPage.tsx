@@ -12,6 +12,7 @@ import {
 } from "../../lib/progressFormat";
 import { DayChart } from "./DayChart";
 import { LensCaption } from "./LensCaption";
+import { ReadingChart, WordsChart } from "./LevelCharts";
 import { LENSES, LENS_ORDER, type Lens } from "./lenses";
 import { StudyCalendar } from "./StudyCalendar";
 
@@ -25,6 +26,8 @@ export function ProgressPage({
   minedCards,
   countingCards,
   onCountCards,
+  refreshingWordList,
+  onRefreshWordList,
   onGoToStudyPicks,
 }: {
   bootstrap: AppBootstrap;
@@ -34,6 +37,8 @@ export function ProgressPage({
   minedCards: Measured<number> | null;
   countingCards: boolean;
   onCountCards: () => void;
+  refreshingWordList: boolean;
+  onRefreshWordList: () => void;
   onGoToStudyPicks: () => void;
 }) {
   const [lens, setLens] = useState<Lens>("time");
@@ -121,6 +126,26 @@ export function ProgressPage({
             ) : null
           }
         />
+        <div className="progress-refresh">
+          <button
+            type="button"
+            className="secondary"
+            disabled={refreshingWordList}
+            onClick={onRefreshWordList}
+          >
+            {refreshingWordList ? "Reading your collection…" : "Refresh word list"}
+          </button>
+        </div>
+        {report && (report.levels.reading.length > 0 || report.levels.words.length > 0) ? (
+          <div className="progress-levels">
+            {report.levels.reading.length > 0 ? (
+              <ReadingChart readings={report.levels.reading} now={now} />
+            ) : null}
+            {report.levels.words.length > 0 ? (
+              <WordsChart counts={report.levels.words} now={now} />
+            ) : null}
+          </div>
+        ) : null}
       </article>
 
       <article className="panel progress-summary">

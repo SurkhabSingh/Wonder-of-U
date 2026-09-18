@@ -380,6 +380,15 @@ pub(crate) async fn refresh_known_words(app: AppHandle) -> Result<KnownWordsSnap
     Ok(snapshot)
 }
 
+/// Takes a reading if the transcripts or the word list changed since the last one. Answers
+/// nothing: a reading that lands refreshes the page like any other write.
+#[tauri::command]
+pub(crate) async fn keep_reading_current(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::anki::keep_reading_current(&app))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub(crate) async fn load_progress(app: AppHandle) -> Result<ProgressReport, String> {
     tauri::async_runtime::spawn_blocking(move || load_progress_inner(&app))

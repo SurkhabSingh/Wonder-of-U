@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, Runtime};
@@ -14,6 +15,10 @@ use super::known_words::normalize_expression;
 use super::sentence_ranking::is_content_word;
 
 const MIN_CONTENT_TOKENS: u32 = 200;
+
+/// The transcripts and word list a reading was last attempted for, so a skipped reading is not
+/// retried until one of them moves. Held across the attempt, so two cannot run at once.
+static ATTEMPTED: Mutex<Option<(String, Option<u64>)>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Skip {
@@ -84,6 +89,7 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     if japanese.is_empty() {
         return Ok(Sampled::Skipped(Skip::NothingToRead));
     }
+    let digest = library_digest(&japanese);
 
     let mut counted = Vec::new();
     let mut unread = 0_u32;
@@ -103,7 +109,7 @@ pub(crate) fn sample_comprehension<R: Runtime>(
         return Ok(Sampled::Skipped(Skip::Insufficient));
     }
 
-    Ok(Sampled::Taken(Sample::new(
+    let sample = Sample::new(
         now_ms,
         day::today(),
         build,
@@ -119,7 +125,8 @@ pub(crate) fn sample_comprehension<R: Runtime>(
             })
             .collect(),
         word_count,
-    )))
+    );
+    Ok(Sampled::Taken(sample.with_source_digest(digest)))
 }
 
 pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
@@ -130,7 +137,7 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
             Sampled::Taken(sample) => {
                 let items = sample.items.len();
                 let (content, known) = sample.totals();
-                crate::progress::append_sample(app, sample)?;
+                crate::progress::add_sample(app, sample)?;
                 Ok(format!("taken: {items} items, {known}/{content} words"))
             }
         }
@@ -156,6 +163,83 @@ pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) {
             serde_json::json!({}),
         ),
     }
+}
+
+/// Takes a reading when the transcripts or the word list moved since the newest one.
+pub(crate) fn keep_reading_current<R: Runtime>(app: &AppHandle<R>) {
+    let Ok(mut attempted) = ATTEMPTED.try_lock() else {
+        return;
+    };
+    let recordings = {
+        let persisted_state = app.state::<SharedPersistedState>();
+        let Ok(persisted) = persisted_state.0.lock() else {
+            return;
+        };
+        persisted.recent_recordings.clone()
+    };
+    let index_built_at_ms = app
+        .state::<KnownWordsState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|index| index.built_at_ms));
+    let now = (
+        library_digest(&japanese_transcripts(&recordings)),
+        index_built_at_ms,
+    );
+    let newest = crate::progress::newest_reading(app);
+    if reading_is_current(newest.as_ref(), &now) || attempted.as_ref() == Some(&now) {
+        return;
+    }
+    crate::app_runtime::log_event(
+        app,
+        "INFO",
+        "progress.reading_due",
+        serde_json::json!({ "because": due_because(newest.as_ref(), &now) }),
+    );
+    *attempted = Some(now);
+    record_sample(app);
+}
+
+fn reading_is_current(newest: Option<&(Option<String>, u64)>, now: &(String, Option<u64>)) -> bool {
+    newest.is_some_and(|(digest, index_built_at_ms)| {
+        digest.as_deref() == Some(now.0.as_str()) && Some(*index_built_at_ms) == now.1
+    })
+}
+
+fn due_because(
+    newest: Option<&(Option<String>, u64)>,
+    now: &(String, Option<u64>),
+) -> &'static str {
+    match newest {
+        None => "no reading yet",
+        Some((_, index_built_at_ms)) if Some(*index_built_at_ms) != now.1 => "word list",
+        Some(_) => "transcripts",
+    }
+}
+
+/// Names, sizes and times, hashed. No text is read, so asking whether a reading is due costs
+/// one metadata call per transcript.
+fn library_digest(transcripts: &[(String, String)]) -> String {
+    let mut lines: Vec<String> = transcripts
+        .iter()
+        .map(|(key, path)| {
+            let stamp = std::fs::metadata(path).map_or_else(
+                |_| "missing".to_string(),
+                |meta| {
+                    let modified = meta
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |since| since.as_millis());
+                    format!("{}:{modified}", meta.len())
+                },
+            );
+            format!("{key}\t{path}\t{stamp}")
+        })
+        .collect();
+    lines.sort_unstable();
+    fingerprint(&lines.join("\n"))
 }
 
 fn japanese_transcripts(recordings: &[RecentRecording]) -> Vec<(String, String)> {
@@ -223,7 +307,10 @@ fn count_document(
 
 #[cfg(test)]
 mod tests {
-    use super::{fingerprint, item_key, japanese_transcripts, MIN_CONTENT_TOKENS};
+    use super::{
+        due_because, fingerprint, item_key, japanese_transcripts, library_digest,
+        reading_is_current, MIN_CONTENT_TOKENS,
+    };
     use crate::app_types::{RecentRecording, RecordingTranscript};
 
     fn transcript(language: &str, detected: Option<&str>, path: &str) -> RecordingTranscript {
@@ -304,6 +391,64 @@ mod tests {
         assert_ne!(fingerprint("こんにちは"), fingerprint("こんにちわ"));
         assert_ne!(fingerprint(""), fingerprint(" "));
         assert_eq!(fingerprint("x").len(), 16);
+    }
+
+    #[test]
+    fn the_digest_moves_with_the_transcripts_and_with_nothing_else() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        let first = dir.path().join("a.ja.txt");
+        let second = dir.path().join("b.ja.txt");
+        std::fs::write(&first, "こんにちは").expect("write");
+        std::fs::write(&second, "さようなら").expect("write");
+        let entry =
+            |key: &str, path: &std::path::Path| (key.to_string(), path.display().to_string());
+        let both = [entry("a|ja", &first), entry("b|ja", &second)];
+        let digest = library_digest(&both);
+
+        assert_eq!(library_digest(&both), digest, "nothing moved");
+        let reversed = [entry("b|ja", &second), entry("a|ja", &first)];
+        assert_eq!(library_digest(&reversed), digest, "order is not a change");
+        assert_ne!(library_digest(&both[..1]), digest, "a transcript went away");
+
+        std::fs::write(&second, "さようなら、またね").expect("rewrite");
+        assert_ne!(library_digest(&both), digest, "a transcript was rewritten");
+
+        std::fs::remove_file(&second).expect("remove");
+        let missing = library_digest(&both);
+        assert_ne!(
+            missing,
+            library_digest(&both[..1]),
+            "a missing file still counts"
+        );
+    }
+
+    #[test]
+    fn a_reading_is_due_when_the_transcripts_or_the_word_list_moved() {
+        let now = ("ab".to_string(), Some(20));
+        let newest = |digest: Option<&str>, index: u64| (digest.map(str::to_string), index);
+
+        assert!(reading_is_current(Some(&newest(Some("ab"), 20)), &now));
+        assert!(!reading_is_current(Some(&newest(Some("cd"), 20)), &now));
+        assert!(!reading_is_current(Some(&newest(Some("ab"), 10)), &now));
+        assert!(
+            !reading_is_current(Some(&newest(None, 20)), &now),
+            "an older reading"
+        );
+        assert!(!reading_is_current(None, &now), "no reading at all");
+        assert!(!reading_is_current(
+            Some(&newest(Some("ab"), 20)),
+            &("ab".to_string(), None)
+        ));
+
+        assert_eq!(due_because(None, &now), "no reading yet");
+        assert_eq!(
+            due_because(Some(&newest(Some("ab"), 10)), &now),
+            "word list"
+        );
+        assert_eq!(
+            due_because(Some(&newest(Some("cd"), 20)), &now),
+            "transcripts"
+        );
     }
 
     #[test]
