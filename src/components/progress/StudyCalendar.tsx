@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
 import type { CalendarDay, CalendarSpan } from "../../types";
-import { monthName, monthOf, shiftDay, shortDate, weekdayOf } from "../../lib/progressFormat";
+import { shiftDay, shortDate } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
 import { stepOf, type LensSpec } from "./lenses";
+import { DAYS_IN_WEEK, monthMarks, weeksEnding } from "./weeks";
 
 const WEEKS = 53;
-const DAYS_IN_WEEK = 7;
 const WEEKDAY_LABELS = ["Mon", "", "Wed", "", "Fri", "", ""];
 const SCALE = ["is-zero", "t1", "t2", "t3", "t4"];
 
@@ -55,7 +55,8 @@ export function StudyCalendar({
   }
 
   const byDay = new Map(span.days.map((entry) => [entry.day, entry]));
-  const gridStart = shiftDay(today, -weekdayOf(today) - (WEEKS - 1) * DAYS_IN_WEEK);
+  const mondays = weeksEnding(today, WEEKS);
+  const gridStart = mondays[0];
 
   const cells: { day: string; entry: CalendarDay | undefined }[] = [];
   for (let row = 0; row < DAYS_IN_WEEK; row += 1) {
@@ -65,17 +66,7 @@ export function StudyCalendar({
     }
   }
 
-  // A month is labelled on the first column it owns, skipped when the next is too close to fit.
-  const months: { week: number; label: string }[] = [];
-  for (let week = 0; week < WEEKS; week += 1) {
-    const monday = shiftDay(gridStart, week * DAYS_IN_WEEK);
-    if (week === 0 || monthOf(shiftDay(monday, -DAYS_IN_WEEK)) !== monthOf(monday)) {
-      months.push({ week, label: monthName(monthOf(monday)) });
-    }
-  }
-  const shownMonths = months.filter(
-    (month, index) => index === months.length - 1 || months[index + 1].week - month.week >= 3,
-  );
+  const shownMonths = monthMarks(mondays);
 
   const noted = [...span.days]
     .reverse()

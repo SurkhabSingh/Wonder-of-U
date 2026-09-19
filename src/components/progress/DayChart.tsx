@@ -1,16 +1,32 @@
-import type { CalendarSpan } from "../../types";
+import type { CalendarDay, CalendarSpan } from "../../types";
 import { shiftDay, shortDate } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
 import type { LensSpec } from "./lenses";
+import { DAYS_IN_WEEK, monthMarks, weeksEnding } from "./weeks";
 
-const WINDOW = 30;
+export type Range = "month" | "quarter" | "year";
+
+type RangeSpec = { label: string; covers: string } & (
+  | { weekly: false; days: number; labelEvery: number }
+  | { weekly: true; weeks: number }
+);
+
+const RANGES: Record<Range, RangeSpec> = {
+  month: { label: "30 days", covers: "last 30 days", weekly: false, days: 30, labelEvery: 7 },
+  quarter: { label: "90 days", covers: "last 90 days", weekly: false, days: 90, labelEvery: 14 },
+  // The calendar's 53 weeks: a bar per day would be too thin to read over a year.
+  year: { label: "Year", covers: "past year", weekly: true, weeks: 53 },
+};
+
+const RANGE_ORDER: Range[] = ["month", "quarter", "year"];
 const MAX_INTERVALS = 3;
-const LABEL_EVERY = 7;
 const LABELLED_GAP = 6;
 
+// `day` is the Monday when a slot is a week.
 type Slot = { day: string; value: number | null; detail: string | null };
 type Counted = { day: string; value: number };
 type Gap = { start: number; end: number; label: string };
+type Mark = { index: number; text: string };
 
 // The smallest clean step that covers the peak in at most three intervals, so the axis
 // reads 0 / 10m / 20m rather than 0 / 6m 26s / 12m 52s.
@@ -23,7 +39,7 @@ function scaleFor(peak: number, steps: number[]): { top: number; ticks: number[]
   return { top: ticks[ticks.length - 1], ticks };
 }
 
-// Every run of days with no number gets one band, so a count that stopped early reads as
+// Every run of slots with no number gets one band, so a count that stopped early reads as
 // stopped rather than as a row of zeros.
 function gapsIn(slots: Slot[], lens: LensSpec, span: CalendarSpan): Gap[] {
   const gaps: Gap[] = [];
@@ -42,25 +58,130 @@ function gapsIn(slots: Slot[], lens: LensSpec, span: CalendarSpan): Gap[] {
   return gaps;
 }
 
-export function DayChart({
-  span,
-  today,
-  lens,
-}: {
-  span: CalendarSpan;
-  today: string;
-  lens: LensSpec;
-}) {
-  const { frame, tip, handlers } = useChartTooltip();
+function sumOf<T>(
+  entries: CalendarDay[],
+  pick: (entry: CalendarDay) => T | null,
+  add: (sum: T, next: T) => T,
+): T | null {
+  return entries.reduce<T | null>((sum, entry) => {
+    const value = pick(entry);
+    if (value === null) {
+      return sum;
+    }
+    return sum === null ? value : add(sum, value);
+  }, null);
+}
 
-  const byDay = new Map(span.days.map((entry) => [entry.day, entry]));
-  const slots: Slot[] = Array.from({ length: WINDOW }, (_, index) => {
-    const day = shiftDay(today, index - (WINDOW - 1));
+function summed(day: string, entries: CalendarDay[]): CalendarDay {
+  return {
+    day,
+    combinedMs: sumOf(entries, (entry) => entry.combinedMs, (sum, next) => sum + next),
+    cards: sumOf(
+      entries,
+      (entry) => entry.cards,
+      (sum, next) => ({
+        word: sum.word + next.word,
+        line: sum.line + next.line,
+        transcript: sum.transcript + next.transcript,
+        unsorted: sum.unsorted + next.unsorted,
+      }),
+    ),
+    material: sumOf(
+      entries,
+      (entry) => entry.material,
+      (sum, next) => ({
+        recordings: sum.recordings + next.recordings,
+        videos: sum.videos + next.videos,
+      }),
+    ),
+  };
+}
+
+function daySlots(
+  byDay: Map<string, CalendarDay>,
+  today: string,
+  lens: LensSpec,
+  days: number,
+): Slot[] {
+  return Array.from({ length: days }, (_, index) => {
+    const day = shiftDay(today, index - (days - 1));
     const entry = byDay.get(day);
     return entry === undefined
       ? { day, value: null, detail: null }
       : { day, value: lens.valueOf(entry), detail: lens.detailOf(entry) };
   });
+}
+
+// A week adds up the days this view has a number for; a week with none of them has no
+// number, and one with only some says how many.
+function weekSlots(
+  byDay: Map<string, CalendarDay>,
+  today: string,
+  lens: LensSpec,
+  weeks: number,
+): Slot[] {
+  return weeksEnding(today, weeks).map((monday) => {
+    const days = Array.from({ length: DAYS_IN_WEEK }, (_, offset) =>
+      shiftDay(monday, offset),
+    ).filter((day) => day <= today);
+    const counted = days
+      .map((day) => byDay.get(day))
+      .filter((entry): entry is CalendarDay => entry !== undefined && lens.valueOf(entry) !== null);
+    if (counted.length === 0) {
+      return { day: monday, value: null, detail: null };
+    }
+    const week = summed(monday, counted);
+    const parts = [
+      lens.detailOf(week),
+      counted.length < days.length ? `${counted.length} of ${days.length} days counted` : null,
+    ].filter((part): part is string => part !== null);
+    return {
+      day: monday,
+      value: lens.valueOf(week),
+      detail: parts.length > 0 ? parts.join(" · ") : null,
+    };
+  });
+}
+
+function dayMarks(slots: Slot[], every: number): Mark[] {
+  return slots.flatMap((slot, index) => {
+    const fromEnd = slots.length - 1 - index;
+    if (fromEnd % every !== 0) {
+      return [];
+    }
+    return [{ index, text: fromEnd === 0 ? "Today" : shortDate(slot.day) }];
+  });
+}
+
+function weekMarks(slots: Slot[]): Mark[] {
+  return monthMarks(slots.map((slot) => slot.day)).map((month) => ({
+    index: month.week,
+    text: month.label,
+  }));
+}
+
+export function DayChart({
+  span,
+  today,
+  lens,
+  range: rangeId,
+  onRange,
+}: {
+  span: CalendarSpan;
+  today: string;
+  lens: LensSpec;
+  range: Range;
+  onRange: (range: Range) => void;
+}) {
+  const { frame, tip, handlers } = useChartTooltip();
+  const range = RANGES[rangeId];
+
+  const byDay = new Map(span.days.map((entry) => [entry.day, entry]));
+  const slots = range.weekly
+    ? weekSlots(byDay, today, lens, range.weeks)
+    : daySlots(byDay, today, lens, range.days);
+  const marks = range.weekly ? weekMarks(slots) : dayMarks(slots, range.labelEvery);
+  const last = slots.length - 1;
 
   const measured = slots.filter((slot): slot is Slot & Counted => slot.value !== null);
   const total = measured.reduce((sum, slot) => sum + slot.value, 0);
@@ -71,22 +192,48 @@ export function DayChart({
   const { top, ticks } = scaleFor(peak === null ? 0 : peak.value, lens.ticks);
   const gaps = gapsIn(slots, lens, span);
 
+  const detailHeading = range.weekly ? "Details" : lens.detailHeading;
+  const named = (day: string) => (range.weekly ? `the week of ${shortDate(day)}` : shortDate(day));
+  const heading = (slot: Slot, index: number) => {
+    if (range.weekly) {
+      return index === last ? "This week" : `Week of ${shortDate(slot.day)}`;
+    }
+    return slot.day === today ? `${shortDate(slot.day)} · today` : shortDate(slot.day);
+  };
+
   const summary =
     measured.length === 0
-      ? `${lens.title}: nothing counted in the last 30 days.`
-      : `${lens.title}: ${lens.total(total)} in the last 30 days${
+      ? `${lens.title}: nothing counted in the ${range.covers}.`
+      : `${lens.title}: ${lens.total(total)} in the ${range.covers}${
           peak !== null && peak.value > 0
-            ? `, most on ${shortDate(peak.day)} (${lens.format(peak.value)})`
+            ? `, most ${range.weekly ? "in" : "on"} ${named(peak.day)} (${lens.format(peak.value)})`
             : ""
         }.`;
 
   return (
     <div className="day-chart">
       <div className="day-chart-head">
-        <span className="day-chart-title">{lens.title}, last 30 days</span>
-        <span className="day-chart-total">
-          {measured.length === 0 ? "—" : lens.total(total)}
+        <span className="day-chart-title">
+          {lens.title}, {range.covers}
         </span>
+        <div className="day-chart-head-end">
+          <div className="progress-lens" role="group" aria-label="How far back the bars reach">
+            {RANGE_ORDER.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={`progress-lens-button ${rangeId === id ? "is-active" : ""}`}
+                aria-pressed={rangeId === id}
+                onClick={() => onRange(id)}
+              >
+                {RANGES[id].label}
+              </button>
+            ))}
+          </div>
+          <span className="day-chart-total">
+            {measured.length === 0 ? "—" : lens.total(total)}
+          </span>
+        </div>
       </div>
 
       <div className="day-chart-frame" ref={frame} {...handlers}>
@@ -112,8 +259,8 @@ export function DayChart({
               key={gap.start}
               className="day-chart-gap"
               style={{
-                left: `${(gap.start / WINDOW) * 100}%`,
-                width: `${((gap.end - gap.start) / WINDOW) * 100}%`,
+                left: `${(gap.start / slots.length) * 100}%`,
+                width: `${((gap.end - gap.start) / slots.length) * 100}%`,
               }}
             >
               {gap.end - gap.start >= LABELLED_GAP ? <span>{gap.label}</span> : null}
@@ -121,18 +268,18 @@ export function DayChart({
           ))}
 
           <div className="day-chart-columns">
-            {slots.map((slot) => {
+            {slots.map((slot, index) => {
               if (slot.value === null) {
                 return <span key={slot.day} className="day-chart-slot" />;
               }
               const isPeak = peak !== null && slot.day === peak.day && slot.value > 0;
-              const when = slot.day === today ? `${shortDate(slot.day)} · today` : shortDate(slot.day);
+              const when = heading(slot, index);
               return (
                 <span
                   key={slot.day}
                   className="day-chart-slot is-counted"
                   tabIndex={0}
-                  aria-label={`${shortDate(slot.day)}: ${lens.format(slot.value)}`}
+                  aria-label={`${range.weekly ? `Week of ${shortDate(slot.day)}` : shortDate(slot.day)}: ${lens.format(slot.value)}`}
                   data-tip-value={lens.format(slot.value)}
                   data-tip-label={slot.detail === null ? when : `${when} · ${slot.detail}`}
                 >
@@ -155,19 +302,18 @@ export function DayChart({
         </div>
 
         <div className="day-chart-x" aria-hidden="true">
-          {slots.map((slot, index) => {
-            const fromEnd = WINDOW - 1 - index;
-            if (fromEnd % LABEL_EVERY !== 0) {
-              return null;
-            }
-            // Today is pinned to the right edge; the rest sit centred under their day.
+          {marks.map((mark) => {
+            // The newest slot is pinned to the right edge; the rest sit centred under theirs.
             const place =
-              fromEnd === 0
+              mark.index === last
                 ? { right: 0 }
-                : { left: `${((index + 0.5) / WINDOW) * 100}%`, transform: "translateX(-50%)" };
+                : {
+                    left: `${((mark.index + 0.5) / slots.length) * 100}%`,
+                    transform: "translateX(-50%)",
+                  };
             return (
-              <span key={slot.day} style={place}>
-                {fromEnd === 0 ? "Today" : shortDate(slot.day)}
+              <span key={mark.index} style={place}>
+                {mark.text}
               </span>
             );
           })}
@@ -177,13 +323,13 @@ export function DayChart({
       </div>
 
       <details className="viz-table">
-        <summary>Show the last 30 days as a list</summary>
+        <summary>Show the {range.covers} as a list</summary>
         <table>
           <thead>
             <tr>
-              <th scope="col">Day</th>
+              <th scope="col">{range.weekly ? "Week of" : "Day"}</th>
               <th scope="col">{lens.title}</th>
-              {lens.detailHeading === null ? null : <th scope="col">{lens.detailHeading}</th>}
+              {detailHeading === null ? null : <th scope="col">{detailHeading}</th>}
             </tr>
           </thead>
           <tbody>
@@ -195,7 +341,7 @@ export function DayChart({
                     ? lens.gap(slot.day, span).tip
                     : lens.format(slot.value)}
                 </td>
-                {lens.detailHeading === null ? null : <td>{slot.detail ?? ""}</td>}
+                {detailHeading === null ? null : <td>{slot.detail ?? ""}</td>}
               </tr>
             ))}
           </tbody>

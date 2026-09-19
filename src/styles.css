@@ -4320,10 +4320,17 @@ input::placeholder {
 
 .day-chart-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-6);
+}
+
+.day-chart-head-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
 }
 
 .day-chart-title {

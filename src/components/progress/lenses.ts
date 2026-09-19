@@ -62,7 +62,7 @@ const TIME: LensSpec = {
   total: formatDuration,
   steps: [15 * MINUTE, 30 * MINUTE, 60 * MINUTE],
   stepLabels: ["<15m", "15m", "30m", "1h+"],
-  ticks: [1, 2, 5, 10, 15, 30, 60, 120, 240, 480].map((minutes) => minutes * MINUTE),
+  ticks: [1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 600, 1200].map((minutes) => minutes * MINUTE),
   formatTick: formatDuration,
   detailHeading: null,
   detailOf: () => null,

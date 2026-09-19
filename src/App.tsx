@@ -22,6 +22,8 @@ import { useAppViewState } from "./hooks/useAppViewState";
 import { useMinedSentences } from "./hooks/useMinedSentences";
 import { useProgress } from "./hooks/useProgress";
 import { ProgressPage } from "./components/progress/ProgressPage";
+import type { Range } from "./components/progress/DayChart";
+import type { Lens } from "./components/progress/lenses";
 import { useWatchSession } from "./hooks/useWatchSession";
 import { useWatchSubtitles } from "./hooks/useWatchSubtitles";
 import { segmentMineKey } from "./lib/segments";
@@ -210,6 +212,9 @@ function App() {
     countingCards: progressCountingCards,
     countCards: countProgressCards,
   } = useProgress(activePage);
+  // Held here rather than on the page, so leaving Progress does not reset what it shows.
+  const [progressLens, setProgressLens] = useState<Lens>("time");
+  const [progressRange, setProgressRange] = useState<Range>("month");
   const watch = useWatchSession();
   const watchSubtitles = useWatchSubtitles();
   const [watchMinedKeys, setWatchMinedKeys] = useState<Set<string>>(() => new Set());
@@ -1118,6 +1123,10 @@ function App() {
               refreshingWordList={busyAction === "refreshKnownWords"}
               onRefreshWordList={() => void refreshWordListFromProgress()}
               onGoToStudyPicks={() => openSettingsSection("studyPicks")}
+              lens={progressLens}
+              onLens={setProgressLens}
+              range={progressRange}
+              onRange={setProgressRange}
             />
           ) : null}
 

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { AppBootstrap, Measured, ProgressReport } from "../../types";
 import { Metric, StatTile, readMeasured } from "./MeasuredValue";
 import {
@@ -10,7 +9,7 @@ import {
   formatMoment,
   formatPercent,
 } from "../../lib/progressFormat";
-import { DayChart } from "./DayChart";
+import { DayChart, type Range } from "./DayChart";
 import { LensCaption } from "./LensCaption";
 import { ReadingChart, WordsChart } from "./LevelCharts";
 import { LENSES, LENS_ORDER, type Lens } from "./lenses";
@@ -29,6 +28,10 @@ export function ProgressPage({
   refreshingWordList,
   onRefreshWordList,
   onGoToStudyPicks,
+  lens,
+  onLens,
+  range,
+  onRange,
 }: {
   bootstrap: AppBootstrap;
   report: ProgressReport | null;
@@ -40,8 +43,11 @@ export function ProgressPage({
   refreshingWordList: boolean;
   onRefreshWordList: () => void;
   onGoToStudyPicks: () => void;
+  lens: Lens;
+  onLens: (lens: Lens) => void;
+  range: Range;
+  onRange: (range: Range) => void;
 }) {
-  const [lens, setLens] = useState<Lens>("time");
   const now = new Date();
   const coverage = report ? readMeasured(report.coveragePercent) : null;
   const immersion = report ? readMeasured(report.immersion).value : null;
@@ -216,13 +222,19 @@ export function ProgressPage({
                   type="button"
                   className={`progress-lens-button ${lens === id ? "is-active" : ""}`}
                   aria-pressed={lens === id}
-                  onClick={() => setLens(id)}
+                  onClick={() => onLens(id)}
                 >
                   {LENSES[id].label}
                 </button>
               ))}
             </div>
-            <DayChart span={report.calendar} today={report.today} lens={LENSES[lens]} />
+            <DayChart
+              span={report.calendar}
+              today={report.today}
+              lens={LENSES[lens]}
+              range={range}
+              onRange={onRange}
+            />
             <StudyCalendar
               span={report.calendar}
               today={report.today}
