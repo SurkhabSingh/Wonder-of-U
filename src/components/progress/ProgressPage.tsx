@@ -9,7 +9,7 @@ import {
   formatMoment,
   formatPercent,
 } from "../../lib/progressFormat";
-import { DayChart, type Range } from "./DayChart";
+import { DayChart, RangeSwitch, type Range } from "./DayChart";
 import { LensCaption } from "./LensCaption";
 import { ReadingChart, WordsChart } from "./LevelCharts";
 import { LENSES, LENS_ORDER, type Lens } from "./lenses";
@@ -215,25 +215,27 @@ export function ProgressPage({
 
         {report ? (
           <div className={`progress-charts lens-${lens}`}>
-            <div className="progress-lens" role="group" aria-label="What the charts show">
-              {LENS_ORDER.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`progress-lens-button ${lens === id ? "is-active" : ""}`}
-                  aria-pressed={lens === id}
-                  onClick={() => onLens(id)}
-                >
-                  {LENSES[id].label}
-                </button>
-              ))}
+            <div className="progress-chart-controls">
+              <div className="progress-lens" role="group" aria-label="What the charts show">
+                {LENS_ORDER.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`progress-lens-button ${lens === id ? "is-active" : ""}`}
+                    aria-pressed={lens === id}
+                    onClick={() => onLens(id)}
+                  >
+                    {LENSES[id].label}
+                  </button>
+                ))}
+              </div>
+              <RangeSwitch range={range} onRange={onRange} />
             </div>
             <DayChart
               span={report.calendar}
               today={report.today}
               lens={LENSES[lens]}
               range={range}
-              onRange={onRange}
             />
             <StudyCalendar
               span={report.calendar}

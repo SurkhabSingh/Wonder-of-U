@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import type { CalendarDay, CalendarSpan } from "../../types";
 import { shiftDay, shortDate } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
@@ -20,7 +21,10 @@ const RANGES: Record<Range, RangeSpec> = {
 
 const RANGE_ORDER: Range[] = ["month", "quarter", "year"];
 const MAX_INTERVALS = 3;
-const LABELLED_GAP = 6;
+// A band is labelled when it spans a fifth of the plot: the six days it was sized for at 30.
+const LABELLED_SHARE = 0.2;
+// A peak label centred on a bar this near the axis would run into the axis labels.
+const PEAK_EDGE_SHARE = 0.05;
 
 // `day` is the Monday when a slot is a week.
 type Slot = { day: string; value: number | null; detail: string | null };
@@ -153,6 +157,22 @@ function dayMarks(slots: Slot[], every: number): Mark[] {
   });
 }
 
+// One stop in the tab order for the whole chart; the arrow keys move between its bars.
+function stepThrough(event: KeyboardEvent<HTMLDivElement>) {
+  const step = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+  if (step === 0) {
+    return;
+  }
+  const bars = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>(".day-chart-slot.is-counted"),
+  ];
+  const next = bars[bars.findIndex((bar) => bar === event.target) + step];
+  if (next) {
+    event.preventDefault();
+    next.focus();
+  }
+}
+
 function weekMarks(slots: Slot[]): Mark[] {
   return monthMarks(slots.map((slot) => slot.day)).map((month) => ({
     index: month.week,
@@ -160,18 +180,40 @@ function weekMarks(slots: Slot[]): Mark[] {
   }));
 }
 
+export function RangeSwitch({
+  range,
+  onRange,
+}: {
+  range: Range;
+  onRange: (range: Range) => void;
+}) {
+  return (
+    <div className="progress-lens" role="group" aria-label="How far back the bars reach">
+      {RANGE_ORDER.map((id) => (
+        <button
+          key={id}
+          type="button"
+          className={`progress-lens-button ${range === id ? "is-active" : ""}`}
+          aria-pressed={range === id}
+          onClick={() => onRange(id)}
+        >
+          {RANGES[id].label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function DayChart({
   span,
   today,
   lens,
   range: rangeId,
-  onRange,
 }: {
   span: CalendarSpan;
   today: string;
   lens: LensSpec;
   range: Range;
-  onRange: (range: Range) => void;
 }) {
   const { frame, tip, handlers } = useChartTooltip();
   const range = RANGES[rangeId];
@@ -182,6 +224,7 @@ export function DayChart({
     : daySlots(byDay, today, lens, range.days);
   const marks = range.weekly ? weekMarks(slots) : dayMarks(slots, range.labelEvery);
   const last = slots.length - 1;
+  const newestCounted = slots.map((slot) => slot.value !== null).lastIndexOf(true);
 
   const measured = slots.filter((slot): slot is Slot & Counted => slot.value !== null);
   const total = measured.reduce((sum, slot) => sum + slot.value, 0);
@@ -216,24 +259,9 @@ export function DayChart({
         <span className="day-chart-title">
           {lens.title}, {range.covers}
         </span>
-        <div className="day-chart-head-end">
-          <div className="progress-lens" role="group" aria-label="How far back the bars reach">
-            {RANGE_ORDER.map((id) => (
-              <button
-                key={id}
-                type="button"
-                className={`progress-lens-button ${rangeId === id ? "is-active" : ""}`}
-                aria-pressed={rangeId === id}
-                onClick={() => onRange(id)}
-              >
-                {RANGES[id].label}
-              </button>
-            ))}
-          </div>
-          <span className="day-chart-total">
-            {measured.length === 0 ? "—" : lens.total(total)}
-          </span>
-        </div>
+        <span className="day-chart-total">
+          {measured.length === 0 ? "—" : lens.total(total)}
+        </span>
       </div>
 
       <div className="day-chart-frame" ref={frame} {...handlers}>
@@ -263,25 +291,33 @@ export function DayChart({
                 width: `${((gap.end - gap.start) / slots.length) * 100}%`,
               }}
             >
-              {gap.end - gap.start >= LABELLED_GAP ? <span>{gap.label}</span> : null}
+              {(gap.end - gap.start) / slots.length >= LABELLED_SHARE ? (
+                <span>{gap.label}</span>
+              ) : null}
             </div>
           ))}
 
-          <div className="day-chart-columns">
+          <div className="day-chart-columns" onKeyDown={stepThrough}>
             {slots.map((slot, index) => {
               if (slot.value === null) {
                 return <span key={slot.day} className="day-chart-slot" />;
               }
               const isPeak = peak !== null && slot.day === peak.day && slot.value > 0;
               const when = heading(slot, index);
+              const value = lens.format(slot.value);
+              const label = slot.detail === null ? when : `${when} · ${slot.detail}`;
               return (
                 <span
                   key={slot.day}
                   className="day-chart-slot is-counted"
-                  tabIndex={0}
-                  aria-label={`${range.weekly ? `Week of ${shortDate(slot.day)}` : shortDate(slot.day)}: ${lens.format(slot.value)}`}
-                  data-tip-value={lens.format(slot.value)}
-                  data-tip-label={slot.detail === null ? when : `${when} · ${slot.detail}`}
+                  tabIndex={index === newestCounted ? 0 : -1}
+                  aria-label={
+                    slot.detail === null
+                      ? `${when}: ${value}`
+                      : `${when}: ${value} · ${slot.detail}`
+                  }
+                  data-tip-value={value}
+                  data-tip-label={label}
                 >
                   {slot.value === 0 ? (
                     <i className="day-chart-zero" />
@@ -291,7 +327,15 @@ export function DayChart({
                       style={{ height: `${(slot.value / top) * 100}%` }}
                     >
                       {isPeak ? (
-                        <b className="day-chart-peak">{lens.format(slot.value)}</b>
+                        <b
+                          className={
+                            (index + 0.5) / slots.length < PEAK_EDGE_SHARE
+                              ? "day-chart-peak is-start"
+                              : "day-chart-peak"
+                          }
+                        >
+                          {value}
+                        </b>
                       ) : null}
                     </i>
                   )}

@@ -1,6 +1,14 @@
-import { useCallback, useRef, useState, type FocusEvent, type PointerEvent } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type PointerEvent,
+} from "react";
 
-export type ChartTip = { x: number; value: string; label: string; y: number };
+// `x` is the mark's centre and `bound` the chart's width, both from the chart's left edge.
+export type ChartTip = { x: number; value: string; label: string; y: number; bound: number };
 
 // Delegated: a mark carries its reading in data attributes, so a year of cells needs no
 // handler of its own.
@@ -18,10 +26,10 @@ export function useChartTooltip() {
     }
     const at = mark.getBoundingClientRect();
     const within = box.getBoundingClientRect();
-    const centre = at.left + at.width / 2 - within.left;
     setTip({
-      x: Math.min(Math.max(centre, 64), within.width - 64),
+      x: at.left + at.width / 2 - within.left,
       y: at.top - within.top,
+      bound: within.width,
       value: mark.dataset.tipValue ?? "",
       label: mark.dataset.tipLabel ?? "",
     });
@@ -42,11 +50,25 @@ export function useChartTooltip() {
 }
 
 export function ChartTooltip({ tip }: { tip: ChartTip | null }) {
+  const box = useRef<HTMLDivElement | null>(null);
+
+  // Placed once its width is known and before it is painted, so a long label stays inside
+  // the chart rather than running past its edge.
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (!element || !tip) {
+      return;
+    }
+    const width = element.offsetWidth;
+    const left = Math.min(Math.max(tip.x - width / 2, 0), Math.max(tip.bound - width, 0));
+    element.style.left = `${left}px`;
+  }, [tip]);
+
   if (!tip) {
     return null;
   }
   return (
-    <div className="viz-tip" style={{ left: tip.x, top: tip.y }} aria-hidden="true">
+    <div ref={box} className="viz-tip" style={{ top: tip.y }} aria-hidden="true">
       <strong>{tip.value}</strong>
       <span>{tip.label}</span>
     </div>

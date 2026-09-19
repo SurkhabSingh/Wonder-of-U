@@ -4314,23 +4314,24 @@ input::placeholder {
   --lens-bar: var(--viz-material-bar);
 }
 
+.progress-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
 .day-chart {
   margin-top: var(--space-6);
 }
 
 .day-chart-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-6);
-}
-
-.day-chart-head-end {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
 }
 
 .day-chart-title {
@@ -4455,6 +4456,11 @@ input::placeholder {
   white-space: nowrap;
   color: var(--text);
   transform: translateX(-50%);
+}
+
+.day-chart-peak.is-start {
+  left: 0;
+  transform: none;
 }
 
 .day-chart-x {
@@ -4627,7 +4633,7 @@ input::placeholder {
   font-size: var(--text-xs);
   white-space: nowrap;
   pointer-events: none;
-  transform: translate(-50%, calc(-100% - 8px));
+  transform: translateY(calc(-100% - 8px));
 }
 
 .viz-tip strong {
