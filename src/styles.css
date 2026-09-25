@@ -4263,6 +4263,15 @@ input::placeholder {
   stroke-dasharray: 4 4;
 }
 
+/* Where the replayed days give way to the counts this app measured. */
+.level-chart-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--viz-grid);
+}
+
 .level-chart-dot {
   position: absolute;
   width: 10px;

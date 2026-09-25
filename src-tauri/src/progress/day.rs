@@ -19,9 +19,38 @@ impl DayKey {
     /// The day before this one, derived from a key that already exists rather than from a
     /// clock, so the rollover cannot be applied a second time.
     pub(crate) fn previous(&self) -> Option<DayKey> {
+        self.shifted(-1)
+    }
+
+    pub(crate) fn next(&self) -> Option<DayKey> {
+        self.shifted(1)
+    }
+
+    fn shifted(&self, by: i64) -> Option<DayKey> {
         let date = chrono::NaiveDate::parse_from_str(&self.0, "%Y-%m-%d").ok()?;
-        let earlier = date.checked_sub_days(chrono::Days::new(1))?;
-        Some(DayKey(earlier.format("%Y-%m-%d").to_string()))
+        let moved = if by < 0 {
+            date.checked_sub_days(chrono::Days::new(by.unsigned_abs()))?
+        } else {
+            date.checked_add_days(chrono::Days::new(by.unsigned_abs()))?
+        };
+        Some(DayKey(moved.format("%Y-%m-%d").to_string()))
+    }
+
+    /// The moment this day gives way to the next, so a stretch of time can be asked which
+    /// days it covered the end of.
+    pub(crate) fn ends_at_ms(&self) -> Option<i64> {
+        let date = chrono::NaiveDate::parse_from_str(&self.next()?.0, "%Y-%m-%d").ok()?;
+        let hour = u32::try_from(DAY_ROLLOVER_HOUR).ok()?;
+        let rollover = date.and_hms_opt(hour, 0, 0)?;
+        match Local.from_local_datetime(&rollover) {
+            LocalResult::Single(moment) => Some(moment.timestamp_millis()),
+            LocalResult::Ambiguous(earlier, _) => Some(earlier.timestamp_millis()),
+            // The clock skipped this hour: the day gave way when it resumed.
+            LocalResult::None => Local
+                .from_local_datetime(&(rollover + Duration::hours(1)))
+                .earliest()
+                .map(|moment| moment.timestamp_millis()),
+        }
     }
 }
 
@@ -121,5 +150,29 @@ mod tests {
     #[test]
     fn the_rollover_is_the_documented_four() {
         assert_eq!(DAY_ROLLOVER_HOUR, 4);
+    }
+
+    #[test]
+    fn a_day_ends_where_the_next_one_starts() {
+        let day = day_key_at(local(2026, 9, 10, 12, 0));
+        let ends = day.ends_at_ms().expect("a day ends somewhere");
+        let before = u64::try_from(ends - 1).expect("a positive timestamp");
+        let after = u64::try_from(ends).expect("a positive timestamp");
+        assert_eq!(day_key_for_ms(before).as_ref(), Some(&day), "its last moment");
+        assert_eq!(
+            day_key_for_ms(after).as_ref().map(DayKey::as_str),
+            Some("2026-09-11"),
+            "and the next one's first"
+        );
+    }
+
+    #[test]
+    fn the_days_either_side_are_one_day_apart() {
+        let day = day_key_at(local(2026, 2, 28, 12, 0));
+        assert_eq!(day.next().as_ref().map(DayKey::as_str), Some("2026-03-01"));
+        assert_eq!(
+            day.next().and_then(|next| next.previous()).as_ref(),
+            Some(&day)
+        );
     }
 }

@@ -349,6 +349,12 @@ export type VocabularySuggestions = {
 // What the saved known-word list has to say for itself. `status` is one of
 // "unconfigured" (no sources chosen), "unbuilt" (nothing saved yet), "ready",
 // "stale" (the settings changed since it was built), "empty", or "offline".
+export type WordHistorySnapshot = {
+  status: string;
+  message: string;
+  days: number;
+};
+
 export type KnownWordsSnapshot = {
   status: string;
   message: string;
@@ -699,9 +705,17 @@ export type WordsPoint = {
   settingsChanged: boolean;
 };
 
+// A day Anki's review log spoke for, before the first count this app measured.
+export type BackfillPoint = {
+  atMs: number;
+  day: string;
+  words: number;
+};
+
 export type Levels = {
   reading: ReadingPoint[];
   words: WordsPoint[];
+  backfill: BackfillPoint[];
 };
 
 export type WriteFailure = {

@@ -44,7 +44,9 @@ import type {
   SettingsSection,
   SubtitleOrigin,
   WhisperAssetUpdateResult,
+  WordHistorySnapshot,
 } from "./types";
+import { errorMessage } from "./lib/errors";
 
 function App() {
   const confirmDialog = useConfirm();
@@ -92,6 +94,23 @@ function App() {
   function showError(message: string) {
     toast.error(message, { duration: 5000 });
     logToFile("ERROR", "action_failed", message);
+  }
+
+  // Anki's whole review log, read on its own thread, so the page says what came of it.
+  async function buildWordHistory() {
+    setBuildingHistory(true);
+    try {
+      const built = await invoke<WordHistorySnapshot>("rebuild_word_history");
+      if (built.status === "ready") {
+        showSuccess(built.message);
+      } else {
+        showWarning(built.message);
+      }
+    } catch (error) {
+      showError(errorMessage(error, "Your word history could not be filled in."));
+    } finally {
+      setBuildingHistory(false);
+    }
   }
 
   // Settings shows the outcome beside its button; the Progress page has only this to say it.
@@ -213,6 +232,7 @@ function App() {
     countCards: countProgressCards,
   } = useProgress(activePage);
   // Held here rather than on the page, so leaving Progress does not reset what it shows.
+  const [buildingHistory, setBuildingHistory] = useState(false);
   const [progressLens, setProgressLens] = useState<Lens>("time");
   const [progressRange, setProgressRange] = useState<Range>("month");
   const watch = useWatchSession();
@@ -1130,6 +1150,8 @@ function App() {
               onLens={setProgressLens}
               range={progressRange}
               onRange={setProgressRange}
+              buildingHistory={buildingHistory}
+              onBuildWordHistory={() => void buildWordHistory()}
             />
           ) : null}
 

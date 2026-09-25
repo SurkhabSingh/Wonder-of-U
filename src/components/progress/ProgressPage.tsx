@@ -32,6 +32,8 @@ export function ProgressPage({
   onLens,
   range,
   onRange,
+  buildingHistory,
+  onBuildWordHistory,
 }: {
   bootstrap: AppBootstrap;
   report: ProgressReport | null;
@@ -47,6 +49,8 @@ export function ProgressPage({
   onLens: (lens: Lens) => void;
   range: Range;
   onRange: (range: Range) => void;
+  buildingHistory: boolean;
+  onBuildWordHistory: () => void;
 }) {
   const now = new Date();
   const coverage = report ? readMeasured(report.coveragePercent) : null;
@@ -142,14 +146,41 @@ export function ProgressPage({
             {refreshingWordList ? "Reading your collection…" : "Refresh word list"}
           </button>
         </div>
-        {report && (report.levels.reading.length > 0 || report.levels.words.length > 0) ? (
+        {report &&
+        (report.levels.reading.length > 0 ||
+          report.levels.words.length > 0 ||
+          report.levels.backfill.length > 0) ? (
           <div className="progress-levels">
             {report.levels.reading.length > 0 ? (
               <ReadingChart readings={report.levels.reading} now={now} />
             ) : null}
-            {report.levels.words.length > 0 ? (
-              <WordsChart counts={report.levels.words} now={now} />
+            {report.levels.words.length > 0 || report.levels.backfill.length > 0 ? (
+              <WordsChart
+                counts={report.levels.words}
+                backfill={report.levels.backfill}
+                now={now}
+              />
             ) : null}
+          </div>
+        ) : null}
+
+        {report ? (
+          <div className="progress-refresh">
+            <button
+              type="button"
+              className="secondary"
+              disabled={buildingHistory}
+              onClick={onBuildWordHistory}
+            >
+              {buildingHistory
+                ? "Reading your review log…"
+                : report.levels.backfill.length === 0
+                  ? "Fill in from Anki"
+                  : "Update from Anki"}
+            </button>
+            <p className="microcopy">
+              Replays Anki's review history to draw the words you knew before this app counted.
+            </p>
           </div>
         ) : null}
       </article>

@@ -2,8 +2,10 @@ use serde::Serialize;
 
 use crate::app_types::KnownWordsBuild;
 
+use super::day::DayKey;
 use super::report::{compare, percent, round_tenth};
 use super::store::Sample;
+use super::vocabulary::WordDay;
 
 /// The word list as it stands, for a count no reading has recorded yet.
 pub(crate) struct WordList {
@@ -39,11 +41,22 @@ pub(crate) struct WordsPoint {
     pub(crate) settings_changed: bool,
 }
 
+/// A day the review log spoke for, before the first word list this app measured.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BackfillPoint {
+    pub(crate) at_ms: i64,
+    pub(crate) day: DayKey,
+    pub(crate) words: u32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Levels {
     pub(crate) reading: Vec<ReadingPoint>,
     pub(crate) words: Vec<WordsPoint>,
+    /// What Anki's log says the list held before the first measured count, oldest first.
+    pub(crate) backfill: Vec<BackfillPoint>,
 }
 
 pub(crate) struct Version<'a> {
@@ -79,7 +92,11 @@ pub(crate) fn versions(samples: &[Sample]) -> Vec<Version<'_>> {
 
 /// Each step compares one word list's last reading with the next list's first, over the
 /// transcripts both had unchanged, so material added in between cannot move the line.
-pub(crate) fn levels(samples: &[Sample], list: Option<&WordList>) -> Levels {
+pub(crate) fn levels(
+    samples: &[Sample],
+    list: Option<&WordList>,
+    history: &[WordDay],
+) -> Levels {
     let versions = versions(samples);
     let mut reading = Vec::new();
     let mut gained = 0.0;
@@ -137,7 +154,28 @@ pub(crate) fn levels(samples: &[Sample], list: Option<&WordList>) -> Levels {
         }
     }
 
-    Levels { reading, words }
+    // The replay stops where the app's own counts start, so each stretch of the line is drawn
+    // from the one source that measured it.
+    let measured_from = words.iter().map(|point| point.at_ms).min();
+    let backfill = history
+        .iter()
+        .filter_map(|day| {
+            let at_ms = day.day.ends_at_ms()?;
+            measured_from
+                .is_none_or(|measured| at_ms < i64::try_from(measured).unwrap_or(i64::MAX))
+                .then(|| BackfillPoint {
+                    at_ms,
+                    day: day.day.clone(),
+                    words: day.words,
+                })
+        })
+        .collect();
+
+    Levels {
+        reading,
+        words,
+        backfill,
+    }
 }
 
 fn word_lists(samples: &[Sample]) -> Vec<&[Sample]> {
@@ -234,7 +272,7 @@ mod tests {
                 vec![item("a", "f1", 55), item("new", "n", 99)],
             ),
         ];
-        let levels = levels(&samples, None);
+        let levels = levels(&samples, None, &[]);
         assert_eq!(
             gains(&levels),
             [0.0, 2.0, 3.5],
@@ -268,7 +306,7 @@ mod tests {
                 vec![item("a", "f1", 51), item("hard", "h", 5)],
             ),
         ];
-        let levels = levels(&samples, None);
+        let levels = levels(&samples, None, &[]);
         assert_eq!(levels.reading.len(), 2, "one point per word list");
         assert_eq!(gains(&levels), [0.0, 0.5]);
         assert_eq!(
@@ -284,7 +322,7 @@ mod tests {
             reading(2, 200, "Kaishi", vec![item("a", "f1", 53)]),
             reading(3, 300, "Lapis", vec![item("a", "f1", 90)]),
         ];
-        let levels = levels(&samples, None);
+        let levels = levels(&samples, None, &[]);
         assert_eq!(gains(&levels), [0.0, 3.0, 3.0]);
         assert_eq!(levels.reading[2].step, None);
         assert_eq!(
@@ -299,7 +337,7 @@ mod tests {
             reading(1, 100, "Kaishi", vec![item("a", "f1", 50)]),
             reading(2, 200, "Kaishi", vec![item("a", "rewritten", 70)]),
         ];
-        let levels = levels(&samples, None);
+        let levels = levels(&samples, None, &[]);
         assert_eq!(gains(&levels), [0.0, 0.0]);
         assert_eq!(
             levels.reading[1].not_compared,
@@ -323,7 +361,7 @@ mod tests {
                 vec![words("a", "f1", 150, 150), item("b", "rewritten", 90)],
             ),
         ];
-        let levels = levels(&samples, None);
+        let levels = levels(&samples, None, &[]);
         assert_eq!(gains(&levels), [0.0, 0.0], "150 words is too few to measure");
         assert_eq!(
             levels.reading[1].not_compared,
@@ -350,7 +388,7 @@ mod tests {
         ];
         assert_eq!(distinct_readings(&samples), 1);
         assert_eq!(
-            levels(&samples, None).reading.len(),
+            levels(&samples, None, &[]).reading.len(),
             1,
             "a rebuilt list that read nothing new is no new point"
         );
@@ -364,7 +402,7 @@ mod tests {
             build: build("Kaishi"),
             words: 2_528,
         };
-        let levels = levels(&samples, Some(&list));
+        let levels = levels(&samples, Some(&list), &[]);
         let counts: Vec<(u64, u32)> = levels
             .words
             .iter()
@@ -382,7 +420,7 @@ mod tests {
             build: build("Kaishi"),
             words: 2_528,
         };
-        let levels = levels(&[older], Some(&list));
+        let levels = levels(&[older], Some(&list), &[]);
         assert_eq!(
             levels.words.len(),
             1,
@@ -397,7 +435,7 @@ mod tests {
             reading(1, 100, "Kaishi", vec![item("a", "f1", 50)]),
             reading(2, 200, "Lapis", vec![item("a", "f1", 50)]),
         ];
-        let levels = levels(&samples, None);
+        let levels = levels(&samples, None, &[]);
         assert!(!levels.words[0].settings_changed);
         assert!(levels.words[1].settings_changed);
     }
@@ -427,7 +465,7 @@ mod tests {
             reading(2, 200, "Kaishi", same),
             reading(3, 300, "Kaishi", vec![item("a", "f1", 52)]),
         ];
-        let levels = levels(&samples, None);
+        let levels = levels(&samples, None, &[]);
         assert_eq!(levels.reading.len(), 2);
         assert_eq!(gains(&levels), [0.0, 2.0]);
         assert_eq!(levels.reading[1].compared, 1);
@@ -445,7 +483,7 @@ mod tests {
             build: build("Kaishi"),
             words: 2_528,
         };
-        let levels = levels(&[earlier, repeat], Some(&list));
+        let levels = levels(&[earlier, repeat], Some(&list), &[]);
         let counts: Vec<(u64, u32)> = levels
             .words
             .iter()
@@ -455,12 +493,44 @@ mod tests {
     }
 
     #[test]
+    fn the_replay_stops_where_the_first_measured_count_begins() {
+        let day = |day: &str| -> DayKey {
+            serde_json::from_str(&format!("\"{day}\"")).expect("a day key is a string")
+        };
+        // Noon on 10 September, so the day before it ended before this reading was taken.
+        let noon = 1_789_041_600_000;
+        let samples = vec![reading(noon, 100, "Kaishi", vec![item("a", "f1", 50)])];
+        let history = vec![
+            WordDay {
+                day: day("2026-09-08"),
+                words: 2_400,
+            },
+            WordDay {
+                day: day("2026-09-09"),
+                words: 2_450,
+            },
+            WordDay {
+                day: day("2026-09-10"),
+                words: 2_500,
+            },
+        ];
+        let levels = levels(&samples, None, &history);
+        let days: Vec<&str> = levels
+            .backfill
+            .iter()
+            .map(|point| point.day.as_str())
+            .collect();
+        assert_eq!(days, ["2026-09-08", "2026-09-09"], "the measured day is its own");
+        assert_eq!(levels.words.len(), 1, "and the measured count is still there");
+    }
+
+    #[test]
     fn the_lines_reach_the_page_under_the_names_it_reads() {
         let samples = vec![
             reading(1, 100, "Kaishi", vec![item("a", "f1", 50)]),
             reading(2, 200, "Lapis", vec![item("a", "f1", 50)]),
         ];
-        let wire = serde_json::to_value(levels(&samples, None)).expect("serialises");
+        let wire = serde_json::to_value(levels(&samples, None, &[])).expect("serialises");
         let keys = |value: &serde_json::Value| {
             let mut keys: Vec<String> = value
                 .as_object()
@@ -471,7 +541,7 @@ mod tests {
             keys.sort_unstable();
             keys
         };
-        assert_eq!(keys(&wire), ["reading", "words"]);
+        assert_eq!(keys(&wire), ["backfill", "reading", "words"]);
         assert_eq!(
             keys(&wire["reading"][0]),
             [

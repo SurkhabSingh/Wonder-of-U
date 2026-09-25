@@ -389,6 +389,17 @@ pub(crate) async fn keep_reading_current(app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Replays Anki's review log into the word history. Asked for by hand: it reads every card
+/// of every vocabulary note type, on Anki's own thread.
+#[tauri::command]
+pub(crate) async fn rebuild_word_history(
+    app: AppHandle,
+) -> Result<crate::anki::WordHistorySnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::anki::rebuild_word_history(&app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub(crate) async fn load_progress(app: AppHandle) -> Result<ProgressReport, String> {
     tauri::async_runtime::spawn_blocking(move || load_progress_inner(&app))

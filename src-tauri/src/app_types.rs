@@ -907,6 +907,7 @@ pub(crate) struct AppPathsState {
     pub(crate) known_words_file: PathBuf,
     pub(crate) progress_file: PathBuf,
     pub(crate) mined_cards_file: PathBuf,
+    pub(crate) word_history_file: PathBuf,
 }
 
 pub(crate) struct SharedShellState(pub(crate) Mutex<ShellSnapshot>);

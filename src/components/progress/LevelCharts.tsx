@@ -1,4 +1,4 @@
-import type { ReadingPoint, WordsPoint } from "../../types";
+import type { BackfillPoint, ReadingPoint, WordsPoint } from "../../types";
 import { formatCount, formatDay, formatDelta, formatPercent } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
 
@@ -8,6 +8,8 @@ type Mark = {
   value: number;
   // False when the step from the mark before could not be measured: that link is dashed.
   joined: boolean;
+  // False for a replayed day: the line runs through it, but only measurements get a dot.
+  dot: boolean;
   tip: string;
   detail: string;
 };
@@ -35,6 +37,7 @@ function LevelChart({
   caption,
   listLabel,
   valueHeading,
+  seamAt,
 }: {
   title: string;
   headline: string;
@@ -45,6 +48,7 @@ function LevelChart({
   caption: string;
   listLabel: string;
   valueHeading: string;
+  seamAt?: number;
 }) {
   const { frame, tip, handlers } = useChartTooltip();
   const x = spread(marks);
@@ -83,7 +87,12 @@ function LevelChart({
               );
             })}
           </svg>
-          {marks.map((mark) => (
+          {seamAt === undefined ? null : (
+            <i className="level-chart-seam" style={{ left: `${x(seamAt)}%` }} aria-hidden="true" />
+          )}
+          {marks
+            .filter((mark) => mark.dot)
+            .map((mark) => (
             <span
               key={mark.atMs}
               className="level-chart-dot"
@@ -93,7 +102,7 @@ function LevelChart({
               data-tip-value={mark.tip}
               data-tip-label={`${mark.day} · ${mark.detail}`}
             />
-          ))}
+            ))}
         </div>
 
         <div className="level-chart-x" aria-hidden="true">
@@ -154,6 +163,7 @@ export function ReadingChart({ readings, now }: { readings: ReadingPoint[]; now:
       day: formatDay(reading.atMs, now),
       value: reading.gained,
       joined: reading.notCompared === null,
+      dot: true,
       tip: points(reading.gained),
       detail: `${step} · ${formatPercent(reading.coverage)}% of your library at the time`,
     };
@@ -178,8 +188,37 @@ export function ReadingChart({ readings, now }: { readings: ReadingPoint[]; now:
   );
 }
 
-export function WordsChart({ counts, now }: { counts: WordsPoint[]; now: Date }) {
-  const marks: Mark[] = counts.map((count, index) => {
+// A line eighteen months long needs no point per day: one in every few reads the same and
+// keeps the list underneath it readable.
+const MOST_REPLAYED = 120;
+
+function thinned(points: BackfillPoint[]): BackfillPoint[] {
+  if (points.length <= MOST_REPLAYED) {
+    return points;
+  }
+  const step = Math.ceil(points.length / MOST_REPLAYED);
+  return points.filter((_, index) => index % step === 0 || index === points.length - 1);
+}
+
+export function WordsChart({
+  counts,
+  backfill,
+  now,
+}: {
+  counts: WordsPoint[];
+  backfill: BackfillPoint[];
+  now: Date;
+}) {
+  const replayed: Mark[] = thinned(backfill).map((point) => ({
+    atMs: point.atMs,
+    day: formatDay(point.atMs, now),
+    value: point.words,
+    joined: true,
+    dot: false,
+    tip: `${formatCount(point.words)} words`,
+    detail: "replayed from your review log",
+  }));
+  const measured: Mark[] = counts.map((count, index) => {
     const before = index > 0 ? counts[index - 1] : null;
     const change =
       before === null
@@ -192,10 +231,12 @@ export function WordsChart({ counts, now }: { counts: WordsPoint[]; now: Date })
       day: formatDay(count.atMs, now),
       value: count.words,
       joined: !count.settingsChanged,
+      dot: true,
       tip: `${formatCount(count.words)} words`,
       detail: change,
     };
   });
+  const marks = [...replayed, ...measured];
   const values = marks.map((mark) => mark.value);
   const least = Math.min(...values);
   const most = Math.max(...values);
@@ -214,9 +255,14 @@ export function WordsChart({ counts, now }: { counts: WordsPoint[]; now: Date })
       domain={domain}
       formatTick={formatCount}
       note="One count so far. The line starts with your next word-list refresh."
-      caption="Your word list each time it was refreshed."
+      caption={
+        replayed.length === 0
+          ? "Your word list each time it was refreshed."
+          : `Replayed from Anki's review log up to ${replayed[replayed.length - 1].day}, and your word list each time it was refreshed after that.`
+      }
       listLabel="Show every count as a list"
       valueHeading="Words"
+      seamAt={replayed.length > 0 && measured.length > 0 ? measured[0].atMs : undefined}
     />
   );
 }

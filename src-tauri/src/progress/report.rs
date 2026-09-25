@@ -116,6 +116,8 @@ pub(crate) fn latest_comparison(samples: &[Sample]) -> Option<Comparison> {
 pub(crate) struct Vocabulary {
     pub(crate) settings: crate::app_types::KnownWordsBuild,
     pub(crate) list: Option<super::level::WordList>,
+    /// What Anki's review log was replayed into, under settings that still match.
+    pub(crate) history: Option<super::vocabulary::WordHistory>,
 }
 
 /// Everything the Progress page is told, from local files only: a closed Anki cannot turn
@@ -164,7 +166,21 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
                 words: u32::try_from(index.words.len()).unwrap_or(u32::MAX),
             })
         });
-    let vocabulary = Vocabulary { settings, list };
+    let history = super::vocabulary::load(&app.state::<crate::app_types::AppPathsState>().word_history_file)
+        .unwrap_or_else(|reason| {
+            crate::app_runtime::log_event(
+                app,
+                "WARN",
+                "progress.word_history_unreadable",
+                serde_json::json!({ "message": reason }),
+            );
+            None
+        });
+    let vocabulary = Vocabulary {
+        settings,
+        list,
+        history,
+    };
     let (path, cards_file) = {
         let paths = app.state::<crate::app_types::AppPathsState>();
         (paths.progress_file.clone(), paths.mined_cards_file.clone())
@@ -235,6 +251,10 @@ fn assemble(
     now_ms: u64,
 ) -> ProgressReport {
     let list = vocabulary.list.as_ref();
+    let history = vocabulary
+        .history
+        .as_ref()
+        .map_or(&[][..], |history| history.under(&vocabulary.settings));
     match loaded {
         super::store::Loaded::Present { header, store } => ProgressReport {
             coverage_percent: coverage_from(&store.samples, &vocabulary.settings),
@@ -251,7 +271,7 @@ fn assemble(
                 today,
             ),
             comparison: latest_comparison(&store.samples),
-            levels: super::level::levels(&store.samples, list),
+            levels: super::level::levels(&store.samples, list, history),
             today: today.clone(),
             library,
             readings: super::level::distinct_readings(&store.samples),
@@ -270,7 +290,7 @@ fn assemble(
             ),
             calendar: super::calendar::uncounted(sources, &sources.library.horizon(), today),
             comparison: None,
-            levels: super::level::levels(&[], list),
+            levels: super::level::levels(&[], list, history),
             today: today.clone(),
             library,
             readings: 0,
@@ -289,7 +309,7 @@ fn assemble(
             ),
             calendar: super::calendar::uncounted(sources, &sources.library.horizon(), today),
             comparison: None,
-            levels: super::level::levels(&[], list),
+            levels: super::level::levels(&[], list, history),
             today: today.clone(),
             library,
             readings: 0,
@@ -464,6 +484,7 @@ mod tests {
             &Vocabulary {
                 settings: build("Kaishi"),
                 list: None,
+                history: None,
             },
             &day(),
             write_failure,

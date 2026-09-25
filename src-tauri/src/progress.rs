@@ -13,6 +13,7 @@ pub(crate) mod measured;
 pub(crate) mod report;
 pub(crate) mod store;
 pub(crate) mod streak;
+pub(crate) mod vocabulary;
 pub(crate) mod watch_sampler;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};

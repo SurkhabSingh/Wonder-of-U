@@ -3,6 +3,8 @@ use std::time::Duration;
 const ANKI_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const ANKI_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
 const ANKI_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// A batch of review logs is thousands of answers of JSON, on Anki's own thread.
+const ANKI_REVIEW_LOG_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) struct AnkiNoteSnapshot {
     pub(super) exists: bool,
@@ -167,6 +169,32 @@ pub(super) fn anki_find_notes(query: &str) -> Result<Vec<i64>, String> {
 /// Fetches whole notes — fields, tags, and all — for `note_ids`.
 pub(super) fn anki_notes_info(note_ids: &[i64]) -> Result<serde_json::Value, String> {
     anki_connect_request("notesInfo", serde_json::json!({ "notes": note_ids }))
+}
+
+/// Every card id matching an Anki search query.
+pub(super) fn anki_find_cards(query: &str) -> Result<Vec<i64>, String> {
+    json_i64_array(
+        anki_connect_request("findCards", serde_json::json!({ "query": query }))?,
+        "card id list",
+    )
+}
+
+/// The note each card belongs to, in the order the cards were given.
+pub(super) fn anki_cards_to_notes(card_ids: &[i64]) -> Result<Vec<i64>, String> {
+    json_i64_array(
+        anki_connect_request("cardsToNotes", serde_json::json!({ "cards": card_ids }))?,
+        "note id list",
+    )
+}
+
+/// Every answer ever given to these cards, keyed by card id. A whole collection's log is
+/// large, so this one waits longer than a question about a single note.
+pub(super) fn anki_reviews_of_cards(card_ids: &[i64]) -> Result<serde_json::Value, String> {
+    anki_connect_request_with_timeout(
+        "getReviewsOfCards",
+        serde_json::json!({ "cards": card_ids }),
+        ANKI_REVIEW_LOG_TIMEOUT,
+    )
 }
 
 pub(super) fn json_i64_array(value: serde_json::Value, what: &str) -> Result<Vec<i64>, String> {

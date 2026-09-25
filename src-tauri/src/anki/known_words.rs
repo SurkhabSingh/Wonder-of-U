@@ -146,6 +146,15 @@ fn collapse_whitespace(value: &str) -> String {
 
 /// Quotes a note type name into an Anki search term, restricted to mature cards.
 fn note_type_query(note_type: &str, mature_after_days: u32) -> String {
+    format!(
+        "{} prop:ivl>={mature_after_days}",
+        note_type_search(note_type)
+    )
+}
+
+/// Every note of a type, whatever its cards are worth. One escaping rule, so a search a
+/// history replays cannot differ from the one that built the list.
+pub(super) fn note_type_search(note_type: &str) -> String {
     let mut escaped = String::with_capacity(note_type.len());
     for character in note_type.chars() {
         if matches!(character, '\\' | '"' | '*' | '_' | ':') {
@@ -153,12 +162,12 @@ fn note_type_query(note_type: &str, mature_after_days: u32) -> String {
         }
         escaped.push(character);
     }
-    format!("note:\"{escaped}\" prop:ivl>={mature_after_days}")
+    format!("note:\"{escaped}\"")
 }
 
 /// Reads one note's chosen field. `None` when the note has no such field — the
 /// note type changed under the setting — or when it normalizes away to nothing.
-fn note_expression(note: &serde_json::Value, field_name: &str) -> Option<String> {
+pub(super) fn note_expression(note: &serde_json::Value, field_name: &str) -> Option<String> {
     let value = note
         .get("fields")?
         .as_object()?

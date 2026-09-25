@@ -7,11 +7,13 @@ mod catalog;
 mod clip;
 mod client;
 mod comprehension;
+mod history;
 mod mined_cards;
 
 pub(crate) use comprehension::{
     keep_reading_current, record_sample as record_comprehension_sample,
 };
+pub(crate) use history::{rebuild as rebuild_word_history, WordHistorySnapshot};
 pub(crate) use mined_cards::count_mined_cards_inner;
 mod fields;
 mod furigana;
