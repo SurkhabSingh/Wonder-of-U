@@ -190,9 +190,14 @@ pub(crate) fn rebuild<R: Runtime>(app: &AppHandle<R>) -> Result<WordHistorySnaps
         guard
             .as_ref()
             .filter(|index| index.build.matches(&build))
-            .map(|index| u32::try_from(index.words.len()).unwrap_or(u32::MAX))
+            .map(|index| {
+                (
+                    index.built_at_ms,
+                    u32::try_from(index.words.len()).unwrap_or(u32::MAX),
+                )
+            })
     };
-    let Some(live_words) = live else {
+    let Some((built_at_ms, live_words)) = live else {
         return Ok(WordHistorySnapshot {
             status: "unbuilt".into(),
             message: "Refresh your word list first, so the history can be checked against it."
@@ -200,16 +205,17 @@ pub(crate) fn rebuild<R: Runtime>(app: &AppHandle<R>) -> Result<WordHistorySnaps
             days: 0,
         });
     };
+    // Checked against the day the list was built rather than today: the list is a measurement
+    // with a date on it, and every review since then is one the replay knows and it does not.
+    let built_on = crate::progress::day::day_key_for_ms(built_at_ms)
+        .ok_or_else(|| "Your word list carries a date outside the calendar.".to_string())?;
 
     let today = crate::progress::day::today();
     let replayed = replay(&build, &today)?;
-    if replayed.words_today != live_words {
+    if let Some(message) = disagreement(&replayed.days, &built_on, live_words) {
         return Ok(WordHistorySnapshot {
             status: "mismatch".into(),
-            message: format!(
-                "The review log replays to {} words for today and your list holds {}, so nothing was kept.",
-                replayed.words_today, live_words
-            ),
+            message,
             days: 0,
         });
     }
@@ -241,6 +247,20 @@ pub(crate) fn rebuild<R: Runtime>(app: &AppHandle<R>) -> Result<WordHistorySnaps
         },
         days,
     })
+}
+
+/// Why a replay may not be kept: it has to agree with the list the app measured, on the day
+/// that list was built. Every review since then is one the replay knows and the list does not.
+fn disagreement(days: &[(DayKey, u32)], built_on: &DayKey, live_words: u32) -> Option<String> {
+    match days.iter().find(|(day, _)| day == built_on) {
+        Some((_, count)) if *count == live_words => None,
+        Some((_, count)) => Some(format!(
+            "The review log replays to {count} words on {built_on}, the day your list was built, and the list holds {live_words}. Nothing was kept."
+        )),
+        None => Some(format!(
+            "The review log does not reach {built_on}, the day your list was built. Nothing was kept."
+        )),
+    }
 }
 
 /// What a replay found, before anything is kept.
@@ -399,6 +419,21 @@ mod tests {
             [0, 0, 0, 0, 1, 1, 1],
             "twelve days back to six, maturing eight days ago"
         );
+    }
+
+    #[test]
+    fn a_replay_is_kept_only_when_it_agrees_with_the_list_on_the_day_it_was_built() {
+        let built = day_of(days_ago(3));
+        let days = vec![
+            (day_of(days_ago(4)), 2_500),
+            (built.clone(), 2_544),
+            (day_of(days_ago(2)), 2_559),
+        ];
+        assert_eq!(disagreement(&days, &built, 2_544), None, "the day it was built");
+        let off = disagreement(&days, &built, 2_500).expect("a disagreement");
+        assert!(off.contains("2544") && off.contains("2500"), "{off}");
+        let missing = disagreement(&days, &day_of(days_ago(9)), 2_544).expect("a disagreement");
+        assert!(missing.contains("does not reach"), "{missing}");
     }
 
     #[test]

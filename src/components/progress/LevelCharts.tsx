@@ -211,7 +211,8 @@ export function WordsChart({
 }) {
   const replayed: Mark[] = thinned(backfill).map((point) => ({
     atMs: point.atMs,
-    day: formatDay(point.atMs, now),
+    // Named by the day it counts for, not by the small hours it runs into.
+    day: formatDay(new Date(`${point.day}T12:00:00`).getTime(), now),
     value: point.words,
     joined: true,
     dot: false,
