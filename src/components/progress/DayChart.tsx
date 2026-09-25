@@ -368,28 +368,30 @@ export function DayChart({
 
       <details className="viz-table">
         <summary>Show the {range.covers} as a list</summary>
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">{range.weekly ? "Week of" : "Day"}</th>
-              <th scope="col">{lens.title}</th>
-              {detailHeading === null ? null : <th scope="col">{detailHeading}</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {[...slots].reverse().map((slot) => (
-              <tr key={slot.day}>
-                <td>{shortDate(slot.day)}</td>
-                <td>
-                  {slot.value === null
-                    ? lens.gap(slot.day, span).tip
-                    : lens.format(slot.value)}
-                </td>
-                {detailHeading === null ? null : <td>{slot.detail ?? ""}</td>}
+        <div className="viz-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">{range.weekly ? "Week of" : "Day"}</th>
+                <th scope="col">{lens.title}</th>
+                {detailHeading === null ? null : <th scope="col">{detailHeading}</th>}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {[...slots].reverse().map((slot) => (
+                <tr key={slot.day}>
+                  <td>{shortDate(slot.day)}</td>
+                  <td>
+                    {slot.value === null
+                      ? lens.gap(slot.day, span).tip
+                      : lens.format(slot.value)}
+                  </td>
+                  {detailHeading === null ? null : <td>{slot.detail ?? ""}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </details>
     </div>
   );

@@ -138,26 +138,28 @@ export function StudyCalendar({
       {noted.length > 0 ? (
         <details className="viz-table">
           <summary>Show every day with {lens.title.toLowerCase()} as a list</summary>
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Day</th>
-                <th scope="col">{lens.title}</th>
-                {lens.detailHeading === null ? null : (
-                  <th scope="col">{lens.detailHeading}</th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {noted.map(({ entry, value }) => (
-                <tr key={entry.day}>
-                  <td>{shortDate(entry.day)}</td>
-                  <td>{lens.format(value)}</td>
-                  {lens.detailHeading === null ? null : <td>{lens.detailOf(entry)}</td>}
+          <div className="viz-table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Day</th>
+                  <th scope="col">{lens.title}</th>
+                  {lens.detailHeading === null ? null : (
+                    <th scope="col">{lens.detailHeading}</th>
+                  )}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {noted.map(({ entry, value }) => (
+                  <tr key={entry.day}>
+                    <td>{shortDate(entry.day)}</td>
+                    <td>{lens.format(value)}</td>
+                    {lens.detailHeading === null ? null : <td>{lens.detailOf(entry)}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </details>
       ) : null}
     </div>

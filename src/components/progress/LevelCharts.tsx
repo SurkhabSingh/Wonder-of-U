@@ -90,19 +90,18 @@ function LevelChart({
           {seamAt === undefined ? null : (
             <i className="level-chart-seam" style={{ left: `${x(seamAt)}%` }} aria-hidden="true" />
           )}
-          {marks
-            .filter((mark) => mark.dot)
-            .map((mark) => (
+          {marks.map((mark) => (
             <span
               key={mark.atMs}
-              className="level-chart-dot"
+              // A replayed day carries no dot, but it still answers the pointer.
+              className={mark.dot ? "level-chart-dot" : "level-chart-dot is-plain"}
               style={{ left: `${x(mark.atMs)}%`, top: `${100 - y(mark.value)}%` }}
-              tabIndex={0}
-              aria-label={`${mark.day}: ${mark.tip}, ${mark.detail}`}
+              tabIndex={mark.dot ? 0 : undefined}
+              aria-label={mark.dot ? `${mark.day}: ${mark.tip}, ${mark.detail}` : undefined}
               data-tip-value={mark.tip}
               data-tip-label={`${mark.day} · ${mark.detail}`}
             />
-            ))}
+          ))}
         </div>
 
         <div className="level-chart-x" aria-hidden="true">
@@ -117,24 +116,26 @@ function LevelChart({
 
       <details className="viz-table">
         <summary>{listLabel}</summary>
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Day</th>
-              <th scope="col">{valueHeading}</th>
-              <th scope="col">What changed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...marks].reverse().map((mark) => (
-              <tr key={mark.atMs}>
-                <td>{mark.day}</td>
-                <td>{mark.tip}</td>
-                <td>{mark.detail}</td>
+        <div className="viz-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Day</th>
+                <th scope="col">{valueHeading}</th>
+                <th scope="col">What changed</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {[...marks].reverse().map((mark) => (
+                <tr key={mark.atMs}>
+                  <td>{mark.day}</td>
+                  <td>{mark.tip}</td>
+                  <td>{mark.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </details>
     </div>
   );
@@ -142,6 +143,10 @@ function LevelChart({
 
 function points(value: number): string {
   return `${formatDelta(value)} point${Math.abs(value) === 1 ? "" : "s"}`;
+}
+
+function words(count: number): string {
+  return `${formatCount(count)} word${count === 1 ? "" : "s"}`;
 }
 
 function transcripts(count: number): string {
@@ -216,7 +221,7 @@ export function WordsChart({
     value: point.words,
     joined: true,
     dot: false,
-    tip: `${formatCount(point.words)} words`,
+    tip: words(point.words),
     detail: "replayed from your review log",
   }));
   const measured: Mark[] = counts.map((count, index) => {
@@ -233,7 +238,7 @@ export function WordsChart({
       value: count.words,
       joined: !count.settingsChanged,
       dot: true,
-      tip: `${formatCount(count.words)} words`,
+      tip: words(count.words),
       detail: change,
     };
   });

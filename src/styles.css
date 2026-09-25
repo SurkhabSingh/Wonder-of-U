@@ -4043,8 +4043,12 @@ input::placeholder {
   gap: var(--space-5);
   overflow-y: auto;
   padding-right: var(--space-2);
-  scrollbar-color: var(--border-strong) transparent;
-  scrollbar-width: thin;
+  /* The page scrolls without saying so, as the rest of the app does. */
+  scrollbar-width: none;
+}
+
+.progress-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .progress-head {
@@ -4286,6 +4290,21 @@ input::placeholder {
 .level-chart-dot:hover,
 .level-chart-dot:focus-visible {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--viz-level) 35%, transparent);
+}
+
+/* A replayed day: nothing to see on the line, but a target to point at. */
+.level-chart-dot.is-plain {
+  width: 14px;
+  height: 14px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.level-chart-dot.is-plain:hover {
+  background: var(--viz-level);
+  box-shadow: none;
+  width: 8px;
+  height: 8px;
 }
 
 .level-chart-x {
@@ -4703,9 +4722,23 @@ input::placeholder {
   color: var(--text);
 }
 
-.viz-table table {
+/* A year of rows is a list to look through, not a page to be pushed down by. */
+.viz-table-scroll {
+  max-height: 260px;
   margin-top: var(--space-2);
+  overflow-y: auto;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.viz-table table {
   border-collapse: collapse;
+}
+
+.viz-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
 }
 
 .viz-table th,
