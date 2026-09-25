@@ -4292,7 +4292,8 @@ input::placeholder {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--viz-level) 35%, transparent);
 }
 
-/* A replayed day: nothing to see on the line, but a target to point at. */
+/* A replayed day: nothing to see on the line, but a target to point at. The target never
+   changes size, or the pointer would fall off it and back on between two days. */
 .level-chart-dot.is-plain {
   width: 14px;
   height: 14px;
@@ -4300,11 +4301,19 @@ input::placeholder {
   background: transparent;
 }
 
+.level-chart-dot.is-plain::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+}
+
 .level-chart-dot.is-plain:hover {
-  background: var(--viz-level);
   box-shadow: none;
-  width: 8px;
-  height: 8px;
+}
+
+.level-chart-dot.is-plain:hover::after {
+  background: var(--viz-level);
 }
 
 .level-chart-x {
@@ -4323,6 +4332,9 @@ input::placeholder {
 
 .level-chart-caption {
   margin: var(--space-2) 0 0;
+  /* Two lines whether it needs them or not, so the lists under two charts line up. */
+  min-height: 3em;
+  line-height: 1.5;
   font-size: var(--text-2xs);
   color: var(--text-subtle);
 }
@@ -4722,10 +4734,24 @@ input::placeholder {
   color: var(--text);
 }
 
-/* A year of rows is a list to look through, not a page to be pushed down by. */
+.viz-table {
+  position: relative;
+}
+
+/* A year of rows is a list to look through. It floats over what is under it, so opening one
+   moves nothing on the page. */
 .viz-table-scroll {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 5;
   max-height: 260px;
   margin-top: var(--space-2);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
   overflow-y: auto;
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
