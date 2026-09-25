@@ -2,6 +2,8 @@ import { useCallback, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { IMPORT_MEDIA_EXTENSIONS } from "../../constants";
 import { formatDuration, formatTimestamp } from "../../lib/format";
+import { formatCount, formatDuration as formatPlayed } from "../../lib/progressFormat";
+import { readMeasured } from "../progress/MeasuredValue";
 import {
   filterSupportedMediaPaths,
   normalizeSelections,
@@ -9,6 +11,7 @@ import {
 } from "../../lib/helpers";
 import { useFileDrop } from "../../hooks/useFileDrop";
 import type {
+  ProgressReport,
   RecentRecording,
   RecorderPhase,
   RecordingFilter,
@@ -82,6 +85,9 @@ export function HomePage({
   onCancelYoutube,
   onView,
   onOpenLibrary,
+  progress,
+  progressFailed,
+  onOpenProgress,
 }: {
   setupCard: ReactNode;
   elapsedMs: number;
@@ -115,8 +121,15 @@ export function HomePage({
   onCancelYoutube: () => void | Promise<void>;
   onView: (filePath: string) => void;
   onOpenLibrary: (filter?: RecordingFilter) => void;
+  progress: ProgressReport | null;
+  progressFailed: boolean;
+  onOpenProgress: () => void;
 }) {
   const recent = recentRecordings.slice(0, 5);
+  const immersion = progress ? readMeasured(progress.immersion) : null;
+  const played = immersion ? immersion.value : null;
+  // A tile with a dash says why: the store could not be read, or the reading it has is qualified.
+  const trouble = progress === null ? "Your progress history could not be read." : immersion?.reason;
   const [importNote, setImportNote] = useState<string | null>(null);
   const importDisabled = isImporting || anyBusy;
   const [youtubeUrl, setYoutubeUrl] = useState("");
@@ -252,6 +265,32 @@ export function HomePage({
           <span className="home-stat-label">Ready for Anki</span>
         </button>
       </div>
+
+      {progress !== null || progressFailed ? (
+        <div className="home-progress-row">
+          <button type="button" className="home-stat" onClick={onOpenProgress}>
+            <span className="home-stat-value">
+              {played === null ? "—" : formatPlayed(played.weekMs)}
+            </span>
+            <span className="home-stat-label">Immersed this week</span>
+            <span className="home-stat-note">
+              {trouble ?? "Only what plays in this app is counted."}
+            </span>
+          </button>
+          <button type="button" className="home-stat" onClick={onOpenProgress}>
+            <span className="home-stat-value">
+              {played === null ? "—" : `${formatCount(played.streak.current)}d`}
+            </span>
+            <span className="home-stat-label">Day streak</span>
+            <span className="home-stat-note">
+              {trouble ??
+                (played !== null && played.streak.todayCounted
+                  ? "Today is on the board."
+                  : "Nothing counted today yet.")}
+            </span>
+          </button>
+        </div>
+      ) : null}
 
       <article className="panel home-recent">
         <header className="panel-header">

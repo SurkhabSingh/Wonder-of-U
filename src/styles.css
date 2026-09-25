@@ -2973,6 +2973,12 @@ input::placeholder {
   gap: var(--space-5);
 }
 
+.home-progress-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
 .home-stat {
   min-height: 0;
   display: grid;
@@ -3021,6 +3027,12 @@ input::placeholder {
   font-weight: var(--weight-bold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
+}
+
+.home-stat-note {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: left;
 }
 
 /* Recent recordings — name opens the reader, chips report state. */

@@ -10,8 +10,9 @@ const SETTLE_MS = 400;
 // Long enough that a run of cards pushed together is counted once, after the last.
 const RECOUNT_MS = 1500;
 
-/// Reads the stored report from local files, and asks for a reading when the page opens
-/// if the transcripts or the word list moved since the newest one.
+/// Reads the stored report from local files, and asks for a reading when the Progress page
+/// opens if the transcripts or the word list moved since the newest one. Home reads the
+/// report too, but takes no reading and asks Anki nothing.
 export function useProgress(activePage: string) {
   const [report, setReport] = useState<ProgressReport | null>(null);
   /// Successful reads. A null `report` means both "nothing stored" and "never looked",
@@ -70,18 +71,23 @@ export function useProgress(activePage: string) {
     }
   }, []);
 
+  const onProgress = activePage === "progress";
+
   const refresh = useCallback(async () => {
     await loadReport();
+    if (!onProgress) {
+      return;
+    }
     // A reading that is due lands as a write, and that reloads the report by itself.
     void invoke("keep_reading_current").catch((error) =>
       logToFile("WARN", "reading_check_failed", String(error)),
     );
     // After the report, so a slow Anki never holds up the local numbers.
     await loadCards();
-  }, [loadReport, loadCards]);
+  }, [loadReport, loadCards, onProgress]);
 
   useEffect(() => {
-    if (activePage !== "progress") {
+    if (activePage !== "progress" && activePage !== "home") {
       return;
     }
     void refresh();
@@ -94,11 +100,15 @@ export function useProgress(activePage: string) {
         window.clearTimeout(settle);
         settle = window.setTimeout(() => void loadReport(), SETTLE_MS);
       }),
-      listen(CARD_MADE_EVENT, () => {
-        window.clearTimeout(recount);
-        recount = window.setTimeout(() => void loadCards(), RECOUNT_MS);
-      }),
     ];
+    if (onProgress) {
+      unlisteners.push(
+        listen(CARD_MADE_EVENT, () => {
+          window.clearTimeout(recount);
+          recount = window.setTimeout(() => void loadCards(), RECOUNT_MS);
+        }),
+      );
+    }
     return () => {
       window.clearTimeout(settle);
       window.clearTimeout(recount);
@@ -106,7 +116,7 @@ export function useProgress(activePage: string) {
         void unlisten.then((stop) => stop());
       }
     };
-  }, [activePage, refresh, loadReport, loadCards]);
+  }, [activePage, onProgress, refresh, loadReport, loadCards]);
 
   return {
     report,

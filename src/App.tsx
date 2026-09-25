@@ -904,6 +904,9 @@ function App() {
                 }
                 setActivePage("recordings");
               }}
+              progress={progressReport}
+              progressFailed={progressFailed}
+              onOpenProgress={() => setActivePage("progress")}
             />
           ) : null}
 
