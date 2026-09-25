@@ -130,6 +130,14 @@ export function HomePage({
   const played = immersion ? immersion.value : null;
   // A tile with a dash says why: the store could not be read, or the reading it has is qualified.
   const trouble = progress === null ? "Your progress history could not be read." : immersion?.reason;
+  const noteClass = trouble ? "home-stat-note is-warning" : "home-stat-note";
+  const streakNote =
+    trouble ??
+    (played === null
+      ? null
+      : played.streak.todayCounted
+        ? "Today is on the board."
+        : "Nothing counted today yet.");
   const [importNote, setImportNote] = useState<string | null>(null);
   const importDisabled = isImporting || anyBusy;
   const [youtubeUrl, setYoutubeUrl] = useState("");
@@ -269,25 +277,32 @@ export function HomePage({
       {progress !== null || progressFailed ? (
         <div className="home-progress-row">
           <button type="button" className="home-stat" onClick={onOpenProgress}>
-            <span className="home-stat-value">
-              {played === null ? "—" : formatPlayed(played.weekMs)}
-            </span>
+            {played === null ? (
+              <span className="home-stat-value is-absent" aria-label="not measured">
+                —
+              </span>
+            ) : (
+              <span className={immersion?.qualified ? "home-stat-value is-qualified" : "home-stat-value"}>
+                {formatPlayed(played.weekMs)}
+              </span>
+            )}
             <span className="home-stat-label">Immersed this week</span>
-            <span className="home-stat-note">
+            <span className={noteClass}>
               {trouble ?? "Only what plays in this app is counted."}
             </span>
           </button>
           <button type="button" className="home-stat" onClick={onOpenProgress}>
-            <span className="home-stat-value">
-              {played === null ? "—" : `${formatCount(played.streak.current)}d`}
-            </span>
+            {played === null ? (
+              <span className="home-stat-value is-absent" aria-label="not measured">
+                —
+              </span>
+            ) : (
+              <span className={immersion?.qualified ? "home-stat-value is-qualified" : "home-stat-value"}>
+                {`${formatCount(played.streak.current)}d`}
+              </span>
+            )}
             <span className="home-stat-label">Day streak</span>
-            <span className="home-stat-note">
-              {trouble ??
-                (played !== null && played.streak.todayCounted
-                  ? "Today is on the board."
-                  : "Nothing counted today yet.")}
-            </span>
+            {streakNote === null ? null : <span className={noteClass}>{streakNote}</span>}
           </button>
         </div>
       ) : null}

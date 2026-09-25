@@ -2979,6 +2979,12 @@ input::placeholder {
   gap: var(--space-5);
 }
 
+/* Context, not a count to act on: the size Progress gives these same two numbers. */
+.home-progress-row .home-stat-value {
+  font-size: var(--text-lg);
+  letter-spacing: normal;
+}
+
 .home-stat {
   min-height: 0;
   display: grid;
@@ -3032,7 +3038,22 @@ input::placeholder {
 .home-stat-note {
   color: var(--text-muted);
   font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
   text-align: left;
+}
+
+.home-stat-note.is-warning {
+  color: var(--warning);
+}
+
+.home-stat-value.is-qualified {
+  color: var(--text-muted);
+}
+
+.home-stat-value.is-absent {
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
 }
 
 /* Recent recordings — name opens the reader, chips report state. */
@@ -3450,7 +3471,8 @@ input::placeholder {
 }
 
 @media (max-width: 820px) {
-  .home-needs-row {
+  .home-needs-row,
+  .home-progress-row {
     grid-template-columns: 1fr;
   }
 

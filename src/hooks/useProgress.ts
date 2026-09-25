@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { CARD_MADE_EVENT, PROGRESS_EVENT } from "../constants";
 import { logToFile } from "../lib/log";
-import type { Measured, ProgressReport } from "../types";
+import type { AppPage, Measured, ProgressReport } from "../types";
 
 // Two writes that land together, one from each sampler, are one reload.
 const SETTLE_MS = 400;
@@ -13,7 +13,7 @@ const RECOUNT_MS = 1500;
 /// Reads the stored report from local files, and asks for a reading when the Progress page
 /// opens if the transcripts or the word list moved since the newest one. Home reads the
 /// report too, but takes no reading and asks Anki nothing.
-export function useProgress(activePage: string) {
+export function useProgress(activePage: AppPage) {
   const [report, setReport] = useState<ProgressReport | null>(null);
   /// Successful reads. A null `report` means both "nothing stored" and "never looked",
   /// and the page needs to tell them apart.
@@ -27,6 +27,10 @@ export function useProgress(activePage: string) {
   // its way back from Anki.
   const reportRun = useRef(0);
   const cardsRun = useRef(0);
+  // Read after each await: a refresh that began on Progress must not reach Anki once the
+  // page it started on has been left.
+  const page = useRef(activePage);
+  page.current = activePage;
 
   const loadReport = useCallback(async () => {
     const run = reportRun.current + 1;
@@ -75,7 +79,7 @@ export function useProgress(activePage: string) {
 
   const refresh = useCallback(async () => {
     await loadReport();
-    if (!onProgress) {
+    if (page.current !== "progress") {
       return;
     }
     // A reading that is due lands as a write, and that reloads the report by itself.
@@ -84,7 +88,7 @@ export function useProgress(activePage: string) {
     );
     // After the report, so a slow Anki never holds up the local numbers.
     await loadCards();
-  }, [loadReport, loadCards, onProgress]);
+  }, [loadReport, loadCards]);
 
   useEffect(() => {
     if (activePage !== "progress" && activePage !== "home") {
@@ -117,6 +121,31 @@ export function useProgress(activePage: string) {
       }
     };
   }, [activePage, onProgress, refresh, loadReport, loadCards]);
+
+  // A report answers for the day it was built on, and a page can sit open past the rollover.
+  // Coming back to the window is the cheapest moment to notice the date has moved.
+  useEffect(() => {
+    if (report === null || (activePage !== "progress" && activePage !== "home")) {
+      return;
+    }
+    const reloadOnANewDay = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      const now = new Date();
+      const month = `${now.getMonth() + 1}`.padStart(2, "0");
+      const day = `${now.getDate()}`.padStart(2, "0");
+      if (`${now.getFullYear()}-${month}-${day}` !== report.today) {
+        void loadReport();
+      }
+    };
+    window.addEventListener("focus", reloadOnANewDay);
+    document.addEventListener("visibilitychange", reloadOnANewDay);
+    return () => {
+      window.removeEventListener("focus", reloadOnANewDay);
+      document.removeEventListener("visibilitychange", reloadOnANewDay);
+    };
+  }, [activePage, report, loadReport]);
 
   return {
     report,
