@@ -11,9 +11,16 @@ import {
 } from "../../lib/progressFormat";
 import { DayChart, RangeSwitch, type Range } from "./DayChart";
 import { LensCaption } from "./LensCaption";
-import { ReadingChart, WordsChart } from "./LevelCharts";
+import {
+  ReadingChart,
+  WordsChart,
+  WordsRangeSwitch,
+  wordsRangeView,
+  type WordsRange,
+} from "./LevelCharts";
 import { LENSES, LENS_ORDER, type Lens } from "./lenses";
 import { StudyCalendar } from "./StudyCalendar";
+import { SwitchGroup } from "./SwitchGroup";
 
 /// One question — am I getting better — so comprehension leads and the rest is context.
 /// Never contacts Anki: a closed Anki must not hide a measurement that was taken.
@@ -32,6 +39,8 @@ export function ProgressPage({
   onLens,
   range,
   onRange,
+  wordsRange,
+  onWordsRange,
   buildingHistory,
   onBuildWordHistory,
 }: {
@@ -49,6 +58,8 @@ export function ProgressPage({
   onLens: (lens: Lens) => void;
   range: Range;
   onRange: (range: Range) => void;
+  wordsRange: WordsRange;
+  onWordsRange: (range: WordsRange) => void;
   buildingHistory: boolean;
   onBuildWordHistory: () => void;
 }) {
@@ -57,6 +68,9 @@ export function ProgressPage({
   const immersion = report ? readMeasured(report.immersion).value : null;
   const comparison = report?.comparison ?? null;
   const knownWords = bootstrap.knownWords;
+  const wordsView = report
+    ? wordsRangeView(report.levels.words, report.levels.backfill, wordsRange, now)
+    : null;
 
   if (readCount === 0 && !failed) {
     return (
@@ -136,7 +150,7 @@ export function ProgressPage({
             ) : null
           }
         />
-        <div className="progress-refresh">
+        <div className="progress-refresh progress-refresh-row">
           <button
             type="button"
             className="secondary"
@@ -145,6 +159,13 @@ export function ProgressPage({
           >
             {refreshingWordList ? "Reading your collection…" : "Refresh word list"}
           </button>
+          {wordsView && wordsView.offered.length > 1 ? (
+            <WordsRangeSwitch
+              ranges={wordsView.offered}
+              range={wordsView.shown}
+              onRange={onWordsRange}
+            />
+          ) : null}
         </div>
         {report &&
         (report.levels.reading.length > 0 ||
@@ -159,6 +180,7 @@ export function ProgressPage({
                 counts={report.levels.words}
                 backfill={report.levels.backfill}
                 now={now}
+                choice={wordsRange}
               />
             ) : null}
           </div>
@@ -247,19 +269,12 @@ export function ProgressPage({
         {report ? (
           <div className={`progress-charts lens-${lens}`}>
             <div className="progress-chart-controls">
-              <div className="progress-lens" role="group" aria-label="What the charts show">
-                {LENS_ORDER.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`progress-lens-button ${lens === id ? "is-active" : ""}`}
-                    aria-pressed={lens === id}
-                    onClick={() => onLens(id)}
-                  >
-                    {LENSES[id].label}
-                  </button>
-                ))}
-              </div>
+              <SwitchGroup
+                label="What the charts show"
+                options={LENS_ORDER.map((id) => ({ id, label: LENSES[id].label }))}
+                value={lens}
+                onChange={onLens}
+              />
               <RangeSwitch range={range} onRange={onRange} />
             </div>
             <DayChart

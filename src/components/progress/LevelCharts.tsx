@@ -2,6 +2,7 @@ import type { BackfillPoint, ReadingPoint, WordsPoint } from "../../types";
 import { formatCount, formatDay, formatDelta, formatPercent } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
 import { FloatingList } from "./FloatingList";
+import { SwitchGroup } from "./SwitchGroup";
 
 type Mark = {
   atMs: number;
@@ -72,7 +73,15 @@ function LevelChart({
           <span>{formatTick(domain.low)}</span>
         </div>
 
-        <div className="level-chart-plot" role="img" aria-label={`${title}: ${headline}`}>
+        <div
+          className="level-chart-plot"
+          role="img"
+          aria-label={
+            marks.length > 1
+              ? `${title}: ${headline}, ${first.day} to ${last.day}`
+              : `${title}: ${headline}`
+          }
+        >
           {/* The links stretch with the plot; the dots are HTML so they stay round. */}
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
             {marks.slice(1).map((mark, index) => {
@@ -197,7 +206,7 @@ export function ReadingChart({ readings, now }: { readings: ReadingPoint[]; now:
 // list underneath still holds every day.
 const MOST_REPLAYED = 120;
 
-function thinned(points: BackfillPoint[]): BackfillPoint[] {
+function thinned<T>(points: T[]): T[] {
   if (points.length <= MOST_REPLAYED) {
     return points;
   }
@@ -205,15 +214,71 @@ function thinned(points: BackfillPoint[]): BackfillPoint[] {
   return points.filter((_, index) => index % step === 0 || index === points.length - 1);
 }
 
+export type WordsRange = "month" | "quarter" | "year" | "all";
+
+const DAY_MS = 86_400_000;
+
+const WORDS_RANGES: Record<WordsRange, { label: string; days: number | null; covers: string }> = {
+  month: { label: "30 days", days: 30, covers: "the last 30 days" },
+  quarter: { label: "90 days", days: 90, covers: "the last 90 days" },
+  year: { label: "Year", days: 365, covers: "the past year" },
+  all: { label: "All", days: null, covers: "" },
+};
+
+const WORDS_RANGE_ORDER: WordsRange[] = ["month", "quarter", "year", "all"];
+
+function rangeStart(range: WordsRange, now: Date): number {
+  const days = WORDS_RANGES[range].days;
+  return days === null ? -Infinity : now.getTime() - days * DAY_MS;
+}
+
+/** A range is offered when it keeps two points or more and leaves one out; a choice that is not
+ * offered draws All. The switch and the chart both read this, so they cannot disagree. */
+export function wordsRangeView(
+  counts: WordsPoint[],
+  backfill: BackfillPoint[],
+  choice: WordsRange,
+  now: Date,
+): { offered: WordsRange[]; shown: WordsRange } {
+  const times = [...backfill, ...counts].map((point) => point.atMs);
+  const offered = WORDS_RANGE_ORDER.filter((id) => {
+    const kept = times.filter((at) => at >= rangeStart(id, now)).length;
+    return id === "all" || (kept >= 2 && kept < times.length);
+  });
+  return { offered, shown: offered.includes(choice) ? choice : "all" };
+}
+
+export function WordsRangeSwitch({
+  ranges,
+  range,
+  onRange,
+}: {
+  ranges: WordsRange[];
+  range: WordsRange;
+  onRange: (range: WordsRange) => void;
+}) {
+  return (
+    <SwitchGroup
+      label="How far back Words you know reaches"
+      options={ranges.map((id) => ({ id, label: WORDS_RANGES[id].label }))}
+      value={range}
+      onChange={onRange}
+    />
+  );
+}
+
 export function WordsChart({
   counts,
   backfill,
   now,
+  choice,
 }: {
   counts: WordsPoint[];
   backfill: BackfillPoint[];
   now: Date;
+  choice: WordsRange;
 }) {
+  const range = wordsRangeView(counts, backfill, choice, now).shown;
   const replayedDay = (point: BackfillPoint): Mark => ({
     atMs: point.atMs,
     // Named by the day it counts for, not by the small hours it runs into.
@@ -224,7 +289,6 @@ export function WordsChart({
     tip: words(point.words),
     detail: "replayed from your review log",
   });
-  const replayed = thinned(backfill).map(replayedDay);
   const measured: Mark[] = counts.map((count, index) => {
     const before = index > 0 ? counts[index - 1] : null;
     const change = count.settingsChanged
@@ -242,7 +306,11 @@ export function WordsChart({
       detail: change,
     };
   });
-  const marks = [...replayed, ...measured];
+  const start = rangeStart(range, now);
+  const replayedShown = backfill.filter((point) => point.atMs >= start);
+  const measuredShown = measured.filter((mark) => mark.atMs >= start);
+  const replayed = thinned(replayedShown).map(replayedDay);
+  const marks = [...replayed, ...measuredShown];
   const values = marks.map((mark) => mark.value);
   const least = Math.min(...values);
   const most = Math.max(...values);
@@ -266,10 +334,14 @@ export function WordsChart({
           ? "Your word list each time it was refreshed."
           : `Replayed from Anki's review log up to ${replayed[replayed.length - 1].day}, and your word list each time it was refreshed after that.`
       }
-      listLabel="Show every count as a list"
+      listLabel={
+        range === "all"
+          ? "Show every count as a list"
+          : `Show every count from ${WORDS_RANGES[range].covers} as a list`
+      }
       valueHeading="Words"
-      seamAt={replayed.length > 0 && measured.length > 0 ? measured[0].atMs : undefined}
-      rows={[...backfill.map(replayedDay), ...measured]}
+      seamAt={replayed.length > 0 && measuredShown.length > 0 ? measuredShown[0].atMs : undefined}
+      rows={[...replayedShown.map(replayedDay), ...measuredShown]}
     />
   );
 }

@@ -4169,11 +4169,25 @@ input::placeholder {
   margin-top: var(--space-4);
 }
 
+.progress-refresh-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
 .progress-levels {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-7);
   margin-top: var(--space-6);
+}
+
+/* A chart on its own takes the full width, so the range switch above the row's right end
+   stays over the chart it controls. */
+.progress-levels > .level-chart:only-child {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 760px) {

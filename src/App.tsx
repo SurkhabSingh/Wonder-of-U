@@ -23,6 +23,7 @@ import { useMinedSentences } from "./hooks/useMinedSentences";
 import { useProgress } from "./hooks/useProgress";
 import { ProgressPage } from "./components/progress/ProgressPage";
 import type { Range } from "./components/progress/DayChart";
+import type { WordsRange } from "./components/progress/LevelCharts";
 import type { Lens } from "./components/progress/lenses";
 import { useWatchSession } from "./hooks/useWatchSession";
 import { useWatchSubtitles } from "./hooks/useWatchSubtitles";
@@ -235,6 +236,7 @@ function App() {
   const [buildingHistory, setBuildingHistory] = useState(false);
   const [progressLens, setProgressLens] = useState<Lens>("time");
   const [progressRange, setProgressRange] = useState<Range>("month");
+  const [wordsRange, setWordsRange] = useState<WordsRange>("all");
   const watch = useWatchSession();
   const watchSubtitles = useWatchSubtitles();
   const [watchMinedKeys, setWatchMinedKeys] = useState<Set<string>>(() => new Set());
@@ -1150,6 +1152,8 @@ function App() {
               onLens={setProgressLens}
               range={progressRange}
               onRange={setProgressRange}
+              wordsRange={wordsRange}
+              onWordsRange={setWordsRange}
               buildingHistory={buildingHistory}
               onBuildWordHistory={() => void buildWordHistory()}
             />

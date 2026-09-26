@@ -3,6 +3,7 @@ import type { CalendarDay, CalendarSpan } from "../../types";
 import { shiftDay, shortDate } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
 import { FloatingList } from "./FloatingList";
+import { SwitchGroup } from "./SwitchGroup";
 import type { LensSpec } from "./lenses";
 import { DAYS_IN_WEEK, monthMarks, weeksEnding } from "./weeks";
 
@@ -189,19 +190,12 @@ export function RangeSwitch({
   onRange: (range: Range) => void;
 }) {
   return (
-    <div className="progress-lens" role="group" aria-label="How far back the bars reach">
-      {RANGE_ORDER.map((id) => (
-        <button
-          key={id}
-          type="button"
-          className={`progress-lens-button ${range === id ? "is-active" : ""}`}
-          aria-pressed={range === id}
-          onClick={() => onRange(id)}
-        >
-          {RANGES[id].label}
-        </button>
-      ))}
-    </div>
+    <SwitchGroup
+      label="How far back the bars reach"
+      options={RANGE_ORDER.map((id) => ({ id, label: RANGES[id].label }))}
+      value={range}
+      onChange={onRange}
+    />
   );
 }
 
