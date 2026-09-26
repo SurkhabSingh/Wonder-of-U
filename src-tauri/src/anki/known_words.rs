@@ -145,7 +145,7 @@ fn collapse_whitespace(value: &str) -> String {
 }
 
 /// Quotes a note type name into an Anki search term, restricted to mature cards.
-fn note_type_query(note_type: &str, mature_after_days: u32) -> String {
+pub(super) fn note_type_query(note_type: &str, mature_after_days: u32) -> String {
     format!(
         "{} prop:ivl>={mature_after_days}",
         note_type_search(note_type)

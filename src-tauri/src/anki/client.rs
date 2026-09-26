@@ -166,11 +166,6 @@ pub(super) fn anki_find_notes(query: &str) -> Result<Vec<i64>, String> {
     )
 }
 
-/// Fetches whole notes — fields, tags, and all — for `note_ids`.
-pub(super) fn anki_notes_info(note_ids: &[i64]) -> Result<serde_json::Value, String> {
-    anki_connect_request("notesInfo", serde_json::json!({ "notes": note_ids }))
-}
-
 /// Every card id matching an Anki search query.
 pub(super) fn anki_find_cards(query: &str) -> Result<Vec<i64>, String> {
     json_i64_array(
@@ -179,12 +174,9 @@ pub(super) fn anki_find_cards(query: &str) -> Result<Vec<i64>, String> {
     )
 }
 
-/// The note each card belongs to, in the order the cards were given.
-pub(super) fn anki_cards_to_notes(card_ids: &[i64]) -> Result<Vec<i64>, String> {
-    json_i64_array(
-        anki_connect_request("cardsToNotes", serde_json::json!({ "cards": card_ids }))?,
-        "note id list",
-    )
+/// Fetches whole notes — fields, tags, and all — for `note_ids`.
+pub(super) fn anki_notes_info(note_ids: &[i64]) -> Result<serde_json::Value, String> {
+    anki_connect_request("notesInfo", serde_json::json!({ "notes": note_ids }))
 }
 
 /// Every answer ever given to these cards, keyed by card id. A whole collection's log is

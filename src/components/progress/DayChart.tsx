@@ -2,6 +2,7 @@ import type { KeyboardEvent } from "react";
 import type { CalendarDay, CalendarSpan } from "../../types";
 import { shiftDay, shortDate } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
+import { FloatingList } from "./FloatingList";
 import type { LensSpec } from "./lenses";
 import { DAYS_IN_WEEK, monthMarks, weeksEnding } from "./weeks";
 
@@ -366,33 +367,30 @@ export function DayChart({
         <ChartTooltip tip={tip} />
       </div>
 
-      <details className="viz-table">
-        <summary>Show the {range.covers} as a list</summary>
-        <div className="viz-table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">{range.weekly ? "Week of" : "Day"}</th>
-                <th scope="col">{lens.title}</th>
-                {detailHeading === null ? null : <th scope="col">{detailHeading}</th>}
+      <FloatingList label={`Show the ${range.covers} as a list`}>
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">{range.weekly ? "Week of" : "Day"}</th>
+              <th scope="col">{lens.title}</th>
+              {detailHeading === null ? null : <th scope="col">{detailHeading}</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {[...slots].reverse().map((slot) => (
+              <tr key={slot.day}>
+                <td>{shortDate(slot.day)}</td>
+                <td>
+                  {slot.value === null
+                    ? lens.gap(slot.day, span).tip
+                    : lens.format(slot.value)}
+                </td>
+                {detailHeading === null ? null : <td>{slot.detail ?? ""}</td>}
               </tr>
-            </thead>
-            <tbody>
-              {[...slots].reverse().map((slot) => (
-                <tr key={slot.day}>
-                  <td>{shortDate(slot.day)}</td>
-                  <td>
-                    {slot.value === null
-                      ? lens.gap(slot.day, span).tip
-                      : lens.format(slot.value)}
-                  </td>
-                  {detailHeading === null ? null : <td>{slot.detail ?? ""}</td>}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
+            ))}
+          </tbody>
+        </table>
+      </FloatingList>
     </div>
   );
 }

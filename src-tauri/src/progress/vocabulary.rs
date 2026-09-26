@@ -54,13 +54,9 @@ impl WordHistory {
         }
     }
 
-    /// The days it can speak for, oldest first, and nothing at all under other settings.
-    pub(crate) fn under(&self, build: &KnownWordsBuild) -> &[WordDay] {
-        if self.build.matches(build) {
-            &self.days
-        } else {
-            &[]
-        }
+    /// The history itself under the settings it was replayed with, and nothing under others.
+    pub(crate) fn under(&self, build: &KnownWordsBuild) -> Option<&Self> {
+        self.build.matches(build).then_some(self)
     }
 }
 
@@ -128,8 +124,8 @@ mod tests {
 
     #[test]
     fn a_history_from_other_settings_speaks_for_no_day() {
-        assert_eq!(history().under(&build("Kaishi")).len(), 2);
-        assert!(history().under(&build("Lapis")).is_empty());
+        assert_eq!(history().under(&build("Kaishi")).map(|kept| kept.days.len()), Some(2));
+        assert!(history().under(&build("Lapis")).is_none());
     }
 
     #[test]

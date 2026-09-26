@@ -61,7 +61,9 @@ impl std::fmt::Display for DayKey {
 }
 
 pub(crate) fn day_key_at(moment: DateTime<Local>) -> DayKey {
-    let shifted = moment - Duration::hours(DAY_ROLLOVER_HOUR);
+    // Read off the clock, as `ends_at_ms` reads it: on a day the clocks change, subtracting
+    // four elapsed hours would move the rollover to three or five.
+    let shifted = moment.naive_local() - Duration::hours(DAY_ROLLOVER_HOUR);
     DayKey(shifted.format("%Y-%m-%d").to_string())
 }
 
@@ -154,16 +156,16 @@ mod tests {
 
     #[test]
     fn a_day_ends_where_the_next_one_starts() {
-        let day = day_key_at(local(2026, 9, 10, 12, 0));
-        let ends = day.ends_at_ms().expect("a day ends somewhere");
-        let before = u64::try_from(ends - 1).expect("a positive timestamp");
-        let after = u64::try_from(ends).expect("a positive timestamp");
-        assert_eq!(day_key_for_ms(before).as_ref(), Some(&day), "its last moment");
-        assert_eq!(
-            day_key_for_ms(after).as_ref().map(DayKey::as_str),
-            Some("2026-09-11"),
-            "and the next one's first"
-        );
+        // The eves of both clock changes in Europe and North America, and an ordinary day.
+        let dates = [(2026, 3, 7), (2026, 3, 28), (2026, 10, 24), (2026, 10, 31), (2026, 9, 10)];
+        for (year, month, date) in dates {
+            let day = day_key_at(local(year, month, date, 12, 0));
+            let ends = day.ends_at_ms().expect("a day ends somewhere");
+            let before = u64::try_from(ends - 1).expect("a positive timestamp");
+            let after = u64::try_from(ends).expect("a positive timestamp");
+            assert_eq!(day_key_for_ms(before).as_ref(), Some(&day), "{day}: its last moment");
+            assert_eq!(day_key_for_ms(after), day.next(), "{day}: and the next one's first");
+        }
     }
 
     #[test]

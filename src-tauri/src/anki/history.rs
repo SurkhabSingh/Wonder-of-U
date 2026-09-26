@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -10,44 +10,88 @@ use crate::progress::day::DayKey;
 use crate::progress::vocabulary::{self, WordHistory};
 
 use super::client::{
-    anki_cards_to_notes, anki_connect_health_check, anki_find_cards, anki_notes_info,
+    anki_connect_health_check, anki_find_cards, anki_find_notes, anki_notes_info,
     anki_offline_message, anki_reviews_of_cards, json_array,
 };
-use super::known_words::{note_expression, note_type_search};
+use super::known_words::{note_expression, note_type_query, note_type_search};
 
-/// How many cards' logs one request asks for.
 const REVIEW_LOG_BATCH: usize = 1_000;
-/// How many notes one `notesInfo` call asks for, as everywhere else.
 const NOTES_INFO_BATCH: usize = 500;
 
-/// How far back a replay may reach. A review older than this is a broken timestamp rather
-/// than a memory, and the day list it would ask for is measured in decades.
+/// A review older than this is a broken timestamp rather than a memory, and the day list it
+/// would ask for is measured in decades.
 const MOST_DAYS: usize = 3_660;
 
-/// One answer in a card's log: when it was given, and the interval in days it set. Anki
-/// reports a learning step in negative seconds, which is never a mature interval.
+// What an answer was, as the review log numbers it.
+const REVIEW: i64 = 1;
+const RELEARNING: i64 = 2;
+const FILTERED: i64 = 3;
+const MANUAL: i64 = 4;
+const RESCHEDULED: i64 = 5;
+
+/// One row of a card's log. Intervals are days, or negative seconds for a (re)learning step.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Answer {
     pub(crate) at_ms: i64,
-    pub(crate) interval_days: i64,
+    pub(crate) kind: i64,
+    pub(crate) interval: i64,
+    pub(crate) before: i64,
 }
 
-/// A stretch of time, from when it began until the moment it stopped holding. The interval a
-/// card carries now has not stopped, so its stretch runs to the end of time.
+/// From when a stretch began until the moment it stopped holding. The interval a card carries
+/// now has not stopped, so its stretch runs to the end of time.
 type Span = (i64, i64);
 
-/// The stretches where this card's interval stood at or above the threshold, oldest first.
-fn mature_spans(answers: &mut [Answer], mature_after_days: i64) -> Vec<Span> {
+fn relearning(answer: &Answer) -> bool {
+    answer.interval <= 0 && matches!(answer.kind, REVIEW | RELEARNING)
+}
+
+/// The interval in days each answer left its card on, oldest first. A preview in a filtered
+/// deck changes nothing, and a relearning card keeps the interval its lapse gave it.
+fn settled(answers: &mut [Answer], mature_now: bool, mature_after_days: i64) -> Vec<(i64, i64)> {
     answers.sort_by_key(|answer| answer.at_ms);
-    let mut spans: Vec<Span> = Vec::new();
-    for (at, answer) in answers.iter().enumerate() {
-        if answer.interval_days < mature_after_days {
+    let rows: Vec<Answer> = answers
+        .iter()
+        .filter(|answer| !(answer.kind == FILTERED && answer.interval <= 0))
+        .copied()
+        .collect();
+    let mut settled = Vec::with_capacity(rows.len());
+    let mut at = 0;
+    while at < rows.len() {
+        if !relearning(&rows[at]) {
+            settled.push((rows[at].at_ms, rows[at].interval.max(0)));
+            at += 1;
             continue;
         }
-        let until = answers.get(at + 1).map_or(i64::MAX, |next| next.at_ms);
+        let end = rows[at..]
+            .iter()
+            .position(|answer| !relearning(answer))
+            .map_or(rows.len(), |steps| at + steps);
+        // The log names that interval only once the card graduates or is rescheduled by hand;
+        // until then only the card itself carries it.
+        let held = match rows.get(end) {
+            Some(next) if next.kind == RELEARNING => next.interval,
+            Some(next) if matches!(next.kind, MANUAL | RESCHEDULED) => next.before,
+            Some(_) => 0,
+            None if mature_now => mature_after_days,
+            None => 0,
+        };
+        settled.extend(rows[at..end].iter().map(|answer| (answer.at_ms, held.max(0))));
+        at = end;
+    }
+    settled
+}
+
+fn mature_spans(settled: &[(i64, i64)], mature_after_days: i64) -> Vec<Span> {
+    let mut spans: Vec<Span> = Vec::new();
+    for (at, &(from, interval)) in settled.iter().enumerate() {
+        if interval < mature_after_days {
+            continue;
+        }
+        let until = settled.get(at + 1).map_or(i64::MAX, |next| next.0);
         match spans.last_mut() {
-            Some(last) if last.1 == answer.at_ms => last.1 = until,
-            _ => spans.push((answer.at_ms, until)),
+            Some(last) if last.1 == from => last.1 = until,
+            _ => spans.push((from, until)),
         }
     }
     spans
@@ -67,7 +111,6 @@ fn merged(mut spans: Vec<Span>) -> Vec<Span> {
 }
 
 /// Every day from the first to `today`, with the moment each one gives way to the next.
-/// Older than `MOST_DAYS` is dropped rather than drawn.
 pub(crate) fn days_until(first: &DayKey, today: &DayKey) -> Vec<(DayKey, i64)> {
     let mut days: Vec<(DayKey, i64)> = Vec::new();
     let mut cursor = Some(first.clone());
@@ -86,7 +129,7 @@ pub(crate) fn days_until(first: &DayKey, today: &DayKey) -> Vec<(DayKey, i64)> {
     days
 }
 
-/// The words a card carries, keyed by the card it was answered on.
+/// The stretches each word stood known, folded in a card at a time and keeping no reviews.
 pub(crate) struct Answers {
     by_word: HashMap<String, Vec<Span>>,
 }
@@ -98,19 +141,30 @@ impl Answers {
         }
     }
 
-    /// Folds one card's log into the words it carries, keeping no reviews: a collection of
-    /// ten thousand cards is read a batch at a time.
-    pub(crate) fn add(&mut self, words: &[String], answers: &mut [Answer], mature_after_days: u32) {
-        let spans = mature_spans(answers, i64::from(mature_after_days));
-        if spans.is_empty() {
-            return;
+    pub(crate) fn add(
+        &mut self,
+        word: &str,
+        answers: &mut [Answer],
+        mature_now: bool,
+        mature_after_days: u32,
+    ) {
+        let threshold = i64::from(mature_after_days);
+        let spans = mature_spans(&settled(answers, mature_now, threshold), threshold);
+        if !spans.is_empty() {
+            self.by_word.entry(word.to_string()).or_default().extend(spans);
         }
-        for word in words {
-            self.by_word
-                .entry(word.clone())
-                .or_default()
-                .extend(spans.iter().copied());
-        }
+    }
+
+    pub(crate) fn known_at(&self, moment_ms: i64) -> HashSet<String> {
+        self.by_word
+            .iter()
+            .filter(|(_, spans)| {
+                spans
+                    .iter()
+                    .any(|&(from, to)| from <= moment_ms && moment_ms < to)
+            })
+            .map(|(word, _)| word.clone())
+            .collect()
     }
 
     pub(crate) fn earliest(&self) -> Option<i64> {
@@ -145,7 +199,6 @@ impl Answers {
     }
 }
 
-/// What a rebuild did, in the words the page says it in.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WordHistorySnapshot {
@@ -154,9 +207,8 @@ pub(crate) struct WordHistorySnapshot {
     pub(crate) days: usize,
 }
 
-/// Replays Anki's review log into a day-by-day word count, and keeps it only when today's
-/// replayed count matches the list the app holds. A replay that disagrees with the live
-/// list is a replay that has misread the log, and a wrong history is worse than none.
+/// Keeps a replay only when it holds the very words the list held when it was built. One that
+/// disagrees has misread the log, and a wrong history is worse than none.
 pub(crate) fn rebuild<R: Runtime>(app: &AppHandle<R>) -> Result<WordHistorySnapshot, String> {
     let build = {
         let persisted_state = app.state::<SharedPersistedState>();
@@ -190,12 +242,7 @@ pub(crate) fn rebuild<R: Runtime>(app: &AppHandle<R>) -> Result<WordHistorySnaps
         guard
             .as_ref()
             .filter(|index| index.build.matches(&build))
-            .map(|index| {
-                (
-                    index.built_at_ms,
-                    u32::try_from(index.words.len()).unwrap_or(u32::MAX),
-                )
-            })
+            .map(|index| (index.built_at_ms, index.words.clone()))
     };
     let Some((built_at_ms, live_words)) = live else {
         return Ok(WordHistorySnapshot {
@@ -205,14 +252,14 @@ pub(crate) fn rebuild<R: Runtime>(app: &AppHandle<R>) -> Result<WordHistorySnaps
             days: 0,
         });
     };
-    // Checked against the day the list was built rather than today: the list is a measurement
-    // with a date on it, and every review since then is one the replay knows and it does not.
     let built_on = crate::progress::day::day_key_for_ms(built_at_ms)
         .ok_or_else(|| "Your word list carries a date outside the calendar.".to_string())?;
+    let built_at = i64::try_from(built_at_ms)
+        .map_err(|_| "Your word list carries a date outside the calendar.".to_string())?;
 
     let today = crate::progress::day::today();
-    let replayed = replay(&build, &today)?;
-    if let Some(message) = disagreement(&replayed.days, &built_on, live_words) {
+    let replayed = replay(&build, &today, built_at)?;
+    if let Some(message) = disagreement(&replayed.known_when_built, &live_words, &built_on) {
         return Ok(WordHistorySnapshot {
             status: "mismatch".into(),
             message,
@@ -249,40 +296,58 @@ pub(crate) fn rebuild<R: Runtime>(app: &AppHandle<R>) -> Result<WordHistorySnaps
     })
 }
 
-/// Why a replay may not be kept: it has to agree with the list the app measured, on the day
-/// that list was built. Every review since then is one the replay knows and the list does not.
-fn disagreement(days: &[(DayKey, u32)], built_on: &DayKey, live_words: u32) -> Option<String> {
-    match days.iter().find(|(day, _)| day == built_on) {
-        Some((_, count)) if *count == live_words => None,
-        Some((_, count)) => Some(format!(
-            "The review log replays to {count} words on {built_on}, the day your list was built, and the list holds {live_words}. Nothing was kept."
-        )),
-        None => Some(format!(
-            "The review log does not reach {built_on}, the day your list was built. Nothing was kept."
-        )),
-    }
+fn disagreement(
+    replayed: &HashSet<String>,
+    live: &HashSet<String>,
+    built_on: &DayKey,
+) -> Option<String> {
+    let mut differ: Vec<&str> = replayed
+        .symmetric_difference(live)
+        .map(String::as_str)
+        .collect();
+    differ.sort_unstable();
+    let count = differ.len();
+    let named = match differ[..] {
+        [] => return None,
+        [one] => format!("one word, {one}"),
+        [first, second] => format!("{count} words, {first} and {second}"),
+        [first, second, third] => format!("{count} words, {first}, {second} and {third}"),
+        [first, second, third, ..] => {
+            format!("{count} words, among them {first}, {second} and {third}")
+        }
+    };
+    Some(format!(
+        "The review log replays to {} words when your list was built on {built_on}, and the list holds {}. They disagree about {named}. Nothing was kept. Refresh your word list, then try again.",
+        replayed.len(),
+        live.len()
+    ))
 }
 
-/// What a replay found, before anything is kept.
 pub(crate) struct Replayed {
     pub(crate) days: Vec<(DayKey, u32)>,
     pub(crate) words_today: u32,
+    pub(crate) known_when_built: HashSet<String>,
     pub(crate) cards: usize,
 }
 
-/// Replays every answer Anki remembers for the note types the word list is built from.
 /// One failed batch fails the whole replay: a history missing a note type is not a shorter
 /// history, it is a collapse the chart would draw as forgetting.
-pub(crate) fn replay(build: &KnownWordsBuild, today: &DayKey) -> Result<Replayed, String> {
+pub(crate) fn replay(
+    build: &KnownWordsBuild,
+    today: &DayKey,
+    built_at_ms: i64,
+) -> Result<Replayed, String> {
     let mut answers = Answers::new();
     let mut cards = 0_usize;
     for source in &build.sources {
         cards += read_source(source, build.mature_after_days, &mut answers)?;
     }
+    let known_when_built = answers.known_at(built_at_ms);
     let Some(earliest) = answers.earliest() else {
         return Ok(Replayed {
             days: Vec::new(),
             words_today: 0,
+            known_when_built,
             cards,
         });
     };
@@ -291,85 +356,107 @@ pub(crate) fn replay(build: &KnownWordsBuild, today: &DayKey) -> Result<Replayed
     let days = answers.daily_counts(&days_until(&first, today));
     Ok(Replayed {
         words_today: days.last().map_or(0, |(_, count)| *count),
+        known_when_built,
         days,
         cards,
     })
 }
 
-/// Reads one source's cards, the word each card carries, and every answer given to it.
 fn read_source(
     source: &VocabularySource,
     mature_after_days: u32,
     answers: &mut Answers,
 ) -> Result<usize, String> {
-    let card_ids = anki_find_cards(&note_type_search(&source.note_type))?;
-    if card_ids.is_empty() {
+    let note_ids = anki_find_notes(&note_type_search(&source.note_type))?;
+    if note_ids.is_empty() {
         return Ok(0);
     }
-    let note_ids = anki_cards_to_notes(&card_ids)?;
-    if note_ids.len() != card_ids.len() {
-        return Err("Anki answered with a different number of notes than cards.".to_string());
-    }
-    let word_of_note = read_words(&note_ids, &source.field)?;
-    let note_of_card: HashMap<i64, i64> = card_ids.iter().copied().zip(note_ids).collect();
+    let word_of_card = read_words(&note_ids, &source.field)?;
+    let mature_now: HashSet<i64> =
+        anki_find_cards(&note_type_query(&source.note_type, mature_after_days))?
+            .into_iter()
+            .collect();
+    let mut cards: Vec<(i64, &str)> = word_of_card
+        .iter()
+        .map(|(card, word)| (*card, word.as_str()))
+        .collect();
+    cards.sort_unstable();
 
-    for batch in card_ids.chunks(REVIEW_LOG_BATCH) {
-        let logs = anki_reviews_of_cards(batch)?;
-        let logs = logs
-            .as_object()
-            .ok_or_else(|| "Anki's review log was not a list per card.".to_string())?;
-        for card in batch {
-            let Some(word) = note_of_card.get(card).and_then(|note| word_of_note.get(note)) else {
-                continue;
-            };
-            let Some(log) = logs.get(&card.to_string()) else {
-                continue;
-            };
-            let mut given = read_answers(log)?;
-            answers.add(std::slice::from_ref(word), &mut given, mature_after_days);
-        }
+    for batch in cards.chunks(REVIEW_LOG_BATCH) {
+        let ids: Vec<i64> = batch.iter().map(|(card, _)| *card).collect();
+        let logs = anki_reviews_of_cards(&ids)?;
+        fold_logs(batch, &logs, &mature_now, mature_after_days, answers)?;
     }
-    Ok(card_ids.len())
+    Ok(cards.len())
 }
 
-/// The word each note carries in the source's field, skipping notes whose field is gone.
+/// A card the reply leaves out would read as one never answered, so it fails the replay.
+fn fold_logs(
+    batch: &[(i64, &str)],
+    logs: &serde_json::Value,
+    mature_now: &HashSet<i64>,
+    mature_after_days: u32,
+    answers: &mut Answers,
+) -> Result<(), String> {
+    let logs = logs
+        .as_object()
+        .ok_or_else(|| "Anki's review log was not a list per card.".to_string())?;
+    for &(card, word) in batch {
+        let log = logs
+            .get(&card.to_string())
+            .ok_or_else(|| "Anki's review log left out a card it was asked about.".to_string())?;
+        let mut given = read_answers(log)?;
+        answers.add(word, &mut given, mature_now.contains(&card), mature_after_days);
+    }
+    Ok(())
+}
+
+/// `cardsToNotes` answers with distinct notes in no order, so each note's own card list is
+/// what pairs a card with its word.
 fn read_words(note_ids: &[i64], field: &str) -> Result<HashMap<i64, String>, String> {
-    let mut unique: Vec<i64> = note_ids.to_vec();
-    unique.sort_unstable();
-    unique.dedup();
     let mut words = HashMap::new();
-    for batch in unique.chunks(NOTES_INFO_BATCH) {
+    for batch in note_ids.chunks(NOTES_INFO_BATCH) {
         let notes = anki_notes_info(batch)?;
-        for note in json_array(&notes, "note list")? {
-            let Some(id) = note.get("noteId").and_then(serde_json::Value::as_i64) else {
-                continue;
-            };
-            if let Some(word) = note_expression(note, field) {
-                words.insert(id, word);
-            }
-        }
+        words_of_cards(json_array(&notes, "note list")?, field, &mut words)?;
     }
     Ok(words)
 }
 
-/// One card's answers. A learning step is reported in negative seconds, and reads as the
-/// nothing it is worth.
+fn words_of_cards(
+    notes: &[serde_json::Value],
+    field: &str,
+    words: &mut HashMap<i64, String>,
+) -> Result<(), String> {
+    for note in notes {
+        let Some(word) = note_expression(note, field) else {
+            continue;
+        };
+        let cards = note
+            .get("cards")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "Anki answered with a note that does not list its cards.".to_string())?;
+        for card in cards.iter().filter_map(serde_json::Value::as_i64) {
+            words.insert(card, word.clone());
+        }
+    }
+    Ok(())
+}
+
+/// A row missing any of its numbers fails the replay; a guess at it would move the history.
 fn read_answers(log: &serde_json::Value) -> Result<Vec<Answer>, String> {
     json_array(log, "one card's review log")?
         .iter()
         .map(|review| {
-            let at_ms = review
-                .get("id")
-                .and_then(serde_json::Value::as_i64)
-                .ok_or_else(|| "An answer in the review log has no date.".to_string())?;
-            let interval_days = review
-                .get("ivl")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0)
-                .max(0);
+            let number = |name: &str| {
+                review.get(name).and_then(serde_json::Value::as_i64).ok_or_else(|| {
+                    "Anki's review log has an answer this app cannot read.".to_string()
+                })
+            };
             Ok(Answer {
-                at_ms,
-                interval_days,
+                at_ms: number("id")?,
+                kind: number("type")?,
+                interval: number("ivl")?,
+                before: number("lastIvl")?,
             })
         })
         .collect()
@@ -381,8 +468,9 @@ mod tests {
     use crate::progress::day::day_key_for_ms;
 
     const DAY_MS: i64 = 86_400_000;
+    const LEARNING: i64 = 0;
 
-    /// A moment `days` before `MIDDAY`, so a span lands where a test can name it.
+    /// Noon UTC on 10 September.
     const MIDDAY: i64 = 1_789_041_600_000;
 
     fn days_ago(days: i64) -> i64 {
@@ -393,82 +481,187 @@ mod tests {
         day_key_for_ms(u64::try_from(ms).expect("a positive timestamp")).expect("a day")
     }
 
-    fn answer(days_before: i64, interval_days: i64) -> Answer {
+    fn row(days_before: i64, interval: i64, kind: i64) -> Answer {
         Answer {
             at_ms: days_ago(days_before),
-            interval_days,
+            kind,
+            interval,
+            before: 0,
         }
     }
 
-    fn counted(answers: &mut [Answer], first: i64, last: i64) -> Vec<(String, u32)> {
+    fn answer(days_before: i64, interval: i64) -> Answer {
+        row(days_before, interval, REVIEW)
+    }
+
+    fn known_days(answers: &mut [Answer], mature_now: bool, first: i64, last: i64) -> Vec<u32> {
         let mut words = Answers::new();
-        words.add(&["語".to_string()], answers, 21);
+        words.add("語", answers, mature_now, 21);
         let days = days_until(&day_of(days_ago(first)), &day_of(days_ago(last)));
         words
             .daily_counts(&days)
             .into_iter()
-            .map(|(day, count)| (day.as_str().to_string(), count))
+            .map(|(_, count)| count)
             .collect()
+    }
+
+    fn set(words: &[&str]) -> HashSet<String> {
+        words.iter().map(|word| (*word).to_string()).collect()
     }
 
     #[test]
     fn a_word_counts_from_the_day_its_card_matured() {
-        let counts = counted(&mut [answer(10, 3), answer(8, 25)], 12, 6);
         assert_eq!(
-            counts.iter().map(|(_, count)| *count).collect::<Vec<_>>(),
+            known_days(&mut [answer(10, 3), answer(8, 25)], false, 12, 6),
             [0, 0, 0, 0, 1, 1, 1],
             "twelve days back to six, maturing eight days ago"
         );
     }
 
+    fn note(id: i64, word: &str, cards: serde_json::Value) -> serde_json::Value {
+        let mut note = serde_json::json!({
+            "noteId": id,
+            "fields": { "Word": { "value": word, "order": 0 } },
+        });
+        if !cards.is_null() {
+            note["cards"] = cards;
+        }
+        note
+    }
+
     #[test]
-    fn a_replay_is_kept_only_when_it_agrees_with_the_list_on_the_day_it_was_built() {
-        let built = day_of(days_ago(3));
-        let days = vec![
-            (day_of(days_ago(4)), 2_500),
-            (built.clone(), 2_544),
-            (day_of(days_ago(2)), 2_559),
+    fn every_card_of_a_note_carries_its_word() {
+        let notes = [
+            note(1, "語", serde_json::json!([11, 12])),
+            note(2, "本", serde_json::json!([21])),
+            note(3, "", serde_json::json!([31])),
         ];
-        assert_eq!(disagreement(&days, &built, 2_544), None, "the day it was built");
-        let off = disagreement(&days, &built, 2_500).expect("a disagreement");
-        assert!(off.contains("2544") && off.contains("2500"), "{off}");
-        let missing = disagreement(&days, &day_of(days_ago(9)), 2_544).expect("a disagreement");
-        assert!(missing.contains("does not reach"), "{missing}");
+        let mut words = HashMap::new();
+        words_of_cards(&notes, "Word", &mut words).expect("readable notes");
+        assert_eq!(words.get(&11).map(String::as_str), Some("語"));
+        assert_eq!(words.get(&12).map(String::as_str), Some("語"), "the second card too");
+        assert_eq!(words.get(&21).map(String::as_str), Some("本"));
+        assert!(!words.contains_key(&31), "an empty field carries no word");
+    }
+
+    #[test]
+    fn a_note_that_does_not_list_its_cards_fails_the_replay() {
+        let mut words = HashMap::new();
+        let notes = [note(1, "語", serde_json::Value::Null)];
+        assert!(words_of_cards(&notes, "Word", &mut words).is_err());
+    }
+
+    #[test]
+    fn a_card_the_reply_leaves_out_fails_the_replay() {
+        let logs = serde_json::json!({
+            "11": [{ "id": days_ago(9), "type": REVIEW, "ivl": 30, "lastIvl": 10 }],
+        });
+        let mut answers = Answers::new();
+        let whole = fold_logs(&[(11, "語")], &logs, &HashSet::new(), 21, &mut answers);
+        assert!(whole.is_ok());
+        let short = fold_logs(&[(11, "語"), (12, "本")], &logs, &HashSet::new(), 21, &mut answers);
+        assert!(short.is_err(), "card 12 is not in the reply");
+    }
+
+    #[test]
+    fn a_replay_is_kept_only_when_it_holds_the_words_the_list_held() {
+        let built = day_of(days_ago(3));
+        assert_eq!(disagreement(&set(&["語", "本"]), &set(&["本", "語"]), &built), None);
+        let swapped = disagreement(&set(&["語", "本"]), &set(&["語", "猫"]), &built)
+            .expect("the same count, other words");
+        assert!(swapped.contains("本") && swapped.contains("猫"), "{swapped}");
+        assert!(swapped.contains("Refresh your word list"), "it says what settles it");
+        let short = disagreement(&set(&["語"]), &set(&["語", "本"]), &built).expect("one missing");
+        assert!(short.contains("one word, 本"), "{short}");
+    }
+
+    #[test]
+    fn the_list_is_compared_at_the_moment_it_was_built_not_the_end_of_that_day() {
+        let mut words = Answers::new();
+        words.add("語", &mut [answer(3, 30)], false, 21);
+        let built = days_ago(3) - 3_600_000;
+        assert!(words.known_at(built).is_empty(), "an hour before the card matured");
+        assert_eq!(words.known_at(days_ago(3)), set(&["語"]), "the moment it did");
+        assert_eq!(
+            words.daily_counts(&days_until(&day_of(built), &day_of(built)))[0].1,
+            1,
+            "while the day it was built ends with the word known"
+        );
     }
 
     #[test]
     fn the_threshold_is_the_interval_it_says_and_not_a_day_less() {
-        let below: Vec<u32> = counted(&mut [answer(10, 20)], 9, 8)
-            .into_iter()
-            .map(|(_, count)| count)
-            .collect();
-        assert_eq!(below, [0, 0], "twenty days is not mature at twenty-one");
-        let at: Vec<u32> = counted(&mut [answer(10, 21)], 9, 8)
-            .into_iter()
-            .map(|(_, count)| count)
-            .collect();
-        assert_eq!(at, [1, 1], "twenty-one is");
+        assert_eq!(known_days(&mut [answer(10, 20)], false, 9, 8), [0, 0]);
+        assert_eq!(known_days(&mut [answer(10, 21)], false, 9, 8), [1, 1]);
     }
 
     #[test]
     fn a_lapse_takes_the_word_back_off_until_it_recovers() {
-        let counts = counted(
-            &mut [answer(10, 30), answer(6, 4), answer(3, 40)],
-            11,
-            1,
-        );
         assert_eq!(
-            counts.iter().map(|(_, count)| *count).collect::<Vec<_>>(),
+            known_days(&mut [answer(10, 30), answer(6, 4), answer(3, 40)], false, 11, 1),
             [0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1],
             "known from the tenth day back, lost on the sixth, back on the third"
         );
     }
 
     #[test]
+    fn a_preview_in_a_filtered_deck_leaves_the_interval_where_it_was() {
+        let mut rows = [answer(10, 30), row(6, -600, FILTERED), row(5, 0, FILTERED)];
+        assert_eq!(known_days(&mut rows, false, 11, 3), [0, 1, 1, 1, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_filtered_review_that_set_an_interval_counts() {
+        let mut rows = [answer(10, 5), row(6, 30, FILTERED)];
+        assert_eq!(known_days(&mut rows, false, 11, 4), [0, 0, 0, 0, 0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_relearning_card_keeps_the_interval_its_lapse_gave_it() {
+        let mut kept = [answer(10, 30), answer(6, -600), row(5, 25, RELEARNING)];
+        assert_eq!(
+            known_days(&mut kept, false, 11, 3),
+            [0, 1, 1, 1, 1, 1, 1, 1, 1],
+            "the lapse left it at twenty-five days"
+        );
+        let mut reset = [answer(10, 30), answer(6, -600), row(5, 1, RELEARNING)];
+        assert_eq!(
+            known_days(&mut reset, false, 11, 3),
+            [0, 1, 1, 1, 1, 0, 0, 0, 0],
+            "the lapse sent it back to one day"
+        );
+    }
+
+    #[test]
+    fn a_reschedule_by_hand_names_the_interval_a_relearning_card_held() {
+        let forgot = Answer {
+            before: 25,
+            ..row(4, 0, MANUAL)
+        };
+        let mut rows = [answer(10, 30), answer(6, -600), forgot];
+        assert_eq!(known_days(&mut rows, false, 11, 2), [0, 1, 1, 1, 1, 1, 1, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_card_still_relearning_is_known_by_the_interval_it_holds_now() {
+        let mut rows = [answer(10, 30), answer(6, -600)];
+        assert_eq!(known_days(&mut rows, true, 11, 3), [0, 1, 1, 1, 1, 1, 1, 1, 1]);
+        let mut rows = [answer(10, 30), answer(6, -600)];
+        assert_eq!(known_days(&mut rows, false, 11, 3), [0, 1, 1, 1, 1, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_new_card_learning_its_steps_is_worth_nothing() {
+        let mut words = Answers::new();
+        words.add("語", &mut [row(9, -600, LEARNING)], true, 21);
+        assert_eq!(words.earliest(), None, "a first step is not a lapse");
+    }
+
+    #[test]
     fn a_word_on_two_cards_counts_once_and_lasts_as_long_as_either() {
         let mut words = Answers::new();
-        words.add(&["語".to_string()], &mut [answer(10, 30), answer(6, 2)], 21);
-        words.add(&["語".to_string()], &mut [answer(8, 30)], 21);
+        words.add("語", &mut [answer(10, 30), answer(6, 2)], false, 21);
+        words.add("語", &mut [answer(8, 30)], false, 21);
         let days = days_until(&day_of(days_ago(11)), &day_of(days_ago(4)));
         let counts: Vec<u32> = words
             .daily_counts(&days)
@@ -481,25 +674,30 @@ mod tests {
     #[test]
     fn a_card_that_never_matured_carries_no_word_at_all() {
         let mut words = Answers::new();
-        words.add(&["語".to_string()], &mut [answer(9, 1), answer(8, 10)], 21);
+        words.add("語", &mut [answer(9, 1), answer(8, 10)], false, 21);
         assert_eq!(words.earliest(), None, "nothing it can speak for");
     }
 
     #[test]
-    fn a_learning_step_reads_as_no_interval_at_all() {
+    fn an_answer_reads_the_four_numbers_anki_logs() {
         let log = serde_json::json!([
-            { "id": 1_700_000_000_000_i64, "ivl": -600 },
-            { "id": 1_700_100_000_000_i64, "ivl": 30 },
+            { "id": 1_700_000_000_000_i64, "type": RELEARNING, "ivl": 25, "lastIvl": -600 },
         ]);
-        let answers = read_answers(&log).expect("a readable log");
-        assert_eq!(answers[0].interval_days, 0, "negative seconds are not days");
-        assert_eq!(answers[1].interval_days, 30);
+        let read = read_answers(&log).expect("a readable log");
+        assert_eq!(
+            (read[0].at_ms, read[0].kind, read[0].interval, read[0].before),
+            (1_700_000_000_000, RELEARNING, 25, -600)
+        );
     }
 
     #[test]
-    fn an_answer_without_a_date_fails_the_replay_rather_than_moving_it() {
-        let log = serde_json::json!([{ "ivl": 30 }]);
-        assert!(read_answers(&log).is_err());
+    fn an_answer_missing_a_number_fails_the_replay_rather_than_moving_it() {
+        let whole = serde_json::json!({ "id": 1_i64, "type": 1, "ivl": 30, "lastIvl": 10 });
+        for missing in ["id", "type", "ivl", "lastIvl"] {
+            let mut review = whole.clone();
+            review.as_object_mut().expect("an object").remove(missing);
+            assert!(read_answers(&serde_json::json!([review])).is_err(), "without {missing}");
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { CalendarDay, CalendarSpan } from "../../types";
 import { shiftDay, shortDate } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
+import { FloatingList } from "./FloatingList";
 import { stepOf, type LensSpec } from "./lenses";
 import { DAYS_IN_WEEK, monthMarks, weeksEnding } from "./weeks";
 
@@ -136,31 +137,28 @@ export function StudyCalendar({
       <p className="progress-cal-since">{caption}</p>
 
       {noted.length > 0 ? (
-        <details className="viz-table">
-          <summary>Show every day with {lens.title.toLowerCase()} as a list</summary>
-          <div className="viz-table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Day</th>
-                  <th scope="col">{lens.title}</th>
-                  {lens.detailHeading === null ? null : (
-                    <th scope="col">{lens.detailHeading}</th>
-                  )}
+        <FloatingList label={`Show every day with ${lens.title.toLowerCase()} as a list`}>
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Day</th>
+                <th scope="col">{lens.title}</th>
+                {lens.detailHeading === null ? null : (
+                  <th scope="col">{lens.detailHeading}</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {noted.map(({ entry, value }) => (
+                <tr key={entry.day}>
+                  <td>{shortDate(entry.day)}</td>
+                  <td>{lens.format(value)}</td>
+                  {lens.detailHeading === null ? null : <td>{lens.detailOf(entry)}</td>}
                 </tr>
-              </thead>
-              <tbody>
-                {noted.map(({ entry, value }) => (
-                  <tr key={entry.day}>
-                    <td>{shortDate(entry.day)}</td>
-                    <td>{lens.format(value)}</td>
-                    {lens.detailHeading === null ? null : <td>{lens.detailOf(entry)}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
+              ))}
+            </tbody>
+          </table>
+        </FloatingList>
       ) : null}
     </div>
   );

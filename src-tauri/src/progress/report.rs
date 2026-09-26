@@ -254,7 +254,7 @@ fn assemble(
     let history = vocabulary
         .history
         .as_ref()
-        .map_or(&[][..], |history| history.under(&vocabulary.settings));
+        .and_then(|history| history.under(&vocabulary.settings));
     match loaded {
         super::store::Loaded::Present { header, store } => ProgressReport {
             coverage_percent: coverage_from(&store.samples, &vocabulary.settings),

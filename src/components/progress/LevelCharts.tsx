@@ -1,6 +1,7 @@
 import type { BackfillPoint, ReadingPoint, WordsPoint } from "../../types";
 import { formatCount, formatDay, formatDelta, formatPercent } from "../../lib/progressFormat";
 import { ChartTooltip, useChartTooltip } from "./ChartTooltip";
+import { FloatingList } from "./FloatingList";
 
 type Mark = {
   atMs: number;
@@ -38,6 +39,7 @@ function LevelChart({
   listLabel,
   valueHeading,
   seamAt,
+  rows = marks,
 }: {
   title: string;
   headline: string;
@@ -49,6 +51,7 @@ function LevelChart({
   listLabel: string;
   valueHeading: string;
   seamAt?: number;
+  rows?: Mark[];
 }) {
   const { frame, tip, handlers } = useChartTooltip();
   const x = spread(marks);
@@ -114,29 +117,26 @@ function LevelChart({
 
       <p className="level-chart-caption">{marks.length > 1 ? caption : note}</p>
 
-      <details className="viz-table">
-        <summary>{listLabel}</summary>
-        <div className="viz-table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Day</th>
-                <th scope="col">{valueHeading}</th>
-                <th scope="col">What changed</th>
+      <FloatingList label={listLabel}>
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Day</th>
+              <th scope="col">{valueHeading}</th>
+              <th scope="col">What changed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...rows].reverse().map((mark) => (
+              <tr key={mark.atMs}>
+                <td>{mark.day}</td>
+                <td>{mark.tip}</td>
+                <td>{mark.detail}</td>
               </tr>
-            </thead>
-            <tbody>
-              {[...marks].reverse().map((mark) => (
-                <tr key={mark.atMs}>
-                  <td>{mark.day}</td>
-                  <td>{mark.tip}</td>
-                  <td>{mark.detail}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
+            ))}
+          </tbody>
+        </table>
+      </FloatingList>
     </div>
   );
 }
@@ -193,8 +193,8 @@ export function ReadingChart({ readings, now }: { readings: ReadingPoint[]; now:
   );
 }
 
-// A line eighteen months long needs no point per day: one in every few reads the same and
-// keeps the list underneath it readable.
+// A line that spans years needs no point per day: one in every few draws the same, and the
+// list underneath still holds every day.
 const MOST_REPLAYED = 120;
 
 function thinned(points: BackfillPoint[]): BackfillPoint[] {
@@ -214,7 +214,7 @@ export function WordsChart({
   backfill: BackfillPoint[];
   now: Date;
 }) {
-  const replayed: Mark[] = thinned(backfill).map((point) => ({
+  const replayedDay = (point: BackfillPoint): Mark => ({
     atMs: point.atMs,
     // Named by the day it counts for, not by the small hours it runs into.
     day: formatDay(new Date(`${point.day}T12:00:00`).getTime(), now),
@@ -223,15 +223,15 @@ export function WordsChart({
     dot: false,
     tip: words(point.words),
     detail: "replayed from your review log",
-  }));
+  });
+  const replayed = thinned(backfill).map(replayedDay);
   const measured: Mark[] = counts.map((count, index) => {
     const before = index > 0 ? counts[index - 1] : null;
-    const change =
-      before === null
+    const change = count.settingsChanged
+      ? "word-list settings changed"
+      : before === null
         ? "first count"
-        : count.settingsChanged
-          ? "word-list settings changed"
-          : `${count.words >= before.words ? "+" : "-"}${formatCount(Math.abs(count.words - before.words))} since ${formatDay(before.atMs, now)}`;
+        : `${count.words >= before.words ? "+" : "-"}${formatCount(Math.abs(count.words - before.words))} since ${formatDay(before.atMs, now)}`;
     return {
       atMs: count.atMs,
       day: formatDay(count.atMs, now),
@@ -269,6 +269,7 @@ export function WordsChart({
       listLabel="Show every count as a list"
       valueHeading="Words"
       seamAt={replayed.length > 0 && measured.length > 0 ? measured[0].atMs : undefined}
+      rows={[...backfill.map(replayedDay), ...measured]}
     />
   );
 }
