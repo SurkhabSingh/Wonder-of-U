@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::app_types::KnownWordsBuild;
 
-use super::day::DayKey;
+use super::day::{day_key_for_ms, DayKey};
 use super::report::{compare, percent, round_tenth};
 use super::store::Sample;
 use super::vocabulary::WordHistory;
@@ -124,7 +124,8 @@ pub(crate) fn levels(
         });
     }
 
-    // A count belongs to a word list, so this groups by list alone and merges no repeats.
+    // A count belongs to a word list, so this groups by list alone; `held` then folds the
+    // counts that did not move.
     let mut words = Vec::new();
     let mut previous: Option<&KnownWordsBuild> = None;
     let mut first_build: Option<&KnownWordsBuild> = None;
@@ -159,6 +160,7 @@ pub(crate) fn levels(
             listed_at.push(list.built_at_ms);
         }
     }
+    let mut words = held(words);
 
     // The replay stops where the app's own counts start: when the first counted list was built,
     // which can be days before the reading that drew it.
@@ -200,6 +202,31 @@ fn word_lists(samples: &[Sample]) -> Vec<&[Sample]> {
         }
     }
     groups
+}
+
+fn unchanged(earlier: &WordsPoint, later: &WordsPoint) -> bool {
+    earlier.words == later.words && !later.settings_changed
+}
+
+fn same_day(earlier: &WordsPoint, later: &WordsPoint) -> bool {
+    let day = day_key_for_ms(earlier.at_ms);
+    day.is_some() && day == day_key_for_ms(later.at_ms)
+}
+
+/// A run of counts that did not move keeps its first and, from a later day, its last: when the
+/// count was reached and how long it held. Each one between would add a dot and nothing else.
+fn held(points: Vec<WordsPoint>) -> Vec<WordsPoint> {
+    let mut kept: Vec<WordsPoint> = Vec::with_capacity(points.len());
+    for point in points {
+        match kept.as_mut_slice() {
+            [.., before, last] if unchanged(before, last) && unchanged(last, &point) => {
+                *last = point;
+            }
+            [.., first] if unchanged(first, &point) && same_day(first, &point) => {}
+            _ => kept.push(point),
+        }
+    }
+    kept
 }
 
 fn word_point(
@@ -443,6 +470,96 @@ mod tests {
             "the list is that reading's, not a second point"
         );
         assert_eq!(levels.words[0].words, 2_528);
+    }
+
+    fn count(at_ms: u64, words: u32, settings_changed: bool) -> WordsPoint {
+        WordsPoint {
+            at_ms,
+            words,
+            settings_changed,
+        }
+    }
+
+    fn times(points: Vec<WordsPoint>) -> Vec<u64> {
+        points.iter().map(|point| point.at_ms).collect()
+    }
+
+    /// Noon UTC on 10 September, `days` later.
+    fn on_day(days: u64) -> u64 {
+        1_789_041_600_000 + days * 86_400_000
+    }
+
+    #[test]
+    fn a_run_of_counts_that_did_not_move_keeps_its_first_and_last() {
+        let points = vec![
+            count(on_day(0), 2_528, false),
+            count(on_day(1), 2_544, false),
+            count(on_day(2), 2_544, false),
+            count(on_day(3), 2_544, false),
+            count(on_day(4), 2_544, false),
+            count(on_day(5), 2_559, false),
+        ];
+        assert_eq!(
+            times(held(points)),
+            [on_day(0), on_day(1), on_day(4), on_day(5)],
+            "reached on the first day, still held on the fourth"
+        );
+    }
+
+    #[test]
+    fn a_run_within_one_day_keeps_only_its_first() {
+        let later_that_day = on_day(1) + 3_600_000;
+        let points = vec![
+            count(on_day(0), 2_559, false),
+            count(on_day(1), 2_568, false),
+            count(later_that_day, 2_568, false),
+        ];
+        assert_eq!(
+            times(held(points)),
+            [on_day(0), on_day(1)],
+            "the hour later would add a second dot on the same day and nothing else"
+        );
+    }
+
+    #[test]
+    fn a_count_that_did_not_move_across_a_settings_change_keeps_the_change() {
+        let points = vec![
+            count(on_day(0), 2_544, false),
+            count(on_day(1), 2_544, true),
+            count(on_day(2), 2_544, false),
+            count(on_day(3), 2_544, false),
+        ];
+        assert_eq!(
+            times(held(points)),
+            [on_day(0), on_day(1), on_day(3)],
+            "the second run starts at the change"
+        );
+    }
+
+    #[test]
+    fn refreshes_that_found_the_same_count_draw_one_stretch() {
+        let samples: Vec<Sample> = (1..=5)
+            .map(|at| reading(on_day(at), on_day(at), "Kaishi", vec![item("a", "f1", 50)]))
+            .collect();
+        assert_eq!(times(levels(&samples, None, None).words), [on_day(1), on_day(5)]);
+    }
+
+    #[test]
+    fn the_word_list_joins_the_stretch_it_continues() {
+        let samples = vec![
+            reading(on_day(0), on_day(0), "Kaishi", vec![item("a", "f1", 50)]),
+            reading(on_day(1), on_day(1), "Kaishi", vec![item("a", "f1", 50)]),
+        ];
+        let list = WordList {
+            built_at_ms: on_day(3),
+            build: build("Kaishi"),
+            words: 1_000,
+        };
+        assert_eq!(
+            times(levels(&samples, Some(&list), None).words),
+            [on_day(0), on_day(3)],
+            "the unread list ends the stretch its readings began"
+        );
     }
 
     #[test]

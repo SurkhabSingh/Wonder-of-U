@@ -12,6 +12,8 @@ type Mark = {
   joined: boolean;
   // False for a replayed day: the line runs through it, but only measurements get a dot.
   dot: boolean;
+  // Where a range cuts the line: drawn through, with nothing to point at.
+  quiet?: boolean;
   tip: string;
   detail: string;
 };
@@ -102,18 +104,20 @@ function LevelChart({
           {seamAt === undefined ? null : (
             <i className="level-chart-seam" style={{ left: `${x(seamAt)}%` }} aria-hidden="true" />
           )}
-          {marks.map((mark) => (
-            <span
-              key={mark.atMs}
-              // A replayed day carries no dot, but it still answers the pointer.
-              className={mark.dot ? "level-chart-dot" : "level-chart-dot is-plain"}
-              style={{ left: `${x(mark.atMs)}%`, top: `${100 - y(mark.value)}%` }}
-              tabIndex={mark.dot ? 0 : undefined}
-              aria-label={mark.dot ? `${mark.day}: ${mark.tip}, ${mark.detail}` : undefined}
-              data-tip-value={mark.tip}
-              data-tip-label={`${mark.day} · ${mark.detail}`}
-            />
-          ))}
+          {marks.map((mark) =>
+            mark.quiet ? null : (
+              <span
+                key={mark.atMs}
+                // A replayed day carries no dot, but it still answers the pointer.
+                className={mark.dot ? "level-chart-dot" : "level-chart-dot is-plain"}
+                style={{ left: `${x(mark.atMs)}%`, top: `${100 - y(mark.value)}%` }}
+                tabIndex={mark.dot ? 0 : undefined}
+                aria-label={mark.dot ? `${mark.day}: ${mark.tip}, ${mark.detail}` : undefined}
+                data-tip-value={mark.tip}
+                data-tip-label={`${mark.day} · ${mark.detail}`}
+              />
+            ),
+          )}
         </div>
 
         <div className="level-chart-x" aria-hidden="true">
@@ -232,19 +236,50 @@ function rangeStart(range: WordsRange, now: Date): number {
   return days === null ? -Infinity : now.getTime() - days * DAY_MS;
 }
 
-/** A range is offered when it keeps two points or more and leaves one out; a choice that is not
- * offered draws All. The switch and the chart both read this, so they cannot disagree. */
+type WordsWindow = {
+  start: number;
+  replayed: BackfillPoint[];
+  counts: WordsPoint[];
+  entry: { atMs: number; words: number } | null;
+};
+
+/** The points after a range's start, and where the line enters at that start: a count that
+ * held across it stays flat to the edge, however long ago it was first found. */
+function windowOf(
+  counts: WordsPoint[],
+  backfill: BackfillPoint[],
+  range: WordsRange,
+  now: Date,
+): WordsWindow {
+  const start = rangeStart(range, now);
+  const line = [...backfill, ...counts];
+  const after = line.findIndex((point) => point.atMs > start);
+  let entry: WordsWindow["entry"] = null;
+  if (after > 0) {
+    const from = line[after - 1];
+    const to = line[after];
+    const share = (start - from.atMs) / (to.atMs - from.atMs);
+    entry = { atMs: start, words: from.words + (to.words - from.words) * share };
+  }
+  return {
+    start,
+    replayed: backfill.filter((point) => point.atMs > start),
+    counts: counts.filter((count) => count.atMs > start),
+    entry,
+  };
+}
+
+/** A range is offered when it cuts the line, keeping a stretch and leaving some out. A choice
+ * not offered draws All; the switch and the chart both read this, so they cannot disagree. */
 export function wordsRangeView(
   counts: WordsPoint[],
   backfill: BackfillPoint[],
   choice: WordsRange,
   now: Date,
 ): { offered: WordsRange[]; shown: WordsRange } {
-  const times = [...backfill, ...counts].map((point) => point.atMs);
-  const offered = WORDS_RANGE_ORDER.filter((id) => {
-    const kept = times.filter((at) => at >= rangeStart(id, now)).length;
-    return id === "all" || (kept >= 2 && kept < times.length);
-  });
+  const offered = WORDS_RANGE_ORDER.filter(
+    (id) => id === "all" || windowOf(counts, backfill, id, now).entry !== null,
+  );
   return { offered, shown: offered.includes(choice) ? choice : "all" };
 }
 
@@ -279,6 +314,7 @@ export function WordsChart({
   choice: WordsRange;
 }) {
   const range = wordsRangeView(counts, backfill, choice, now).shown;
+  const span = windowOf(counts, backfill, range, now);
   const replayedDay = (point: BackfillPoint): Mark => ({
     atMs: point.atMs,
     // Named by the day it counts for, not by the small hours it runs into.
@@ -306,11 +342,24 @@ export function WordsChart({
       detail: change,
     };
   });
-  const start = rangeStart(range, now);
-  const replayedShown = backfill.filter((point) => point.atMs >= start);
-  const measuredShown = measured.filter((mark) => mark.atMs >= start);
-  const replayed = thinned(replayedShown).map(replayedDay);
-  const marks = [...replayed, ...measuredShown];
+  const measuredShown = measured.filter((mark) => mark.atMs > span.start);
+  const replayed = thinned(span.replayed).map(replayedDay);
+  const entry: Mark[] =
+    span.entry === null
+      ? []
+      : [
+          {
+            atMs: span.entry.atMs,
+            day: formatDay(span.entry.atMs, now),
+            value: span.entry.words,
+            joined: true,
+            dot: false,
+            quiet: true,
+            tip: "",
+            detail: "",
+          },
+        ];
+  const marks = [...entry, ...replayed, ...measuredShown];
   const values = marks.map((mark) => mark.value);
   const least = Math.min(...values);
   const most = Math.max(...values);
@@ -335,13 +384,11 @@ export function WordsChart({
           : `Replayed from Anki's review log up to ${replayed[replayed.length - 1].day}, and your word list each time it was refreshed after that.`
       }
       listLabel={
-        range === "all"
-          ? "Show every count as a list"
-          : `Show every count from ${WORDS_RANGES[range].covers} as a list`
+        range === "all" ? "Show the line as a list" : `Show ${WORDS_RANGES[range].covers} as a list`
       }
       valueHeading="Words"
       seamAt={replayed.length > 0 && measuredShown.length > 0 ? measuredShown[0].atMs : undefined}
-      rows={[...replayedShown.map(replayedDay), ...measuredShown]}
+      rows={[...span.replayed.map(replayedDay), ...measuredShown]}
     />
   );
 }
