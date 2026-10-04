@@ -59,7 +59,7 @@ pub(crate) fn summarise(recordings: &[RecentRecording]) -> LibraryReport {
     library
 }
 
-fn is_japanese(transcript: &crate::app_types::RecordingTranscript) -> bool {
+pub(crate) fn is_japanese(transcript: &crate::app_types::RecordingTranscript) -> bool {
     let language = transcript.language.trim().to_ascii_lowercase();
     let detected = transcript
         .detected_language

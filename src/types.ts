@@ -740,7 +740,15 @@ export type ProgressReport = {
   storeReadable: boolean;
   // Set while saving is failing; what was done since then is not in the numbers above.
   writeFailure: WriteFailure | null;
+  // Why no reading has been taken, while there is none.
+  skipped: SkipReason | null;
 };
+
+export type SkipReason =
+  | {
+      kind: "unconfigured" | "needsDictionary" | "unbuilt" | "stale" | "nothingToRead" | "unreadable";
+    }
+  | { kind: "insufficient"; words: number };
 
 // The stacked sections inside the single Settings page. Setup-checklist rows and
 // post-download navigation deep-link to one of these, scrolling it into view.

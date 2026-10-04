@@ -1148,6 +1148,7 @@ function App() {
               refreshingWordList={busyAction === "refreshKnownWords"}
               onRefreshWordList={() => void refreshWordListFromProgress()}
               onGoToStudyPicks={() => openSettingsSection("studyPicks")}
+              onGoToLibrary={() => setActivePage("recordings")}
               lens={progressLens}
               onLens={setProgressLens}
               range={progressRange}

@@ -1,4 +1,4 @@
-import type { AppBootstrap, Measured, ProgressReport } from "../../types";
+import type { AppBootstrap, Measured, ProgressReport, SkipReason } from "../../types";
 import { Metric, StatTile, readMeasured } from "./MeasuredValue";
 import {
   formatCompared,
@@ -22,6 +22,17 @@ import { LENSES, LENS_ORDER, type Lens } from "./lenses";
 import { StudyCalendar } from "./StudyCalendar";
 import { SwitchGroup } from "./SwitchGroup";
 
+// Where each reason for a missing first reading is settled; the word list is refreshed at the top.
+const SETTLED_IN: Record<SkipReason["kind"], "studyPicks" | "library" | null> = {
+  unconfigured: "studyPicks",
+  needsDictionary: "studyPicks",
+  unbuilt: null,
+  stale: null,
+  nothingToRead: "library",
+  insufficient: "library",
+  unreadable: "library",
+};
+
 /// One question — am I getting better — so comprehension leads and the rest is context.
 /// Never contacts Anki: a closed Anki must not hide a measurement that was taken.
 export function ProgressPage({
@@ -35,6 +46,7 @@ export function ProgressPage({
   refreshingWordList,
   onRefreshWordList,
   onGoToStudyPicks,
+  onGoToLibrary,
   lens,
   onLens,
   range,
@@ -54,6 +66,7 @@ export function ProgressPage({
   refreshingWordList: boolean;
   onRefreshWordList: () => void;
   onGoToStudyPicks: () => void;
+  onGoToLibrary: () => void;
   lens: Lens;
   onLens: (lens: Lens) => void;
   range: Range;
@@ -68,6 +81,11 @@ export function ProgressPage({
   const immersion = report ? readMeasured(report.immersion).value : null;
   const comparison = report?.comparison ?? null;
   const knownWords = bootstrap.knownWords;
+  // A store that cannot be read or saved has its own notice, and no setting to go and change.
+  const settledIn =
+    report?.skipped && report.storeReadable && !report.writeFailure
+      ? SETTLED_IN[report.skipped.kind]
+      : null;
   const wordsView = report
     ? wordsRangeView(report.levels.words, report.levels.backfill, wordsRange, now)
     : null;
@@ -343,9 +361,13 @@ export function ProgressPage({
         ) : null}
       </article>
 
-      {coverage && coverage.value === null ? (
+      {settledIn === "studyPicks" ? (
         <button type="button" className="ghost" onClick={onGoToStudyPicks}>
           Go to Study Picks
+        </button>
+      ) : settledIn === "library" ? (
+        <button type="button" className="ghost" onClick={onGoToLibrary}>
+          Go to Audio library
         </button>
       ) : null}
     </section>

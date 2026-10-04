@@ -7,7 +7,8 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::app_types::{KnownWordsBuild, KnownWordsState, RecentRecording, SharedPersistedState};
 use crate::progress::day;
-use crate::progress::store::{Sample, SampleItem, MIN_CONTENT_TOKENS};
+use crate::progress::skip::{ready, too_little, Skip};
+use crate::progress::store::{Sample, SampleItem};
 use crate::runtime_assets::find_managed_dictionary_root;
 use crate::tokenizer::tokenize_japanese;
 
@@ -20,16 +21,6 @@ static ATTEMPTED: Mutex<Option<(String, Option<u64>)>> = Mutex::new(None);
 
 /// One reading at a time, so the store holds them in the order they were taken.
 static READING: Mutex<()> = Mutex::new(());
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Skip {
-    Unconfigured,
-    NeedsDictionary,
-    Unbuilt,
-    Stale,
-    NothingToRead,
-    Insufficient,
-}
 
 #[derive(Debug)]
 pub(crate) enum Sampled {
@@ -63,33 +54,27 @@ pub(crate) fn sample_comprehension<R: Runtime>(
         )
     };
 
-    if build.sources.is_empty() {
-        return Ok(Sampled::Skipped(Skip::Unconfigured));
-    }
-    let Some(dictionary_path) = find_managed_dictionary_root(Path::new(&asset_directory)) else {
-        return Ok(Sampled::Skipped(Skip::NeedsDictionary));
-    };
-
-    let (known_words, built_at_ms, word_count) = {
+    let japanese = japanese_transcripts(&recordings);
+    let dictionary = find_managed_dictionary_root(Path::new(&asset_directory));
+    let (dictionary_path, (known_words, built_at_ms, word_count)) = {
         let state = app.state::<KnownWordsState>();
         let guard = state
             .0
             .lock()
             .map_err(|_| "Could not read your known-word list.".to_string())?;
-        let Some(index) = guard.as_ref() else {
-            return Ok(Sampled::Skipped(Skip::Unbuilt));
-        };
-        if !index.build.matches(&build) {
-            return Ok(Sampled::Skipped(Skip::Stale));
+        let listed = guard.as_ref().map(|index| (&index.build, index));
+        match ready(&build, dictionary, listed, !japanese.is_empty()) {
+            Err(skip) => return Ok(Sampled::Skipped(skip)),
+            Ok((dictionary, index)) => (
+                dictionary,
+                (
+                    index.words.clone(),
+                    index.built_at_ms,
+                    u32::try_from(index.words.len()).unwrap_or(u32::MAX),
+                ),
+            ),
         }
-        let word_count = u32::try_from(index.words.len()).unwrap_or(u32::MAX);
-        (index.words.clone(), index.built_at_ms, word_count)
     };
-
-    let japanese = japanese_transcripts(&recordings);
-    if japanese.is_empty() {
-        return Ok(Sampled::Skipped(Skip::NothingToRead));
-    }
     let digest = library_digest(&japanese);
 
     let mut counted = Vec::new();
@@ -106,8 +91,8 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     }
 
     let content_tokens: u32 = counted.iter().map(|item| item.content_tokens).sum();
-    if content_tokens < MIN_CONTENT_TOKENS {
-        return Ok(Sampled::Skipped(Skip::Insufficient));
+    if let Some(skip) = too_little(content_tokens, counted.len(), unread) {
+        return Ok(Sampled::Skipped(skip));
     }
 
     let sample = Sample::new(
@@ -130,25 +115,32 @@ pub(crate) fn sample_comprehension<R: Runtime>(
     Ok(Sampled::Taken(sample.with_source_digest(digest)))
 }
 
-/// Answers whether the reading settled, taken or skipped, rather than failed.
+/// Answers whether the attempt settled: a reading taken, or the text found too thin. A skip
+/// that a setting or a download can lift is tried again on the next check instead.
 pub(crate) fn record_sample<R: Runtime>(app: &AppHandle<R>) -> bool {
     let _one_at_a_time = READING.lock().unwrap_or_else(PoisonError::into_inner);
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String, String> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(String, bool), String> {
         let now_ms = crate::app_runtime::now_ms();
         match sample_comprehension(app, now_ms)? {
-            Sampled::Skipped(skip) => Ok(format!("{skip:?}")),
+            Sampled::Skipped(skip) => {
+                if skip.found_in_text() {
+                    crate::progress::skip::note(app, skip);
+                }
+                Ok((format!("{skip:?}"), skip.found_in_text()))
+            }
             Sampled::Taken(sample) => {
                 let items = sample.items_with_words().count();
                 let (content, known) = sample.totals();
+                crate::progress::skip::clear();
                 crate::progress::add_sample(app, sample)?;
-                Ok(format!("taken: {items} items, {known}/{content} words"))
+                Ok((format!("taken: {items} items, {known}/{content} words"), true))
             }
         }
     }));
 
-    let settled = matches!(outcome, Ok(Ok(_)));
+    let settled = matches!(outcome, Ok(Ok((_, true))));
     match outcome {
-        Ok(Ok(detail)) => crate::app_runtime::log_event(
+        Ok(Ok((detail, _))) => crate::app_runtime::log_event(
             app,
             "INFO",
             "progress.sampled",
@@ -254,14 +246,7 @@ fn japanese_transcripts(recordings: &[RecentRecording]) -> Vec<(String, String)>
     let mut found = Vec::new();
     for recording in recordings {
         for transcript in &recording.transcripts {
-            let language = transcript.language.trim().to_ascii_lowercase();
-            let detected = transcript
-                .detected_language
-                .as_deref()
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase();
-            if language == "ja" || (language == "auto" && detected == "ja") {
+            if crate::progress::library::is_japanese(transcript) {
                 found.push((
                     item_key(&recording.file_path, &transcript.language),
                     transcript.file_path.clone(),

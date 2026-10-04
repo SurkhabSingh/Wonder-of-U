@@ -139,6 +139,8 @@ pub(crate) struct ProgressReport {
     pub(crate) store_readable: bool,
     /// Set while writes to the store are failing, so the page can say what is not being kept.
     pub(crate) write_failure: Option<super::health::WriteFailure>,
+    /// Why no reading has been taken, while the store holds none.
+    pub(crate) skipped: Option<super::skip::Skip>,
 }
 
 pub(crate) fn load_progress_inner<R: tauri::Runtime>(
@@ -146,13 +148,16 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
 ) -> Result<ProgressReport, String> {
     use tauri::Manager;
 
-    let settings = {
+    let (settings, asset_directory) = {
         let persisted_state = app.state::<crate::app_types::SharedPersistedState>();
         let persisted = persisted_state
             .0
             .lock()
             .map_err(|_| "Could not read the app settings.".to_string())?;
-        crate::app_types::KnownWordsBuild::from_anki_settings(&persisted.settings.anki)
+        (
+            crate::app_types::KnownWordsBuild::from_anki_settings(&persisted.settings.anki),
+            persisted.settings.asset_directory.clone(),
+        )
     };
     let list = app
         .state::<crate::app_types::KnownWordsState>()
@@ -228,15 +233,33 @@ pub(crate) fn load_progress_inner<R: tauri::Runtime>(
         library: &evidence,
         cards: cards.as_ref(),
     };
+    let dictionary =
+        crate::runtime_assets::find_managed_dictionary_root(std::path::Path::new(&asset_directory));
+    let blocked = super::skip::ready(
+        &vocabulary.settings,
+        dictionary,
+        vocabulary.list.as_ref().map(|list| (&list.build, ())),
+        library.japanese > 0,
+    )
+    .err();
     Ok(assemble(
         super::store::load(&path),
         &sources,
         library,
         &vocabulary,
-        &today,
+        &Now {
+            day: today,
+            ms: crate::app_runtime::now_ms(),
+        },
         super::health::current(),
-        crate::app_runtime::now_ms(),
+        blocked.or_else(super::skip::found),
     ))
+}
+
+/// The moment a report answers for: its day, and the time within it.
+struct Now {
+    day: super::day::DayKey,
+    ms: u64,
 }
 
 /// Every choice about what the page is told, with nothing to read or lock, so each state of
@@ -246,10 +269,11 @@ fn assemble(
     sources: &super::calendar::Sources,
     library: super::library::LibraryReport,
     vocabulary: &Vocabulary,
-    today: &super::day::DayKey,
+    now: &Now,
     write_failure: Option<super::health::WriteFailure>,
-    now_ms: u64,
+    skipped: Option<super::skip::Skip>,
 ) -> ProgressReport {
+    let (today, now_ms) = (&now.day, now.ms);
     let list = vocabulary.list.as_ref();
     let history = vocabulary
         .history
@@ -257,7 +281,7 @@ fn assemble(
         .and_then(|history| history.under(&vocabulary.settings));
     match loaded {
         super::store::Loaded::Present { header, store } => ProgressReport {
-            coverage_percent: coverage_from(&store.samples, &vocabulary.settings),
+            coverage_percent: coverage_from(&store.samples, &vocabulary.settings, skipped),
             immersion: immersion_from(
                 super::streak::summarise(&store.days, today, &header.first_run_day),
                 write_failure.is_some(),
@@ -280,11 +304,10 @@ fn assemble(
             newer_rows: store.newer,
             store_readable: true,
             write_failure,
+            skipped: skipped.filter(|_| store.samples.is_empty()),
         },
         super::store::Loaded::Missing => ProgressReport {
-            coverage_percent: Measured::unavailable(
-                "Nothing has been measured yet. Refresh your word list to take a first reading.",
-            ),
+            coverage_percent: no_reading(skipped),
             immersion: Measured::unavailable(
                 "Time has not been counted yet. It starts adding up as you listen and watch here.",
             ),
@@ -299,6 +322,7 @@ fn assemble(
             newer_rows: 0,
             store_readable: true,
             write_failure,
+            skipped,
         },
         super::store::Loaded::Unreadable(_) => ProgressReport {
             coverage_percent: Measured::unavailable(
@@ -318,8 +342,16 @@ fn assemble(
             newer_rows: 0,
             store_readable: false,
             write_failure,
+            skipped: None,
         },
     }
+}
+
+fn no_reading(skipped: Option<super::skip::Skip>) -> Measured<f64> {
+    Measured::unavailable(skipped.map_or_else(
+        || super::skip::NO_READING_YET.to_string(),
+        super::skip::Skip::message,
+    ))
 }
 
 /// What the store holds is real, but time since saving stopped is not in it.
@@ -353,11 +385,10 @@ fn floor_from(
 pub(crate) fn coverage_from(
     samples: &[Sample],
     current_build: &crate::app_types::KnownWordsBuild,
+    skipped: Option<super::skip::Skip>,
 ) -> Measured<f64> {
     let Some(latest) = samples.last() else {
-        return Measured::unavailable(
-            "Nothing has been measured yet. Refresh your word list to take a first reading.",
-        );
+        return no_reading(skipped);
     };
     let (content, known) = latest.totals();
     if content == 0 {
@@ -474,6 +505,16 @@ mod tests {
         cards: Option<&crate::progress::cards::CardHistory>,
         write_failure: Option<crate::progress::health::WriteFailure>,
     ) -> ProgressReport {
+        assembled_skipped(loaded, evidence, cards, write_failure, None)
+    }
+
+    fn assembled_skipped(
+        loaded: crate::progress::store::Loaded,
+        evidence: &crate::progress::evidence::LibraryEvidence,
+        cards: Option<&crate::progress::cards::CardHistory>,
+        write_failure: Option<crate::progress::health::WriteFailure>,
+        skipped: Option<crate::progress::skip::Skip>,
+    ) -> ProgressReport {
         assemble(
             loaded,
             &crate::progress::calendar::Sources {
@@ -486,9 +527,9 @@ mod tests {
                 list: None,
                 history: None,
             },
-            &day(),
+            &Now { day: day(), ms: 1 },
             write_failure,
-            1,
+            skipped,
         )
     }
 
@@ -621,6 +662,7 @@ mod tests {
             newer_rows: 0,
             store_readable: true,
             write_failure: None,
+            skipped: None,
         };
         let wire = serde_json::to_value(&report).expect("serialises");
         let mut keys: Vec<&str> = wire
@@ -643,6 +685,7 @@ mod tests {
                 "library",
                 "newerRows",
                 "readings",
+                "skipped",
                 "storeReadable",
                 "today",
                 "writeFailure",
@@ -864,16 +907,91 @@ mod tests {
 
     #[test]
     fn coverage_says_when_there_is_nothing_measured_rather_than_zero() {
-        let value = serde_json::to_value(coverage_from(&[], &build("Kaishi")))
+        let value = serde_json::to_value(coverage_from(&[], &build("Kaishi"), None))
             .expect("serialize");
         assert_eq!(value["value"], serde_json::Value::Null);
         assert_eq!(value["status"], serde_json::json!("unavailable"));
     }
 
+    fn reason_of(report: &ProgressReport) -> String {
+        let coverage = serde_json::to_value(&report.coverage_percent).expect("serialise");
+        coverage["reason"].as_str().unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn a_first_reading_that_was_skipped_says_why_wherever_there_is_none() {
+        use crate::progress::skip::Skip;
+        let short = Skip::Insufficient { words: 57 };
+        let missing = assembled_skipped(
+            crate::progress::store::Loaded::Missing,
+            &library_on(&[]),
+            None,
+            None,
+            Some(short),
+        );
+        assert_eq!(reason_of(&missing), short.message());
+        assert_eq!(missing.skipped, Some(short));
+        let empty = assembled_skipped(
+            store_with_days("2026-09-08", &[]),
+            &library_on(&[]),
+            None,
+            None,
+            Some(Skip::NothingToRead),
+        );
+        assert_eq!(
+            reason_of(&empty),
+            Skip::NothingToRead.message(),
+            "a store with days and no reading is the same case"
+        );
+        assert_eq!(empty.skipped, Some(Skip::NothingToRead));
+    }
+
+    #[test]
+    fn a_reading_once_taken_is_shown_whatever_the_newest_attempt_said() {
+        use crate::progress::skip::Skip;
+        let samples = vec![sample(500, "Kaishi", vec![item("a", "f1", 1_000, 420)])];
+        let measured = coverage_from(&samples, &build("Kaishi"), Some(Skip::NothingToRead));
+        let value = serde_json::to_value(measured).expect("serialize");
+        assert_eq!(value["value"], serde_json::json!(42.0));
+    }
+
+    #[test]
+    fn once_a_reading_is_kept_the_page_hears_no_reason() {
+        use crate::progress::skip::Skip;
+        let mut loaded = store_with_days("2026-09-08", &[]);
+        if let crate::progress::store::Loaded::Present { store, .. } = &mut loaded {
+            store.samples.push(sample(500, "Kaishi", vec![item("a", "f1", 1_000, 420)]));
+        }
+        let report = assembled_skipped(loaded, &library_on(&[]), None, None, Some(Skip::NothingToRead));
+        assert_eq!(report.skipped, None);
+        let coverage = serde_json::to_value(&report.coverage_percent).expect("serialise");
+        assert_eq!(coverage["value"], serde_json::json!(42.0));
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_opened_names_no_reason_for_a_reading() {
+        let report = assembled_skipped(
+            crate::progress::store::Loaded::Unreadable("denied".to_string()),
+            &library_on(&[]),
+            None,
+            None,
+            Some(crate::progress::skip::Skip::NothingToRead),
+        );
+        assert_eq!(report.skipped, None);
+        assert!(reason_of(&report).contains("could not be opened"), "{}", reason_of(&report));
+    }
+
+    #[test]
+    fn with_no_reason_yet_the_page_still_says_to_refresh() {
+        let missing = assembled(crate::progress::store::Loaded::Missing, &library_on(&[]), None);
+        assert_eq!(reason_of(&missing), crate::progress::skip::NO_READING_YET);
+        assert_eq!(missing.skipped, None);
+    }
+
     #[test]
     fn coverage_measured_under_other_settings_is_shown_and_dated_as_stale() {
         let samples = vec![sample(500, "Kaishi", vec![item("a", "f1", 1_000, 420)])];
-        let value = serde_json::to_value(coverage_from(&samples, &build("Lapis")))
+        let value = serde_json::to_value(coverage_from(&samples, &build("Lapis"), None))
             .expect("serialize");
         assert_eq!(value["value"], serde_json::json!(42.0));
         assert_eq!(value["status"], serde_json::json!("stale"));
@@ -884,7 +1002,7 @@ mod tests {
     fn coverage_that_missed_a_document_says_so_and_keeps_its_value() {
         let mut samples = vec![sample(500, "Kaishi", vec![item("a", "f1", 1_000, 420)])];
         samples[0].unread_items = 2;
-        let value = serde_json::to_value(coverage_from(&samples, &build("Kaishi")))
+        let value = serde_json::to_value(coverage_from(&samples, &build("Kaishi"), None))
             .expect("serialize");
         assert_eq!(value["value"], serde_json::json!(42.0));
         assert_eq!(value["status"], serde_json::json!("partial"));
